@@ -10,6 +10,8 @@ import TopologyPage from './pages/TopologyPage'
 import TracingPage from './pages/TracingPage'
 import StatusPage from './pages/StatusPage'
 import LogsPage from './pages/LogsPage'
+import ToolsPage from './pages/ToolsPage'
+import MCPPage from './pages/MCPPage'
 import { ConfigSection } from './components/ConfigNav'
 
 const App: React.FC = () => {
@@ -158,6 +160,28 @@ const App: React.FC = () => {
               onConfigSectionChange={(section) => setConfigSection(section as ConfigSection)}
             >
               <LogsPage />
+            </Layout>
+          }
+        />
+        <Route
+          path="/tools"
+          element={
+            <Layout
+              configSection={configSection}
+              onConfigSectionChange={(section) => setConfigSection(section as ConfigSection)}
+            >
+              <ToolsPage />
+            </Layout>
+          }
+        />
+        <Route
+          path="/mcp"
+          element={
+            <Layout
+              configSection={configSection}
+              onConfigSectionChange={(section) => setConfigSection(section as ConfigSection)}
+            >
+              <MCPPage />
             </Layout>
           }
         />

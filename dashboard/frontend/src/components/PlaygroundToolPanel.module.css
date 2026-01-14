@@ -1,0 +1,242 @@
+.panel {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.header h3 {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.collapseBtn {
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.625rem;
+}
+
+.collapseBtn:hover {
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.content {
+  padding: 1rem;
+}
+
+.enableToggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--color-text);
+  cursor: pointer;
+  margin-bottom: 1rem;
+}
+
+.enableToggle input {
+  accent-color: var(--color-primary);
+}
+
+.modeSection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.radioLabel {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.radioLabel input {
+  accent-color: var(--color-primary);
+}
+
+.semanticSettings {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.settingRow {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.settingRow label {
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+  min-width: 70px;
+}
+
+.settingRow input {
+  width: 60px;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 0.8125rem;
+}
+
+.settingRow input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+
+.toolSelection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.selectionActions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.selectionActions button {
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.selectionActions button:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.count {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+}
+
+.loading {
+  text-align: center;
+  padding: 1rem;
+  color: var(--color-text-secondary);
+  font-size: 0.8125rem;
+}
+
+.toolList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.toolCheckbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.5rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.toolCheckbox:hover {
+  background: var(--color-bg);
+}
+
+.toolCheckbox input {
+  accent-color: var(--color-primary);
+}
+
+.toolIcon {
+  font-size: 0.875rem;
+}
+
+.toolName {
+  flex: 1;
+  font-size: 0.8125rem;
+  color: var(--color-text);
+}
+
+.sourceBadge {
+  padding: 0.125rem 0.375rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.625rem;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.sourceBadge.builtin {
+  background: rgba(59, 130, 246, 0.1);
+  color: #60a5fa;
+}
+
+.sourceBadge.mcp {
+  background: rgba(168, 85, 247, 0.1);
+  color: #c084fc;
+}
+
+/* Collapsed state */
+.collapsed {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.collapsed:hover {
+  border-color: var(--color-primary);
+}
+
+.collapsedIcon {
+  font-size: 1rem;
+}
+
+.collapsedLabel {
+  font-size: 0.8125rem;
+  color: var(--color-text);
+}
+
+.collapsedBadge {
+  padding: 0.125rem 0.375rem;
+  border-radius: var(--radius-sm);
+  background: var(--color-primary);
+  color: white;
+  font-size: 0.625rem;
+  font-weight: 600;
+}

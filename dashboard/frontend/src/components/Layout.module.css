@@ -140,6 +140,13 @@ button.navLink {
   align-items: center;
 }
 
+/* Tools Dropdown */
+.toolsDropdown {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
 .dropdownArrow {
   margin-left: 0.25rem;
   transition: transform var(--transition-fast);

@@ -74,7 +74,9 @@ tools/bin/
 # Allow README files in model directories
 !*/trained_model/README.md
 !*/models/README.md
-models
+# Ignore root models directory (for ML models cache), but not dashboard/backend/models/
+/models
+!dashboard/backend/models/
 
 # Training data
 wikipedia_data/

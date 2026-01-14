@@ -11,11 +11,13 @@ interface LayoutProps {
 const Layout: React.FC<LayoutProps> = ({ children, configSection, onConfigSectionChange }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [systemDropdownOpen, setSystemDropdownOpen] = useState(false)
+  const [toolsDropdownOpen, setToolsDropdownOpen] = useState(false)
   const location = useLocation()
   const navigate = useNavigate()
   const isConfigPage = location.pathname === '/config'
   const isSystemPage = isConfigPage && configSection === 'router-config'
   const isObservabilityPage = ['/status', '/logs', '/monitoring', '/tracing'].includes(location.pathname)
+  const isToolsPage = ['/tools', '/mcp'].includes(location.pathname)
 
   useEffect(() => {
     // Always use dark theme
@@ -26,8 +28,9 @@ const Layout: React.FC<LayoutProps> = ({ children, configSection, onConfigSectio
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as HTMLElement
-      if (!target.closest(`.${styles.systemDropdown}`)) {
+      if (!target.closest(`.${styles.systemDropdown}`) && !target.closest(`.${styles.toolsDropdown}`)) {
         setSystemDropdownOpen(false)
+        setToolsDropdownOpen(false)
       }
     }
     document.addEventListener('click', handleClickOutside)
@@ -86,6 +89,49 @@ const Layout: React.FC<LayoutProps> = ({ children, configSection, onConfigSectio
               Decisions
             </button>
 
+            {/* Tools Dropdown */}
+            <div className={styles.toolsDropdown}>
+              <button
+                className={`${styles.navLink} ${styles.dropdownTrigger} ${isToolsPage ? styles.navLinkActive : ''}`}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setToolsDropdownOpen(!toolsDropdownOpen)
+                  setSystemDropdownOpen(false)
+                }}
+              >
+                Tools
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 12 12"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  className={`${styles.dropdownArrow} ${toolsDropdownOpen ? styles.dropdownArrowOpen : ''}`}
+                >
+                  <path d="M3 4.5L6 7.5L9 4.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+              {toolsDropdownOpen && (
+                <div className={styles.dropdownMenu}>
+                  <NavLink
+                    to="/tools"
+                    className={`${styles.dropdownItem} ${location.pathname === '/tools' ? styles.dropdownItemActive : ''}`}
+                    onClick={() => setToolsDropdownOpen(false)}
+                  >
+                    Tool Management
+                  </NavLink>
+                  <NavLink
+                    to="/mcp"
+                    className={`${styles.dropdownItem} ${location.pathname === '/mcp' ? styles.dropdownItemActive : ''}`}
+                    onClick={() => setToolsDropdownOpen(false)}
+                  >
+                    MCP Servers
+                  </NavLink>
+                </div>
+              )}
+            </div>
+
             {/* System Dropdown (includes router-config and observability) */}
             <div className={styles.systemDropdown}>
               <button
@@ -93,6 +139,7 @@ const Layout: React.FC<LayoutProps> = ({ children, configSection, onConfigSectio
                 onClick={(e) => {
                   e.stopPropagation()
                   setSystemDropdownOpen(!systemDropdownOpen)
+                  setToolsDropdownOpen(false)
                 }}
               >
                 System
@@ -242,6 +289,15 @@ const Layout: React.FC<LayoutProps> = ({ children, configSection, onConfigSectio
             >
               Decisions
             </button>
+            <div className={styles.mobileNavSection}>
+              <div className={styles.mobileNavSectionTitle}>Tools</div>
+              <NavLink to="/tools" className={styles.mobileNavLink} onClick={() => setMobileMenuOpen(false)}>
+                Tool Management
+              </NavLink>
+              <NavLink to="/mcp" className={styles.mobileNavLink} onClick={() => setMobileMenuOpen(false)}>
+                MCP Servers
+              </NavLink>
+            </div>
             <div className={styles.mobileNavSection}>
               <div className={styles.mobileNavSectionTitle}>System</div>
               <button

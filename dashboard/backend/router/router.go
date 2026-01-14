@@ -10,11 +10,18 @@ import (
 	"github.com/vllm-project/semantic-router/dashboard/backend/handlers"
 	"github.com/vllm-project/semantic-router/dashboard/backend/middleware"
 	"github.com/vllm-project/semantic-router/dashboard/backend/proxy"
+	"github.com/vllm-project/semantic-router/dashboard/backend/services/mcp"
+	"github.com/vllm-project/semantic-router/dashboard/backend/services/tools"
 )
 
 // Setup configures all routes and returns the configured mux
 func Setup(cfg *config.Config) *http.ServeMux {
 	mux := http.NewServeMux()
+
+	// Initialize tool registry and MCP manager
+	toolRegistry := tools.GetRegistry()
+	mcpManager := mcp.NewManager(cfg.ConfigDir)
+	toolExecutor := tools.NewExecutor(toolRegistry, mcpManager)
 
 	// Health check endpoint
 	mux.HandleFunc("/healthz", handlers.HealthCheck)
@@ -30,9 +37,49 @@ func Setup(cfg *config.Config) *http.ServeMux {
 	mux.HandleFunc("/api/router/config/defaults/update", handlers.UpdateRouterDefaultsHandler(cfg.ConfigDir))
 	log.Printf("Router defaults API endpoints registered: /api/router/config/defaults, /api/router/config/defaults/update")
 
-	// Tools DB endpoint
+	// Tools DB endpoint (legacy)
 	mux.HandleFunc("/api/tools-db", handlers.ToolsDBHandler(cfg.ConfigDir))
 	log.Printf("Tools DB API endpoint registered: /api/tools-db")
+
+	// Tools API endpoints
+	mux.HandleFunc("/api/tools", handlers.ToolsListHandler(toolRegistry))
+	mux.HandleFunc("/api/tools/enabled", handlers.ToolsEnabledHandler(toolRegistry))
+	mux.HandleFunc("/api/tools/execute", handlers.ToolExecuteHandler(toolExecutor))
+	mux.HandleFunc("/api/tools/", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if strings.HasSuffix(path, "/toggle") {
+			handlers.ToolToggleHandler(toolRegistry)(w, r)
+		} else {
+			handlers.ToolGetHandler(toolRegistry)(w, r)
+		}
+	})
+	log.Printf("Tools API endpoints registered: /api/tools, /api/tools/execute, /api/tools/{id}/toggle")
+
+	// MCP API endpoints
+	mux.HandleFunc("/api/mcp/servers", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			handlers.MCPServersListHandler(mcpManager)(w, r)
+		} else if r.Method == http.MethodPost {
+			handlers.MCPServerAddHandler(mcpManager)(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+	mux.HandleFunc("/api/mcp/servers/", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if strings.HasSuffix(path, "/tools") {
+			handlers.MCPServerToolsHandler(mcpManager)(w, r)
+		} else if strings.HasSuffix(path, "/refresh") {
+			handlers.MCPServerRefreshHandler(mcpManager)(w, r)
+		} else if strings.HasSuffix(path, "/reconnect") {
+			handlers.MCPServerReconnectHandler(mcpManager)(w, r)
+		} else if r.Method == http.MethodDelete {
+			handlers.MCPServerDeleteHandler(mcpManager)(w, r)
+		} else {
+			handlers.MCPServerGetHandler(mcpManager)(w, r)
+		}
+	})
+	log.Printf("MCP API endpoints registered: /api/mcp/servers, /api/mcp/servers/{id}/tools")
 
 	// Status endpoint - shows service health status (aligns with vllm-sr status)
 	mux.HandleFunc("/api/status", handlers.StatusHandler(cfg.RouterAPIURL))

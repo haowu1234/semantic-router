@@ -33,13 +33,13 @@ COPY src/semantic-router/go.mod src/semantic-router/go.sum /app/src/semantic-rou
 COPY src/semantic-router/pkg/config/ /app/src/semantic-router/pkg/config/
 COPY src/semantic-router/pkg/observability/ /app/src/semantic-router/pkg/observability/
 
-# Copy go.mod and go.sum first for better caching
-COPY dashboard/backend/go.mod dashboard/backend/go.sum /app/dashboard/backend/
+# Copy entire dashboard/backend source (including models/, services/, handlers/)
+# Must copy all source before go mod download to avoid missing local package errors
+COPY dashboard/backend/ /app/dashboard/backend/
 WORKDIR /app/dashboard/backend
 RUN go mod download
 
-# Copy source code and build
-COPY dashboard/backend/ /app/dashboard/backend/
+# Build
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /app/dashboard-backend main.go
 
 # Stage 2: Build Go semantic router
