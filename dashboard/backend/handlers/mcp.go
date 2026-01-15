@@ -8,6 +8,7 @@ import (
 
 	"github.com/vllm-project/semantic-router/dashboard/backend/models"
 	"github.com/vllm-project/semantic-router/dashboard/backend/services/mcp"
+	"github.com/vllm-project/semantic-router/dashboard/backend/services/tools"
 )
 
 // MCPServersListHandler returns all MCP servers
@@ -29,7 +30,7 @@ func MCPServersListHandler(manager *mcp.Manager) http.HandlerFunc {
 }
 
 // MCPServerAddHandler adds a new MCP server
-func MCPServerAddHandler(manager *mcp.Manager) http.HandlerFunc {
+func MCPServerAddHandler(manager *mcp.Manager, registry *tools.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -83,6 +84,16 @@ func MCPServerAddHandler(manager *mcp.Manager) http.HandlerFunc {
 			return
 		}
 
+		// Register MCP tools to the tool registry
+		mcpTools, err := manager.GetServerTools(server.ID)
+		if err == nil {
+			for _, mcpTool := range mcpTools {
+				tool := mcpTool.ToTool(server.ID, server.Name)
+				registry.RegisterMCPTool(server.ID, tool)
+				log.Printf("Registered MCP tool: %s/%s", server.ID, tool.Name)
+			}
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(server)
@@ -90,7 +101,7 @@ func MCPServerAddHandler(manager *mcp.Manager) http.HandlerFunc {
 }
 
 // MCPServerDeleteHandler deletes an MCP server
-func MCPServerDeleteHandler(manager *mcp.Manager) http.HandlerFunc {
+func MCPServerDeleteHandler(manager *mcp.Manager, registry *tools.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -105,6 +116,10 @@ func MCPServerDeleteHandler(manager *mcp.Manager) http.HandlerFunc {
 		}
 
 		log.Printf("Deleting MCP server: %s", serverID)
+
+		// Unregister MCP tools from the tool registry
+		registry.UnregisterMCPTools(serverID)
+		log.Printf("Unregistered MCP tools for server: %s", serverID)
 
 		if err := manager.RemoveServer(serverID); err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
@@ -170,7 +185,7 @@ func MCPServerToolsHandler(manager *mcp.Manager) http.HandlerFunc {
 }
 
 // MCPServerRefreshHandler refreshes tools from an MCP server
-func MCPServerRefreshHandler(manager *mcp.Manager) http.HandlerFunc {
+func MCPServerRefreshHandler(manager *mcp.Manager, registry *tools.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -183,6 +198,12 @@ func MCPServerRefreshHandler(manager *mcp.Manager) http.HandlerFunc {
 			return
 		}
 
+		server, found := manager.GetServer(serverID)
+		if !found {
+			http.Error(w, "Server not found", http.StatusNotFound)
+			return
+		}
+
 		log.Printf("Refreshing MCP server tools: %s", serverID)
 
 		if err := manager.RefreshTools(r.Context(), serverID); err != nil {
@@ -190,18 +211,26 @@ func MCPServerRefreshHandler(manager *mcp.Manager) http.HandlerFunc {
 			return
 		}
 
-		tools, _ := manager.GetServerTools(serverID)
+		// Re-register MCP tools (first unregister old ones)
+		registry.UnregisterMCPTools(serverID)
+
+		mcpTools, _ := manager.GetServerTools(serverID)
+		for _, mcpTool := range mcpTools {
+			tool := mcpTool.ToTool(serverID, server.Name)
+			registry.RegisterMCPTool(serverID, tool)
+		}
+		log.Printf("Re-registered %d MCP tools for server: %s", len(mcpTools), serverID)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"tools": tools,
-			"total": len(tools),
+			"tools": mcpTools,
+			"total": len(mcpTools),
 		})
 	}
 }
 
 // MCPServerReconnectHandler reconnects to an MCP server
-func MCPServerReconnectHandler(manager *mcp.Manager) http.HandlerFunc {
+func MCPServerReconnectHandler(manager *mcp.Manager, registry *tools.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -216,6 +245,9 @@ func MCPServerReconnectHandler(manager *mcp.Manager) http.HandlerFunc {
 
 		log.Printf("Reconnecting MCP server: %s", serverID)
 
+		// Unregister old tools first
+		registry.UnregisterMCPTools(serverID)
+
 		if err := manager.Reconnect(r.Context(), serverID); err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
@@ -226,6 +258,16 @@ func MCPServerReconnectHandler(manager *mcp.Manager) http.HandlerFunc {
 		}
 
 		server, _ := manager.GetServer(serverID)
+
+		// Register new tools
+		mcpTools, err := manager.GetServerTools(serverID)
+		if err == nil {
+			for _, mcpTool := range mcpTools {
+				tool := mcpTool.ToTool(serverID, server.Name)
+				registry.RegisterMCPTool(serverID, tool)
+			}
+			log.Printf("Registered %d MCP tools after reconnect: %s", len(mcpTools), serverID)
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(server)

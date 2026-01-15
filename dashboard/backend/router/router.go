@@ -60,7 +60,7 @@ func Setup(cfg *config.Config) *http.ServeMux {
 		if r.Method == http.MethodGet {
 			handlers.MCPServersListHandler(mcpManager)(w, r)
 		} else if r.Method == http.MethodPost {
-			handlers.MCPServerAddHandler(mcpManager)(w, r)
+			handlers.MCPServerAddHandler(mcpManager, toolRegistry)(w, r)
 		} else {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -70,11 +70,11 @@ func Setup(cfg *config.Config) *http.ServeMux {
 		if strings.HasSuffix(path, "/tools") {
 			handlers.MCPServerToolsHandler(mcpManager)(w, r)
 		} else if strings.HasSuffix(path, "/refresh") {
-			handlers.MCPServerRefreshHandler(mcpManager)(w, r)
+			handlers.MCPServerRefreshHandler(mcpManager, toolRegistry)(w, r)
 		} else if strings.HasSuffix(path, "/reconnect") {
-			handlers.MCPServerReconnectHandler(mcpManager)(w, r)
+			handlers.MCPServerReconnectHandler(mcpManager, toolRegistry)(w, r)
 		} else if r.Method == http.MethodDelete {
-			handlers.MCPServerDeleteHandler(mcpManager)(w, r)
+			handlers.MCPServerDeleteHandler(mcpManager, toolRegistry)(w, r)
 		} else {
 			handlers.MCPServerGetHandler(mcpManager)(w, r)
 		}

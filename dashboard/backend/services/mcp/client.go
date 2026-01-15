@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+
+	"github.com/vllm-project/semantic-router/dashboard/backend/models"
 )
 
 // JSONRPCRequest represents a JSON-RPC 2.0 request
@@ -33,6 +35,62 @@ type MCPToolDefinition struct {
 	Name        string                 `json:"name"`
 	Description string                 `json:"description"`
 	InputSchema map[string]interface{} `json:"inputSchema"`
+}
+
+// ToTool converts MCP tool definition to internal Tool model
+func (m *MCPToolDefinition) ToTool(serverID, serverName string) *models.Tool {
+	params := []models.ToolParameter{}
+
+	if m.InputSchema != nil {
+		if props, ok := m.InputSchema["properties"].(map[string]interface{}); ok {
+			required := []string{}
+			if req, ok := m.InputSchema["required"].([]interface{}); ok {
+				for _, r := range req {
+					if s, ok := r.(string); ok {
+						required = append(required, s)
+					}
+				}
+			}
+
+			for name, prop := range props {
+				if propMap, ok := prop.(map[string]interface{}); ok {
+					param := models.ToolParameter{
+						Name: name,
+					}
+					if t, ok := propMap["type"].(string); ok {
+						param.Type = t
+					}
+					if d, ok := propMap["description"].(string); ok {
+						param.Description = d
+					}
+					// Check if required
+					for _, r := range required {
+						if r == name {
+							param.Required = true
+							break
+						}
+					}
+					if e, ok := propMap["enum"].([]interface{}); ok {
+						param.Enum = e
+					}
+					if def, ok := propMap["default"]; ok {
+						param.Default = def
+					}
+					params = append(params, param)
+				}
+			}
+		}
+	}
+
+	return &models.Tool{
+		ID:          serverID + "/" + m.Name,
+		Name:        m.Name,
+		Description: m.Description,
+		Source:      models.ToolSourceMCP,
+		MCPServer:   serverName,
+		Parameters:  params,
+		Enabled:     true,
+	}
 }
 
 // MCPToolsListResult represents the result of tools/list
