@@ -55,18 +55,20 @@ class FeatureAlign(nn.Module):
 
 class EncoderDecoderNet(nn.Module):
     """
-    编码-解码网络：使用 GNN 进行消息传递和边预测。
+    编码-解码网络：学习 Query-LLM 匹配关系。
     
-    架构:
-    1. FeatureAlign: 特征对齐
-    2. GeneralConv x 2: 两层图卷积
-    3. Edge Prediction: 预测 Query-LLM 边的分数
+    简化架构（与 Go 推理一致）:
+    1. Query Projection: query_features -> hidden_dim
+    2. LLM Representation: 可学习的 LLM 表示
+    3. Cosine Similarity: 计算 Query-LLM 相似度
+    
+    训练和推理使用相同的逻辑，确保一致性。
     
     Args:
         query_dim: Query embedding 维度
         llm_dim: LLM embedding 维度
         hidden_dim: 隐藏层维度
-        edge_dim: 边特征维度 (默认为 1，仅使用 performance)
+        edge_dim: 边特征维度 (未使用，保留接口兼容性)
     """
     
     def __init__(
@@ -80,10 +82,10 @@ class EncoderDecoderNet(nn.Module):
         self.hidden_dim = hidden_dim
         self.edge_dim = edge_dim
         
-        # 特征对齐层
+        # Query 投影层（与 Go 推理一致）
         self.align = FeatureAlign(query_dim, llm_dim, hidden_dim)
         
-        # GNN 卷积层
+        # 保留 GNN 层用于可选的特征增强（但主要依赖直接投影）
         self.conv1 = GeneralConv(
             in_channels=hidden_dim,
             out_channels=hidden_dim,
@@ -112,7 +114,7 @@ class EncoderDecoderNet(nn.Module):
         visible_mask: torch.Tensor
     ) -> torch.Tensor:
         """
-        前向传播
+        前向传播 - 使用与 Go 推理一致的逻辑
         
         Args:
             query_features: [num_queries, query_dim] Query 特征
@@ -120,38 +122,38 @@ class EncoderDecoderNet(nn.Module):
             edge_index: [2, num_edges] 边索引
             edge_attr: [num_edges, edge_dim] 边权重 (performance)
             edge_mask: [num_edges] 需要预测的边 (bool)
-            visible_mask: [num_edges] 可见的边 (bool)
+            visible_mask: [num_edges] 可见的边 (bool) - 未使用，保留接口
         
         Returns:
             scores: [num_masked_edges] 预测的边分数
         """
-        # 获取可见边的索引和权重
-        visible_edge_index = edge_index[:, visible_mask]
-        visible_edge_attr = edge_attr[visible_mask]
+        num_queries = query_features.shape[0]
         
-        # 获取需要预测的边索引
-        predict_edge_index = edge_index[:, edge_mask]
-        
-        # 边权重变换
-        visible_edge_attr = F.leaky_relu(
-            self.edge_mlp(visible_edge_attr.reshape(-1, self.edge_dim))
-        )
-        
-        # 特征对齐
+        # 特征对齐（与 Go 推理一致）
         x0 = self.align(query_features, llm_features)
         
-        # GNN 消息传递
-        x1 = F.leaky_relu(self.bn1(
-            self.conv1(x0, visible_edge_index, edge_attr=visible_edge_attr)
-        ))
-        x2 = self.bn2(
-            self.conv2(x1, visible_edge_index, edge_attr=visible_edge_attr)
-        )
+        # 分离 Query 和 LLM 的隐空间表示
+        query_hidden = x0[:num_queries]  # [num_queries, hidden_dim]
+        llm_hidden = x0[num_queries:]    # [num_llms, hidden_dim]
         
-        # 边预测：源节点初始特征 * 目标节点 GNN 特征
-        src_features = x0[predict_edge_index[0]]
-        dst_features = x2[predict_edge_index[1]]
-        scores = torch.sigmoid((src_features * dst_features).mean(dim=-1))
+        # L2 归一化（与 Go cosine similarity 一致）
+        query_hidden = F.normalize(query_hidden, p=2, dim=1)
+        llm_hidden = F.normalize(llm_hidden, p=2, dim=1)
+        
+        # 获取需要预测的边
+        predict_edge_index = edge_index[:, edge_mask]
+        
+        # 计算点积分数（归一化后等价于 cosine similarity）
+        src_features = query_hidden[predict_edge_index[0]]  # Query features
+        # LLM 节点索引需要减去 num_queries 偏移
+        llm_indices = predict_edge_index[1] - num_queries
+        dst_features = llm_hidden[llm_indices]  # LLM features
+        
+        # 点积打分
+        scores = (src_features * dst_features).sum(dim=-1)
+        
+        # Sigmoid 映射到 [0, 1]
+        scores = torch.sigmoid(scores)
         
         return scores
 
