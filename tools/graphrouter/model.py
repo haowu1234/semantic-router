@@ -292,7 +292,15 @@ class GNNPredictor:
         batch_size = self.config.get('batch_size', 4)
         mask_rate = self.config.get('train_mask_rate', 0.3)
         
-        for epoch in range(train_epochs):
+        # 尝试使用 tqdm 显示进度条
+        try:
+            from tqdm import tqdm
+            epoch_iter = tqdm(range(train_epochs), desc="Training", unit="epoch")
+        except ImportError:
+            epoch_iter = range(train_epochs)
+            print(f"Install tqdm for progress bar: pip install tqdm")
+        
+        for epoch in epoch_iter:
             # 训练阶段
             self.model.train()
             total_loss = 0.0
@@ -332,8 +340,11 @@ class GNNPredictor:
                 best_result = val_result
                 best_state = {k: v.cpu().clone() for k, v in self.model.state_dict().items()}
             
-            if epoch % 10 == 0:
-                print(f"Epoch {epoch}: train_loss={avg_loss:.4f}, val_result={val_result:.4f}")
+            # 更新进度条或打印日志
+            if hasattr(epoch_iter, 'set_postfix'):
+                epoch_iter.set_postfix(loss=f"{avg_loss:.4f}", val=f"{val_result:.4f}", best=f"{best_result:.4f}")
+            elif epoch % 10 == 0:
+                print(f"Epoch {epoch}: train_loss={avg_loss:.4f}, val_result={val_result:.4f}, best={best_result:.4f}")
         
         # 恢复最佳模型
         if best_state:
