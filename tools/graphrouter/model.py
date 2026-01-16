@@ -307,11 +307,18 @@ class GNNPredictor:
             total_loss = 0.0
             
             for _ in range(batch_size):
-                # 随机掩码部分训练边
-                mask = train_data.train_mask.clone().bool()
-                random_mask = torch.rand(mask.size(), device=self.device) < mask_rate
-                edge_mask = mask & random_mask
-                visible_mask = train_data.train_mask.bool() & ~edge_mask
+                # 按 query 为单位随机掩码（确保每个 query 的所有 LLM 边同时被 mask 或不被 mask）
+                train_mask = train_data.train_mask.clone().bool()
+                num_total_edges = train_mask.size(0)
+                num_queries = num_total_edges // self.num_llms
+                
+                # 为每个 query 生成一个随机值，然后扩展到所有 LLM 边
+                query_random = torch.rand(num_queries, device=self.device) < mask_rate
+                # 扩展：每个 query 的决定应用到其所有 num_llms 条边
+                edge_random_mask = query_random.repeat_interleave(self.num_llms)
+                
+                edge_mask = train_mask & edge_random_mask
+                visible_mask = train_mask & ~edge_random_mask
                 
                 self.optimizer.zero_grad()
                 
@@ -324,7 +331,7 @@ class GNNPredictor:
                     visible_mask=visible_mask
                 )
                 
-                # Reshape scores 和 performance 为 [num_queries, num_llms]
+                # Reshape scores 和 performance 为 [num_queries_masked, num_llms]
                 scores_reshaped = scores.reshape(-1, self.num_llms)
                 perf = train_data.edge_attr[edge_mask].reshape(-1, self.num_llms)
                 
