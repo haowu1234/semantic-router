@@ -315,11 +315,31 @@ def main():
     # 加载 embeddings
     print(f"\nLoading embeddings from {args.embeddings}...")
     if args.embeddings.endswith('.pt'):
-        all_embeddings = torch.load(args.embeddings, map_location='cpu').numpy()
+        loaded = torch.load(args.embeddings, map_location='cpu', weights_only=False)
+        # 支持多种格式：直接张量、字典（含 'embeddings' 键）、字典（整数键映射）
+        if isinstance(loaded, torch.Tensor):
+            all_embeddings = loaded.numpy()
+        elif isinstance(loaded, dict):
+            if 'embeddings' in loaded:
+                all_embeddings = loaded['embeddings']
+                if isinstance(all_embeddings, torch.Tensor):
+                    all_embeddings = all_embeddings.numpy()
+            else:
+                # 假设是 {embedding_id: embedding} 格式
+                all_embeddings = loaded
+        else:
+            all_embeddings = np.array(loaded)
     else:
         all_embeddings = np.load(args.embeddings)
     
-    test_embeddings = np.array([all_embeddings[i] for i in embedding_ids])
+    # 根据 embedding_ids 提取对应的 embeddings
+    if isinstance(all_embeddings, dict):
+        test_embeddings = np.array([all_embeddings[i] if isinstance(all_embeddings[i], np.ndarray) 
+                                    else all_embeddings[i].numpy() if hasattr(all_embeddings[i], 'numpy')
+                                    else np.array(all_embeddings[i])
+                                    for i in embedding_ids])
+    else:
+        test_embeddings = np.array([all_embeddings[i] for i in embedding_ids])
     print(f"  Test embeddings shape: {test_embeddings.shape}")
     
     # 构建 performance matrix
