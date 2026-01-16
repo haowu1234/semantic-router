@@ -23,7 +23,9 @@ class GoStylePredictor:
     """
     模拟 Go 推理逻辑的预测器
     
-    用于验证导出的模型是否正确。
+    支持两种模式:
+    - 版本 1.0: 简化推理（query_projection + llm_representations）
+    - 版本 2.0: 完整 GNN 推理（使用训练图作为上下文）
     """
     
     def __init__(self, model_path: str):
@@ -31,16 +33,63 @@ class GoStylePredictor:
             self.data = json.load(f)
         
         self.model_names = self.data['model_names']
-        self.query_projection = np.array(self.data['query_projection'])
-        self.llm_representations = np.array(self.data['llm_representations'])
         self.temperature = self.data['temperature']
         self.hidden_dim = self.data['hidden_dim']
+        self.version = self.data.get('version', '1.0')
+        self.inference_mode = self.data.get('inference_mode', 'simple')
+        
+        if self.inference_mode == 'full_gnn' or self.version == '2.0':
+            self._init_full_gnn()
+        else:
+            self._init_simple()
+    
+    def _init_simple(self):
+        """初始化简化推理模式（版本 1.0）"""
+        self.query_projection = np.array(self.data['query_projection'])
+        self.llm_representations = np.array(self.data['llm_representations'])
+    
+    def _init_full_gnn(self):
+        """初始化完整 GNN 推理模式（版本 2.0）"""
+        # 加载模型权重
+        weights = self.data['model_weights']
+        self.query_transform_weight = np.array(weights['query_transform_weight'])
+        self.query_transform_bias = np.array(weights['query_transform_bias'])
+        self.llm_transform_weight = np.array(weights['llm_transform_weight'])
+        self.llm_transform_bias = np.array(weights['llm_transform_bias'])
+        
+        # 加载训练图数据
+        training_graph = self.data['training_graph']
+        self.train_query_embeddings = np.array(training_graph['query_embeddings'])
+        self.llm_embeddings = np.array(training_graph['llm_embeddings'])
+        self.edge_weights = np.array(training_graph['edge_weights'])
+        
+        self.num_train_queries = self.train_query_embeddings.shape[0]
+        self.num_llms = self.llm_embeddings.shape[0]
+        
+        # 预计算 LLM 的对齐表示
+        self._precompute_llm_representations()
+    
+    def _precompute_llm_representations(self):
+        """预计算 LLM 在隐空间中的表示"""
+        # LLM embedding -> 隐空间
+        # [num_llms, llm_dim] @ [llm_dim, hidden_dim] + [hidden_dim]
+        self.llm_aligned = np.dot(self.llm_embeddings, self.llm_transform_weight.T) + self.llm_transform_bias
+        
+        # L2 归一化
+        norms = np.linalg.norm(self.llm_aligned, axis=1, keepdims=True)
+        self.llm_aligned = self.llm_aligned / (norms + 1e-8)
     
     def predict(self, query_embedding: np.ndarray) -> Dict[str, Any]:
+        """预测最佳 LLM"""
+        if self.inference_mode == 'full_gnn' or self.version == '2.0':
+            return self._predict_full_gnn(query_embedding)
+        else:
+            return self._predict_simple(query_embedding)
+    
+    def _predict_simple(self, query_embedding: np.ndarray) -> Dict[str, Any]:
         """
-        预测最佳 LLM
+        简化推理（版本 1.0）
         
-        模拟 Go 推理逻辑:
         1. query_hidden = query_embedding @ query_projection
         2. scores[i] = cosine_similarity(query_hidden, llm_representations[i])
         3. probs = softmax(scores / temperature)
@@ -56,6 +105,34 @@ class GoStylePredictor:
         # 计算余弦相似度
         scores = np.dot(self.llm_representations, query_hidden)
         
+        return self._scores_to_result(scores)
+    
+    def _predict_full_gnn(self, query_embedding: np.ndarray) -> Dict[str, Any]:
+        """
+        完整 GNN 推理（版本 2.0）
+        
+        简化实现：使用预计算的 LLM 表示 + Query 投影
+        完整 GNN 消息传递在 Go 中实现，这里用相似度匹配近似
+        
+        1. query_hidden = query_embedding @ query_transform
+        2. scores[i] = cosine_similarity(query_hidden, llm_aligned[i])
+        3. probs = softmax(scores / temperature)
+        """
+        # Query embedding -> 隐空间
+        query_hidden = np.dot(query_embedding, self.query_transform_weight.T) + self.query_transform_bias
+        
+        # L2 归一化
+        query_norm = np.linalg.norm(query_hidden)
+        if query_norm > 1e-8:
+            query_hidden = query_hidden / query_norm
+        
+        # 计算与所有 LLM 的相似度
+        scores = np.dot(self.llm_aligned, query_hidden)
+        
+        return self._scores_to_result(scores)
+    
+    def _scores_to_result(self, scores: np.ndarray) -> Dict[str, Any]:
+        """将分数转换为结果"""
         # Softmax
         scores_scaled = scores / self.temperature
         scores_scaled = scores_scaled - scores_scaled.max()  # 数值稳定性
@@ -211,6 +288,8 @@ def main():
     
     print(f"Loading model from {args.model}...")
     predictor = GoStylePredictor(args.model)
+    print(f"  Version: {predictor.version}")
+    print(f"  Inference mode: {predictor.inference_mode}")
     print(f"  Model names: {predictor.model_names}")
     print(f"  Hidden dim: {predictor.hidden_dim}")
     
