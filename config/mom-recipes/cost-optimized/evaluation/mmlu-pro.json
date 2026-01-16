@@ -1,0 +1,24 @@
+{
+  "recipe_name": "cost-optimized",
+  "benchmark": "mmlu-pro",
+  "timestamp": "2025-01-16T00:00:00Z",
+  "configuration": {
+    "samples_per_category": 50,
+    "use_cot": false,
+    "models": ["qwen3-small", "qwen3-medium"]
+  },
+  "results": {
+    "overall_accuracy": 0.714,
+    "total_samples": 700,
+    "correct_answers": 500
+  },
+  "performance": {
+    "avg_latency_ms": 120,
+    "p95_latency_ms": 450
+  },
+  "cost_metrics": {
+    "cache_hit_rate": 0.45,
+    "token_reduction": 0.62,
+    "cost_per_1m_tokens": 0.80
+  }
+}

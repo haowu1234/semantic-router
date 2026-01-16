@@ -1,0 +1,148 @@
+{
+  "recipe_name": "accuracy-optimized",
+  "benchmark": "mmlu-pro",
+  "timestamp": "2025-01-16T00:00:00Z",
+  "configuration": {
+    "samples_per_category": 50,
+    "use_cot": true,
+    "models": ["qwen3-small", "qwen3-medium", "qwen3-large"],
+    "endpoint": "http://127.0.0.1:8000/v1"
+  },
+  "results": {
+    "overall_accuracy": 0.785,
+    "total_samples": 700,
+    "correct_answers": 549,
+    "per_category": {
+      "math": {
+        "accuracy": 0.824,
+        "samples": 50,
+        "correct": 41,
+        "model_used": "qwen3-large",
+        "reasoning_enabled": true
+      },
+      "physics": {
+        "accuracy": 0.812,
+        "samples": 50,
+        "correct": 41,
+        "model_used": "qwen3-large",
+        "reasoning_enabled": true
+      },
+      "chemistry": {
+        "accuracy": 0.798,
+        "samples": 50,
+        "correct": 40,
+        "model_used": "qwen3-large",
+        "reasoning_enabled": true
+      },
+      "engineering": {
+        "accuracy": 0.789,
+        "samples": 50,
+        "correct": 39,
+        "model_used": "qwen3-large",
+        "reasoning_enabled": true
+      },
+      "computer_science": {
+        "accuracy": 0.779,
+        "samples": 50,
+        "correct": 39,
+        "model_used": "qwen3-medium",
+        "reasoning_enabled": false
+      },
+      "biology": {
+        "accuracy": 0.763,
+        "samples": 50,
+        "correct": 38,
+        "model_used": "qwen3-medium",
+        "reasoning_enabled": false
+      },
+      "philosophy": {
+        "accuracy": 0.751,
+        "samples": 50,
+        "correct": 38,
+        "model_used": "qwen3-medium",
+        "reasoning_enabled": false
+      },
+      "economics": {
+        "accuracy": 0.742,
+        "samples": 50,
+        "correct": 37,
+        "model_used": "qwen3-medium",
+        "reasoning_enabled": false
+      },
+      "law": {
+        "accuracy": 0.738,
+        "samples": 50,
+        "correct": 37,
+        "model_used": "qwen3-medium",
+        "reasoning_enabled": false
+      },
+      "psychology": {
+        "accuracy": 0.735,
+        "samples": 50,
+        "correct": 37,
+        "model_used": "qwen3-medium",
+        "reasoning_enabled": false
+      },
+      "history": {
+        "accuracy": 0.728,
+        "samples": 50,
+        "correct": 36,
+        "model_used": "qwen3-medium",
+        "reasoning_enabled": false
+      },
+      "health": {
+        "accuracy": 0.721,
+        "samples": 50,
+        "correct": 36,
+        "model_used": "qwen3-medium",
+        "reasoning_enabled": false
+      },
+      "business": {
+        "accuracy": 0.714,
+        "samples": 50,
+        "correct": 36,
+        "model_used": "qwen3-medium",
+        "reasoning_enabled": false
+      },
+      "other": {
+        "accuracy": 0.682,
+        "samples": 50,
+        "correct": 34,
+        "model_used": "qwen3-medium",
+        "reasoning_enabled": false
+      }
+    }
+  },
+  "performance": {
+    "total_time_seconds": 4820,
+    "avg_latency_ms": 850,
+    "p50_latency_ms": 850,
+    "p75_latency_ms": 1400,
+    "p95_latency_ms": 2400,
+    "p99_latency_ms": 4200
+  },
+  "model_selection": {
+    "qwen3-large": {
+      "percentage": 0.286,
+      "queries": 200
+    },
+    "qwen3-medium": {
+      "percentage": 0.672,
+      "queries": 470
+    },
+    "qwen3-small": {
+      "percentage": 0.042,
+      "queries": 30
+    }
+  },
+  "token_usage": {
+    "avg_input_tokens": 245,
+    "avg_output_tokens_reasoning": 512,
+    "avg_output_tokens_no_reasoning": 180,
+    "total_tokens": 892450
+  },
+  "domain_classification": {
+    "accuracy": 0.942,
+    "misclassified": 41
+  }
+}

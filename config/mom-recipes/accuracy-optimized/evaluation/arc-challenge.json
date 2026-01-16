@@ -1,0 +1,70 @@
+{
+  "recipe_name": "accuracy-optimized",
+  "benchmark": "arc-challenge",
+  "timestamp": "2025-01-16T00:00:00Z",
+  "configuration": {
+    "samples": 200,
+    "use_cot": true,
+    "models": ["qwen3-small", "qwen3-medium", "qwen3-large"],
+    "endpoint": "http://127.0.0.1:8000/v1",
+    "dataset": "allenai/ai2_arc"
+  },
+  "results": {
+    "arc_challenge": {
+      "accuracy": 0.892,
+      "samples": 100,
+      "correct": 89
+    },
+    "arc_easy": {
+      "accuracy": 0.941,
+      "samples": 100,
+      "correct": 94
+    },
+    "combined": {
+      "accuracy": 0.917,
+      "samples": 200,
+      "correct": 183
+    },
+    "per_subject": {
+      "physics": {
+        "accuracy": 0.913,
+        "samples": 52,
+        "correct": 47
+      },
+      "chemistry": {
+        "accuracy": 0.887,
+        "samples": 48,
+        "correct": 43
+      },
+      "biology": {
+        "accuracy": 0.902,
+        "samples": 56,
+        "correct": 50
+      },
+      "earth_science": {
+        "accuracy": 0.874,
+        "samples": 44,
+        "correct": 39
+      }
+    }
+  },
+  "performance": {
+    "total_time_seconds": 1840,
+    "avg_latency_ms": 920,
+    "p50_latency_ms": 880,
+    "p75_latency_ms": 1350,
+    "p95_latency_ms": 2200,
+    "p99_latency_ms": 3800
+  },
+  "comparison": {
+    "baseline_single_model": {
+      "model": "qwen3-medium",
+      "arc_challenge_accuracy": 0.841,
+      "arc_easy_accuracy": 0.912
+    },
+    "improvement": {
+      "arc_challenge": "+5.1%",
+      "arc_easy": "+2.9%"
+    }
+  }
+}

@@ -1,0 +1,132 @@
+# Latency-Optimized MoM Recipe
+# Sub-200ms P95 latency through fast model selection
+#
+# Usage: vllm-sr serve --config config/mom-recipes/latency-optimized/config.yaml
+
+# Response API Configuration
+response_api:
+  enabled: true
+  store_backend: "memory"
+  ttl_seconds: 3600  # Shorter TTL
+  max_responses: 500
+
+# Semantic Cache - Aggressive caching for speed
+semantic_cache:
+  enabled: true
+  backend_type: "memory"
+  similarity_threshold: 0.75  # Lower threshold for more cache hits
+  max_entries: 10000  # Large cache
+  ttl_seconds: 1800
+  eviction_policy: "lru"  # LRU for better hit rate
+  use_hnsw: true
+  hnsw_m: 32  # Higher for faster search
+  hnsw_ef_construction: 100  # Lower for faster build
+  embedding_model: "bert"  # Fast embedding model
+
+# Tools - Disabled for speed
+tools:
+  enabled: false
+
+# Prompt Guard - Minimal for speed
+prompt_guard:
+  enabled: true
+  use_modernbert: false
+  model_id: "models/mom-jailbreak-classifier"
+  threshold: 0.9  # Higher threshold = fewer checks
+  use_cpu: true
+  jailbreak_mapping_path: "models/mom-jailbreak-classifier/label_mapping.json"
+
+# Classifier - Fast classification
+classifier:
+  category_model:
+    model_id: "models/mom-domain-classifier"
+    threshold: 0.5  # Lower threshold for speed
+    use_cpu: true
+    category_mapping_path: "models/mom-domain-classifier/category_mapping.json"
+  pii_model:
+    model_id: "models/mom-pii-classifier"
+    threshold: 0.95  # Higher threshold = fewer detections
+    use_cpu: true
+
+# Hallucination Mitigation - Disabled for speed
+hallucination_mitigation:
+  enabled: false
+
+# vLLM Endpoints - Single fast endpoint
+vllm_endpoints:
+  - name: "endpoint-fast"
+    address: "127.0.0.1"
+    port: 8001
+    weight: 1
+
+# Model Configuration - Small model only
+model_config:
+  "qwen3-small":
+    reasoning_family: "qwen3"
+    preferred_endpoints: ["endpoint-fast"]
+
+# Minimal categories
+categories:
+  - name: general
+    description: "All queries"
+    mmlu_categories: ["other"]
+
+# Routing Strategy
+strategy: "priority"
+
+# Single decision - all queries to fast model
+decisions:
+  - name: "fast_decision"
+    description: "All queries - fast response"
+    priority: 100
+    rules:
+      operator: "OR"
+      conditions:
+        - type: "domain"
+          name: "general"
+    modelRefs:
+      - model: "qwen3-small"
+        use_reasoning: false
+    plugins:
+      - type: "system_prompt"
+        configuration:
+          system_prompt: "Be concise and direct. Provide clear, brief answers."
+      - type: "semantic-cache"
+        configuration:
+          enabled: true
+          similarity_threshold: 0.75
+
+default_model: qwen3-small
+
+# Reasoning disabled
+reasoning_families:
+  qwen3:
+    type: "chat_template_kwargs"
+    parameter: "enable_thinking"
+
+default_reasoning_effort: low
+
+# Router - Optimized for speed
+router:
+  high_confidence_threshold: 0.5
+  low_latency_threshold_ms: 200
+  default_max_latency_ms: 500
+
+# API Configuration
+api:
+  batch_classification:
+    max_batch_size: 200
+    concurrency_threshold: 10
+    max_concurrency: 16
+
+# Embedding Models - Fast model
+embedding_models:
+  qwen3_model_path: "models/mom-embedding-flash"
+  use_cpu: true
+
+# Observability
+observability:
+  metrics:
+    enabled: true
+  tracing:
+    enabled: false  # Disabled for lower overhead

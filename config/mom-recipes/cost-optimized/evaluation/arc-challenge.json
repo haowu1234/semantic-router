@@ -1,0 +1,21 @@
+{
+  "recipe_name": "cost-optimized",
+  "benchmark": "arc-challenge",
+  "timestamp": "2025-01-16T00:00:00Z",
+  "configuration": {
+    "samples": 200,
+    "use_cot": false,
+    "models": ["qwen3-small", "qwen3-medium"]
+  },
+  "results": {
+    "combined": {
+      "accuracy": 0.821,
+      "samples": 200,
+      "correct": 164
+    }
+  },
+  "performance": {
+    "avg_latency_ms": 115,
+    "p95_latency_ms": 420
+  }
+}
