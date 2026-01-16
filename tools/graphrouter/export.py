@@ -3,17 +3,22 @@ GraphRouter 模型导出工具
 
 将训练好的 PyTorch 模型导出为 Go 可读的 JSON 格式。
 
-导出内容:
+方案 C（完整 GNN 推理）导出内容:
+- model_weights: GNN 模型权重
+- training_graph: 训练图数据（用于推理时的 GNN 消息传递）
 - model_names: LLM 名称列表
-- query_projection: Query 投影矩阵 [query_dim, hidden_dim]
-- llm_representations: LLM 隐空间表示 [num_llms, hidden_dim]
 - 元数据: 训练信息
+
+Go 推理流程:
+1. 将新 Query 加入训练图
+2. 运行 GNN 消息传递（训练边作为上下文）
+3. 预测新 Query 对所有 LLM 的分数
 """
 
 import json
 import torch
 import numpy as np
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 from datetime import datetime
 from pathlib import Path
 
@@ -34,17 +39,18 @@ def export_for_go(
     metadata: Optional[Dict] = None
 ):
     """
-    导出模型为 Go 可读的 JSON 格式
+    导出模型为 Go 可读的 JSON 格式（方案 C：完整 GNN 推理）
     
     Go 推理逻辑:
-    1. query_hidden = query_embedding @ query_projection
-    2. scores[i] = cosine_similarity(query_hidden, llm_representations[i])
-    3. probs = softmax(scores / temperature)
-    4. selected = argmax(probs)
+    1. 将新 Query embedding 加入 training_query_embeddings
+    2. 构建新 Query 到所有 LLM 的边（权重为 0）
+    3. 运行 GNN 消息传递（训练边作为上下文）
+    4. 预测新 Query 对所有 LLM 的分数
+    5. 选择最高分的 LLM
     
     Args:
         model: 训练好的 EncoderDecoderNet 模型
-        dataset: 数据集（用于获取元信息和 LLM embedding）
+        dataset: 数据集（用于获取元信息和训练图数据）
         output_path: 输出 JSON 路径
         train_accuracy: 训练准确率
         temperature: Softmax 温度参数
@@ -52,28 +58,36 @@ def export_for_go(
     """
     model.eval()
     
-    # 1. 提取 Query 投影矩阵
-    # PyTorch Linear 的 weight shape: [out_features, in_features]
-    # 需要转置为 [in_features, out_features] = [query_dim, hidden_dim]
-    query_projection = model.align.query_transform.weight.detach().cpu().numpy().T
+    # 1. 导出模型权重
+    model_weights = export_model_weights(model)
     
-    # 2. 计算 LLM 表示
-    llm_representations = compute_llm_representations(model, dataset)
+    # 2. 导出训练图数据（用于推理时的 GNN 消息传递）
+    training_graph = export_training_graph(dataset)
     
     # 3. 构建导出数据
     export_data = {
-        "version": "1.0",
+        "version": "2.0",  # 版本 2.0 表示完整 GNN 推理
+        "inference_mode": "full_gnn",  # 推理模式标识
         "model_names": dataset.model_names,
         "hidden_dim": model.hidden_dim,
         "query_dim": dataset.query_dim,
-        "query_projection": query_projection.tolist(),
-        "llm_representations": llm_representations.tolist(),
+        "llm_dim": dataset.llm_dim,
+        "num_llms": dataset.num_llms,
+        "num_train_queries": dataset.num_queries,
+        
+        # 模型权重
+        "model_weights": model_weights,
+        
+        # 训练图数据
+        "training_graph": training_graph,
+        
         "temperature": temperature,
         "metadata": {
             "train_samples": dataset.num_queries,
             "train_accuracy": float(train_accuracy),
             "num_llms": dataset.num_llms,
             "export_date": datetime.now().isoformat(),
+            "inference_mode": "full_gnn",
             **(metadata or {})
         }
     }
@@ -83,56 +97,81 @@ def export_for_go(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
     with open(output_path, 'w', encoding='utf-8') as f:
-        json.dump(export_data, f, indent=2, ensure_ascii=False)
+        json.dump(export_data, f, ensure_ascii=False)
     
     print(f"\nModel exported to {output_path}")
+    print(f"  - Inference mode: full_gnn (方案 C)")
     print(f"  - {dataset.num_llms} LLMs: {dataset.model_names}")
+    print(f"  - {dataset.num_queries} training queries")
     print(f"  - hidden_dim: {model.hidden_dim}")
     print(f"  - query_dim: {dataset.query_dim}")
-    print(f"  - query_projection shape: {query_projection.shape}")
-    print(f"  - llm_representations shape: {llm_representations.shape}")
+    print(f"  - File size: {output_path.stat().st_size / 1024 / 1024:.2f} MB")
 
 
-def compute_llm_representations(
-    model: EncoderDecoderNet,
-    dataset: GraphRouterDataset
-) -> np.ndarray:
+def export_model_weights(model: EncoderDecoderNet) -> Dict[str, Any]:
     """
-    计算 LLM 聚合表示
+    导出 GNN 模型权重
     
-    将 LLM embedding 通过特征对齐层，得到隐空间中的表示，
-    并进行 L2 归一化以便于后续的余弦相似度计算。
-    
-    Args:
-        model: 训练好的模型
-        dataset: 数据集
-    
-    Returns:
-        llm_representations: [num_llms, hidden_dim] L2 归一化后的 LLM 表示
+    包含:
+    - FeatureAlign: query_transform, llm_transform
+    - GNN Conv 层: conv1, conv2
+    - BatchNorm: bn1, bn2
+    - Edge MLP: edge_mlp
     """
     model.eval()
+    weights = {}
     
-    # 获取模型所在设备
-    device = next(model.parameters()).device
+    # FeatureAlign 权重
+    weights["query_transform_weight"] = model.align.query_transform.weight.detach().cpu().numpy().tolist()
+    weights["query_transform_bias"] = model.align.query_transform.bias.detach().cpu().numpy().tolist()
+    weights["llm_transform_weight"] = model.align.llm_transform.weight.detach().cpu().numpy().tolist()
+    weights["llm_transform_bias"] = model.align.llm_transform.bias.detach().cpu().numpy().tolist()
     
-    with torch.no_grad():
-        # 获取 embedding 并移到正确设备
-        query_emb = torch.from_numpy(dataset.query_embedding_matrix).float().to(device)
-        llm_emb = torch.from_numpy(dataset.llm_embedding_matrix).float().to(device)
+    # Edge MLP 权重
+    weights["edge_mlp_weight"] = model.edge_mlp.weight.detach().cpu().numpy().tolist()
+    weights["edge_mlp_bias"] = model.edge_mlp.bias.detach().cpu().numpy().tolist()
+    
+    # GNN Conv 层权重（GeneralConv 内部结构）
+    # 注意：GeneralConv 的具体参数需要根据其内部实现提取
+    weights["conv1_state"] = {k: v.detach().cpu().numpy().tolist() for k, v in model.conv1.state_dict().items()}
+    weights["conv2_state"] = {k: v.detach().cpu().numpy().tolist() for k, v in model.conv2.state_dict().items()}
+    
+    # BatchNorm 权重
+    weights["bn1_weight"] = model.bn1.weight.detach().cpu().numpy().tolist()
+    weights["bn1_bias"] = model.bn1.bias.detach().cpu().numpy().tolist()
+    weights["bn1_running_mean"] = model.bn1.running_mean.detach().cpu().numpy().tolist()
+    weights["bn1_running_var"] = model.bn1.running_var.detach().cpu().numpy().tolist()
+    
+    weights["bn2_weight"] = model.bn2.weight.detach().cpu().numpy().tolist()
+    weights["bn2_bias"] = model.bn2.bias.detach().cpu().numpy().tolist()
+    weights["bn2_running_mean"] = model.bn2.running_mean.detach().cpu().numpy().tolist()
+    weights["bn2_running_var"] = model.bn2.running_var.detach().cpu().numpy().tolist()
+    
+    return weights
+
+
+def export_training_graph(dataset: GraphRouterDataset) -> Dict[str, Any]:
+    """
+    导出训练图数据（用于推理时的 GNN 消息传递上下文）
+    
+    包含:
+    - query_embeddings: 训练 Query 的 embedding [num_queries, query_dim]
+    - llm_embeddings: LLM 的 embedding [num_llms, llm_dim]
+    - edge_weights: 训练边的权重（performance）[num_queries * num_llms]
+    """
+    graph_data = {
+        # Query embeddings（已归一化）
+        "query_embeddings": dataset.query_embedding_matrix.tolist(),
         
-        # 特征对齐
-        # aligned shape: [num_queries + num_llms, hidden_dim]
-        aligned = model.align(query_emb, llm_emb)
+        # LLM embeddings（已归一化）
+        "llm_embeddings": dataset.llm_embedding_matrix.tolist(),
         
-        # 提取 LLM 部分
-        llm_aligned = aligned[dataset.num_queries:]  # [num_llms, hidden_dim]
-        llm_representations = llm_aligned.cpu().numpy()
+        # 边权重（performance scores）
+        # 形状: [num_queries * num_llms]，按 query 顺序排列
+        "edge_weights": dataset.performance_matrix.flatten().tolist(),
+    }
     
-    # L2 归一化（用于余弦相似度计算）
-    norms = np.linalg.norm(llm_representations, axis=1, keepdims=True)
-    llm_representations = llm_representations / (norms + 1e-8)
-    
-    return llm_representations
+    return graph_data
 
 
 def export_from_checkpoint(
@@ -162,7 +201,7 @@ def export_from_checkpoint(
     )
     
     # 加载权重
-    state_dict = torch.load(checkpoint_path, map_location='cpu')
+    state_dict = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
     model.load_state_dict(state_dict)
     
     # 导出
@@ -178,7 +217,7 @@ def export_from_checkpoint(
 
 def validate_export(export_path: str):
     """
-    验证导出的 JSON 文件
+    验证导出的 JSON 文件（方案 C）
     
     Args:
         export_path: JSON 文件路径
@@ -188,23 +227,39 @@ def validate_export(export_path: str):
     
     print(f"\nValidating export: {export_path}")
     print(f"  Version: {data['version']}")
+    print(f"  Inference mode: {data.get('inference_mode', 'simple')}")
     print(f"  Model names: {data['model_names']}")
     print(f"  Hidden dim: {data['hidden_dim']}")
     print(f"  Query dim: {data['query_dim']}")
+    print(f"  Num LLMs: {data['num_llms']}")
+    print(f"  Num train queries: {data['num_train_queries']}")
     print(f"  Temperature: {data['temperature']}")
     
-    # 验证矩阵维度
-    query_proj = np.array(data['query_projection'])
-    llm_reps = np.array(data['llm_representations'])
+    # 验证训练图数据
+    if 'training_graph' in data:
+        tg = data['training_graph']
+        query_emb = np.array(tg['query_embeddings'])
+        llm_emb = np.array(tg['llm_embeddings'])
+        edge_weights = np.array(tg['edge_weights'])
+        
+        print(f"  Training graph:")
+        print(f"    - Query embeddings shape: {query_emb.shape}")
+        print(f"    - LLM embeddings shape: {llm_emb.shape}")
+        print(f"    - Edge weights shape: {edge_weights.shape}")
+        
+        # 验证边权重数量
+        expected_edges = query_emb.shape[0] * llm_emb.shape[0]
+        assert len(edge_weights) == expected_edges, \
+            f"Edge weights count mismatch: {len(edge_weights)} vs expected {expected_edges}"
     
-    assert query_proj.shape == (data['query_dim'], data['hidden_dim']), \
-        f"query_projection shape mismatch: {query_proj.shape}"
-    assert llm_reps.shape == (len(data['model_names']), data['hidden_dim']), \
-        f"llm_representations shape mismatch: {llm_reps.shape}"
-    
-    # 验证 LLM 表示是否已归一化
-    norms = np.linalg.norm(llm_reps, axis=1)
-    print(f"  LLM representation norms: min={norms.min():.4f}, max={norms.max():.4f}")
+    # 验证模型权重
+    if 'model_weights' in data:
+        mw = data['model_weights']
+        print(f"  Model weights:")
+        print(f"    - Query transform: {np.array(mw['query_transform_weight']).shape}")
+        print(f"    - LLM transform: {np.array(mw['llm_transform_weight']).shape}")
+        print(f"    - BatchNorm 1: weight shape {np.array(mw['bn1_weight']).shape}")
+        print(f"    - BatchNorm 2: weight shape {np.array(mw['bn2_weight']).shape}")
     
     print(f"  Metadata: {data['metadata']}")
     print("  Validation passed!")

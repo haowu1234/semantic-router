@@ -55,20 +55,23 @@ class FeatureAlign(nn.Module):
 
 class EncoderDecoderNet(nn.Module):
     """
-    编码-解码网络：学习 Query-LLM 匹配关系。
+    编码-解码网络：使用 GNN 进行消息传递和边预测。
     
-    简化架构（与 Go 推理一致）:
-    1. Query Projection: query_features -> hidden_dim
-    2. LLM Representation: 可学习的 LLM 表示
-    3. Cosine Similarity: 计算 Query-LLM 相似度
+    架构（与 LLMRouter 原始实现一致）:
+    1. FeatureAlign: 特征对齐到隐空间
+    2. GeneralConv x 2: 两层图卷积进行消息传递
+    3. Edge Prediction: score = sigmoid(mean(x_ini[query] * x_gnn[llm]))
     
-    训练和推理使用相同的逻辑，确保一致性。
+    关键点：
+    - Query 节点使用初始对齐特征 (x_ini)
+    - LLM 节点使用 GNN 更新后的特征 (x_gnn)
+    - 这允许 LLM 节点聚合来自多个训练 Query 的信息
     
     Args:
         query_dim: Query embedding 维度
         llm_dim: LLM embedding 维度
         hidden_dim: 隐藏层维度
-        edge_dim: 边特征维度 (未使用，保留接口兼容性)
+        edge_dim: 边特征维度 (performance score)
     """
     
     def __init__(
@@ -81,11 +84,13 @@ class EncoderDecoderNet(nn.Module):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.edge_dim = edge_dim
+        self.query_dim = query_dim
+        self.llm_dim = llm_dim
         
-        # Query 投影层（与 Go 推理一致）
+        # 特征对齐层
         self.align = FeatureAlign(query_dim, llm_dim, hidden_dim)
         
-        # 保留 GNN 层用于可选的特征增强（但主要依赖直接投影）
+        # GNN 卷积层（与 LLMRouter 一致）
         self.conv1 = GeneralConv(
             in_channels=hidden_dim,
             out_channels=hidden_dim,
@@ -114,7 +119,7 @@ class EncoderDecoderNet(nn.Module):
         visible_mask: torch.Tensor
     ) -> torch.Tensor:
         """
-        前向传播 - 使用与 Go 推理一致的逻辑
+        前向传播 - 与 LLMRouter 原始实现一致
         
         Args:
             query_features: [num_queries, query_dim] Query 特征
@@ -122,38 +127,109 @@ class EncoderDecoderNet(nn.Module):
             edge_index: [2, num_edges] 边索引
             edge_attr: [num_edges, edge_dim] 边权重 (performance)
             edge_mask: [num_edges] 需要预测的边 (bool)
-            visible_mask: [num_edges] 可见的边 (bool) - 未使用，保留接口
+            visible_mask: [num_edges] 可见的边，用于 GNN 消息传递 (bool)
         
         Returns:
             scores: [num_masked_edges] 预测的边分数
         """
-        num_queries = query_features.shape[0]
+        # 获取可见边的索引和权重（用于 GNN 消息传递）
+        visible_edge_index = edge_index[:, visible_mask]
+        visible_edge_attr = edge_attr[visible_mask]
         
-        # 特征对齐（与 Go 推理一致）
-        x0 = self.align(query_features, llm_features)
-        
-        # 分离 Query 和 LLM 的隐空间表示
-        query_hidden = x0[:num_queries]  # [num_queries, hidden_dim]
-        llm_hidden = x0[num_queries:]    # [num_llms, hidden_dim]
-        
-        # L2 归一化（与 Go cosine similarity 一致）
-        query_hidden = F.normalize(query_hidden, p=2, dim=1)
-        llm_hidden = F.normalize(llm_hidden, p=2, dim=1)
-        
-        # 获取需要预测的边
+        # 获取需要预测的边索引
         predict_edge_index = edge_index[:, edge_mask]
         
-        # 计算点积分数（归一化后等价于 cosine similarity）
-        src_features = query_hidden[predict_edge_index[0]]  # Query features
-        # LLM 节点索引需要减去 num_queries 偏移
-        llm_indices = predict_edge_index[1] - num_queries
-        dst_features = llm_hidden[llm_indices]  # LLM features
+        # 边权重变换
+        visible_edge_attr = F.leaky_relu(
+            self.edge_mlp(visible_edge_attr.reshape(-1, self.edge_dim))
+        )
         
-        # 点积打分
-        scores = (src_features * dst_features).sum(dim=-1)
+        # 特征对齐：x_ini 是初始对齐特征
+        x_ini = self.align(query_features, llm_features)
         
-        # Sigmoid 映射到 [0, 1]
-        scores = torch.sigmoid(scores)
+        # GNN 消息传递
+        x1 = F.leaky_relu(self.bn1(
+            self.conv1(x_ini, visible_edge_index, edge_attr=visible_edge_attr)
+        ))
+        x_gnn = self.bn2(
+            self.conv2(x1, visible_edge_index, edge_attr=visible_edge_attr)
+        )
+        
+        # 边预测（LLMRouter 核心逻辑）：
+        # - 源节点（Query）使用初始特征 x_ini
+        # - 目标节点（LLM）使用 GNN 更新后的特征 x_gnn
+        src_features = x_ini[predict_edge_index[0]]  # Query 初始特征
+        dst_features = x_gnn[predict_edge_index[1]]  # LLM GNN 特征
+        
+        # 点积 + Sigmoid
+        scores = torch.sigmoid((src_features * dst_features).mean(dim=-1))
+        
+        return scores
+    
+    def forward_for_inference(
+        self,
+        query_features: torch.Tensor,
+        llm_features: torch.Tensor,
+        edge_index: torch.Tensor,
+        edge_attr: torch.Tensor,
+        context_mask: torch.Tensor,
+        new_query_indices: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        推理前向传播 - 为新 Query 预测所有 LLM 的分数
+        
+        与训练的区别：
+        - context_mask: 所有历史训练边（作为 GNN 消息传递的上下文）
+        - new_query_indices: 需要预测的新 Query 索引
+        
+        Args:
+            query_features: [num_queries, query_dim] 包含训练 + 新 Query
+            llm_features: [num_llms, llm_dim] LLM 特征
+            edge_index: [2, num_edges] 边索引（包含训练边 + 新 Query 边）
+            edge_attr: [num_edges] 边权重（新 Query 边权重设为 0）
+            context_mask: [num_edges] 用于 GNN 的上下文边（训练边）
+            new_query_indices: [num_new_queries] 新 Query 的节点索引
+        
+        Returns:
+            scores: [num_new_queries, num_llms] 每个新 Query 对所有 LLM 的预测分数
+        """
+        num_llms = llm_features.shape[0]
+        num_queries = query_features.shape[0]
+        
+        # 获取上下文边（用于 GNN 消息传递）
+        context_edge_index = edge_index[:, context_mask]
+        context_edge_attr = edge_attr[context_mask]
+        
+        # 边权重变换
+        context_edge_attr = F.leaky_relu(
+            self.edge_mlp(context_edge_attr.reshape(-1, self.edge_dim))
+        )
+        
+        # 特征对齐
+        x_ini = self.align(query_features, llm_features)
+        
+        # GNN 消息传递（使用训练边作为上下文）
+        x1 = F.leaky_relu(self.bn1(
+            self.conv1(x_ini, context_edge_index, edge_attr=context_edge_attr)
+        ))
+        x_gnn = self.bn2(
+            self.conv2(x1, context_edge_index, edge_attr=context_edge_attr)
+        )
+        
+        # 为每个新 Query 计算对所有 LLM 的分数
+        num_new_queries = len(new_query_indices)
+        scores = torch.zeros(num_new_queries, num_llms, device=query_features.device)
+        
+        for i, q_idx in enumerate(new_query_indices):
+            # Query 使用初始特征
+            q_feature = x_ini[q_idx]  # [hidden_dim]
+            
+            # LLM 使用 GNN 更新后的特征
+            llm_start_idx = num_queries  # LLM 节点从 num_queries 开始
+            llm_features_gnn = x_gnn[llm_start_idx:llm_start_idx + num_llms]  # [num_llms, hidden_dim]
+            
+            # 计算分数
+            scores[i] = torch.sigmoid((q_feature * llm_features_gnn).mean(dim=-1))
         
         return scores
 
