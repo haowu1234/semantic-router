@@ -141,6 +141,16 @@ func (s *ClassificationAPIServer) setupRoutes() *http.ServeMux {
 		logging.Infof("System prompt configuration endpoints disabled for security")
 	}
 
+	// Model selection endpoints for online learning (per-decision isolation)
+	mux.HandleFunc("POST /api/v1/model_selection/feedback", s.handleModelSelectionFeedback)
+	mux.HandleFunc("POST /api/v1/model_selection/feedback/batch", s.handleModelSelectionBatchFeedback)
+	mux.HandleFunc("GET /api/v1/model_selection/stats", s.handleModelSelectionStats)
+	mux.HandleFunc("POST /api/v1/model_selection/select", s.handleModelSelectionSelect)
+	mux.HandleFunc("POST /api/v1/model_selection/save", s.handleModelSelectionSave)
+	mux.HandleFunc("GET /api/v1/model_selection/candidates", s.handleModelSelectionCandidates)
+	mux.HandleFunc("GET /api/v1/model_selection/decisions", s.handleModelSelectionDecisions)
+	logging.Infof("Model selection API endpoints enabled (per-decision isolation)")
+
 	return mux
 }
 

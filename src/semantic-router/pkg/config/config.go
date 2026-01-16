@@ -153,6 +153,74 @@ type IntelligentRouting struct {
 
 	// Reasoning mode configuration
 	ReasoningConfig `yaml:",inline"`
+
+	// Model selection configuration for intelligent model selection when multiple candidates exist
+	ModelSelection ModelSelectionConfig `yaml:"model_selection,omitempty"`
+}
+
+// ModelSelectionConfig represents the configuration for model selection algorithms.
+// When a Decision has multiple ModelRefs and no Algorithm is specified,
+// the model selection algorithm is used to choose the best model.
+type ModelSelectionConfig struct {
+	// Method specifies the selection algorithm: "static", "knn", "elo", "router_dc", "automix", "hybrid"
+	// Default: "static" (always selects first model, backwards compatible)
+	Method string `yaml:"method,omitempty"`
+
+	// KNN configuration (used when method is "knn")
+	KNN KNNSelectionConfig `yaml:"knn,omitempty"`
+
+	// Elo configuration (used when method is "elo")
+	Elo EloSelectionConfig `yaml:"elo,omitempty"`
+
+	// AutoMix configuration (used when method is "automix")
+	AutoMix AutoMixSelectionConfig `yaml:"automix,omitempty"`
+
+	// Hybrid configuration (used when method is "hybrid")
+	Hybrid HybridSelectionConfig `yaml:"hybrid,omitempty"`
+}
+
+// KNNSelectionConfig contains settings for KNN-based model selection.
+type KNNSelectionConfig struct {
+	// K is the number of neighbors to consider for voting (default: 5)
+	K int `yaml:"k,omitempty"`
+
+	// UseHNSW enables HNSW index for O(log n) search (default: true)
+	UseHNSW bool `yaml:"use_hnsw,omitempty"`
+
+	// HNSW parameters
+	HNSWM              int `yaml:"hnsw_m,omitempty"`
+	HNSWEfConstruction int `yaml:"hnsw_ef_construction,omitempty"`
+	HNSWEfSearch       int `yaml:"hnsw_ef_search,omitempty"`
+
+	// WeightByDistance enables distance-weighted voting (default: true)
+	WeightByDistance bool `yaml:"weight_by_distance,omitempty"`
+
+	// ModelPath is the path to pre-trained KNN model data (optional)
+	ModelPath string `yaml:"model_path,omitempty"`
+}
+
+// EloSelectionConfig contains settings for Elo rating-based model selection.
+type EloSelectionConfig struct {
+	// InitialRating is the starting Elo rating for new models (default: 1500)
+	InitialRating float64 `yaml:"initial_rating,omitempty"`
+
+	// KFactor controls rating volatility (default: 32)
+	KFactor float64 `yaml:"k_factor,omitempty"`
+}
+
+// AutoMixSelectionConfig contains settings for AutoMix cascade selection.
+type AutoMixSelectionConfig struct {
+	// CostQualityTradeoff balances cost vs quality (0.0 = pure quality, 1.0 = pure cost)
+	CostQualityTradeoff float64 `yaml:"cost_quality_tradeoff,omitempty"`
+}
+
+// HybridSelectionConfig contains settings for hybrid selection combining multiple algorithms.
+type HybridSelectionConfig struct {
+	// Weights for combining different selection signals
+	EloWeight      float64 `yaml:"elo_weight,omitempty"`
+	RouterDCWeight float64 `yaml:"router_dc_weight,omitempty"`
+	AutoMixWeight  float64 `yaml:"automix_weight,omitempty"`
+	CostWeight     float64 `yaml:"cost_weight,omitempty"`
 }
 
 type Signals struct {

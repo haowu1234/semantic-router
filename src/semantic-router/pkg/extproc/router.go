@@ -3,7 +3,9 @@ package extproc
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
+	"time"
 
 	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	ext_proc "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
@@ -16,6 +18,7 @@ import (
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/observability/logging"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/responsestore"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/routerreplay"
+	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/selection"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/services"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/tools"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/utils/pii"
@@ -31,6 +34,8 @@ type OpenAIRouter struct {
 	ToolsDatabase        *tools.ToolsDatabase
 	ResponseAPIFilter    *ResponseAPIFilter
 	ReplayRecorder       *routerreplay.Recorder
+	// ModelSelector handles intelligent model selection when multiple candidates exist
+	ModelSelector selection.Selector
 }
 
 // Ensure OpenAIRouter implements the ext_proc calls
@@ -196,6 +201,13 @@ func NewOpenAIRouter(configPath string) (*OpenAIRouter, error) {
 	}
 	replayRecorder := routerreplay.NewRecorder(replayMax)
 
+	// Initialize model selector based on configuration
+	modelSelector, err := initModelSelector(cfg)
+	if err != nil {
+		logging.Warnf("Failed to initialize model selector: %v, using static fallback", err)
+		modelSelector = selection.NewStaticSelector()
+	}
+
 	router := &OpenAIRouter{
 		Config:               cfg,
 		CategoryDescriptions: categoryDescriptions,
@@ -205,6 +217,7 @@ func NewOpenAIRouter(configPath string) (*OpenAIRouter, error) {
 		ToolsDatabase:        toolsDatabase,
 		ResponseAPIFilter:    responseAPIFilter,
 		ReplayRecorder:       replayRecorder,
+		ModelSelector:        modelSelector,
 	}
 
 	return router, nil
@@ -333,6 +346,87 @@ func createResponseStore(cfg *config.RouterConfig) (responsestore.ResponseStore,
 		},
 	}
 	return responsestore.NewStore(storeConfig)
+}
+
+// initModelSelector initializes the model selector based on configuration.
+func initModelSelector(cfg *config.RouterConfig) (selection.Selector, error) {
+	selCfg := cfg.ModelSelection
+
+	// Convert config types
+	knnConfig := selection.KNNConfig{
+		K:                  selCfg.KNN.K,
+		UseHNSW:            selCfg.KNN.UseHNSW,
+		HNSWM:              selCfg.KNN.HNSWM,
+		HNSWEfConstruction: selCfg.KNN.HNSWEfConstruction,
+		HNSWEfSearch:       selCfg.KNN.HNSWEfSearch,
+		WeightByDistance:   selCfg.KNN.WeightByDistance,
+		ModelPath:          selCfg.KNN.ModelPath,
+	}
+
+	modelSelConfig := selection.ModelSelectionConfig{
+		Method: selCfg.Method,
+		KNN:    knnConfig,
+		Elo: struct {
+			InitialRating float64 `yaml:"initial_rating" json:"initial_rating"`
+			KFactor       float64 `yaml:"k_factor" json:"k_factor"`
+		}{
+			InitialRating: selCfg.Elo.InitialRating,
+			KFactor:       selCfg.Elo.KFactor,
+		},
+		AutoMix: struct {
+			CostQualityTradeoff float64 `yaml:"cost_quality_tradeoff" json:"cost_quality_tradeoff"`
+		}{
+			CostQualityTradeoff: selCfg.AutoMix.CostQualityTradeoff,
+		},
+		Hybrid: struct {
+			EloWeight      float64 `yaml:"elo_weight" json:"elo_weight"`
+			RouterDCWeight float64 `yaml:"router_dc_weight" json:"router_dc_weight"`
+			AutoMixWeight  float64 `yaml:"automix_weight" json:"automix_weight"`
+			CostWeight     float64 `yaml:"cost_weight" json:"cost_weight"`
+		}{
+			EloWeight:      selCfg.Hybrid.EloWeight,
+			RouterDCWeight: selCfg.Hybrid.RouterDCWeight,
+			AutoMixWeight:  selCfg.Hybrid.AutoMixWeight,
+			CostWeight:     selCfg.Hybrid.CostWeight,
+		},
+	}
+
+	selector, err := selection.NewSelectorFromConfig(modelSelConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	// Register in global registry
+	selection.GlobalRegistry().Register(selector.Name(), selector)
+
+	// Create and register global MultiDecisionSelectionService for per-decision online learning
+	// Each Decision has its own isolated KNN model and training data
+	basePath := "config/models"
+	if selCfg.KNN.ModelPath != "" {
+		// Use the directory containing the model path as base
+		basePath = filepath.Dir(selCfg.KNN.ModelPath)
+	}
+
+	svcConfig := selection.ServiceConfig{
+		ModelSelectionConfig: modelSelConfig,
+		AutoSaveEnabled:      selCfg.KNN.ModelPath != "", // Enable auto-save if model path is configured
+		AutoSaveInterval:     5 * time.Minute,
+		EmbeddingCacheSize:   10000,
+		EmbeddingCacheTTL:    1 * time.Hour,
+		BasePath:             basePath,
+	}
+
+	multiSvc, err := selection.NewMultiDecisionSelectionService(svcConfig)
+	if err != nil {
+		logging.Warnf("Failed to create multi-decision selection service: %v, online learning will be unavailable", err)
+	} else {
+		selection.SetGlobalMultiDecisionService(multiSvc)
+		logging.Infof("Multi-decision model selection service initialized (per-decision isolation)")
+	}
+
+	logging.Infof("Model selector initialized: %s", selector.Name())
+
+	return selector, nil
 }
 
 // LoadToolsDatabase loads tools from file after embedding models are initialized

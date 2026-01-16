@@ -1,9 +1,13 @@
 package extproc
 
 import (
+	"context"
 	"strings"
 
+	candle_binding "github.com/vllm-project/semantic-router/candle-binding"
+	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/config"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/observability/logging"
+	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/selection"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/utils/entropy"
 )
 
@@ -59,7 +63,7 @@ func (r *OpenAIRouter) performDecisionEvaluation(originalModel string, userConte
 
 	// Log signal evaluation results
 	logging.Infof("Signal evaluation results: keyword=%v, embedding=%v, domain=%v, fact_check=%v, user_feedback=%v, preference=%v",
-		signals.MatchedKeywordRules, signals.MatchedEmbeddingRules, signals.MatchedDomainRules,
+		signals.MatchedKeywordRules, signals.MatchedEmbeddingRules, signals.MatchedDomains,
 		signals.MatchedFactCheckRules, signals.MatchedUserFeedbackRules, signals.MatchedPreferenceRules)
 
 	// Perform decision evaluation using pre-computed signals
@@ -122,21 +126,23 @@ func (r *OpenAIRouter) performDecisionEvaluation(originalModel string, userConte
 
 	// Select best model from the decision's ModelRefs (only for auto models)
 	if len(result.Decision.ModelRefs) > 0 {
-		modelRef := result.Decision.ModelRefs[0]
+		// Use intelligent model selection when multiple candidates and no Looper algorithm
+		selectedModelRef := r.selectBestModelRef(evaluationText, result.Decision.ModelRefs)
+
 		// Use LoRA name if specified, otherwise use the base model name
-		selectedModel = modelRef.Model
-		if modelRef.LoRAName != "" {
-			selectedModel = modelRef.LoRAName
+		selectedModel = selectedModelRef.Model
+		if selectedModelRef.LoRAName != "" {
+			selectedModel = selectedModelRef.LoRAName
 			logging.Infof("Selected model from decision %s: %s (LoRA adapter for base model %s)",
-				decisionName, selectedModel, modelRef.Model)
+				decisionName, selectedModel, selectedModelRef.Model)
 		} else {
 			logging.Infof("Selected model from decision %s: %s", decisionName, selectedModel)
 		}
 		ctx.VSRSelectedModel = selectedModel
 
-		// Determine reasoning mode from the best model's configuration
-		if result.Decision.ModelRefs[0].UseReasoning != nil {
-			useReasoning := *result.Decision.ModelRefs[0].UseReasoning
+		// Determine reasoning mode from the selected model's configuration
+		if selectedModelRef.UseReasoning != nil {
+			useReasoning := *selectedModelRef.UseReasoning
 			reasoningDecision = entropy.ReasoningDecision{
 				UseReasoning:     useReasoning,
 				Confidence:       evaluationConfidence,
@@ -163,4 +169,61 @@ func (r *OpenAIRouter) performDecisionEvaluation(originalModel string, userConte
 	}
 
 	return decisionName, evaluationConfidence, reasoningDecision, selectedModel
+}
+
+// selectBestModelRef selects the best model from candidates using the configured model selector.
+// If only one model or no selector configured, returns the first model (backwards compatible).
+func (r *OpenAIRouter) selectBestModelRef(query string, modelRefs []config.ModelRef) config.ModelRef {
+	// Single model or no selector - use first (backwards compatible)
+	if len(modelRefs) <= 1 || r.ModelSelector == nil {
+		return modelRefs[0]
+	}
+
+	// Check if selector is static (default) - no need for embedding computation
+	if r.ModelSelector.Name() == "static" {
+		return modelRefs[0]
+	}
+
+	// Build candidate list
+	candidates := make([]string, len(modelRefs))
+	modelRefMap := make(map[string]config.ModelRef)
+	for i, ref := range modelRefs {
+		name := ref.Model
+		if ref.LoRAName != "" {
+			name = ref.LoRAName
+		}
+		candidates[i] = name
+		modelRefMap[name] = ref
+	}
+
+	// Get query embedding for intelligent selection
+	embedding, err := candle_binding.GetEmbeddingWithModelType(query, "qwen3", 768)
+	if err != nil {
+		logging.Warnf("Failed to get embedding for model selection: %v, using first model", err)
+		return modelRefs[0]
+	}
+
+	// Use selector to choose best model
+	selCtx := &selection.SelectionContext{
+		Query:          query,
+		QueryEmbedding: embedding,
+		Candidates:     candidates,
+	}
+
+	result, err := r.ModelSelector.Select(context.Background(), selCtx)
+	if err != nil {
+		logging.Warnf("Model selection failed: %v, using first model", err)
+		return modelRefs[0]
+	}
+
+	// Find the selected model in the original refs
+	if selected, ok := modelRefMap[result.SelectedModel]; ok {
+		logging.Infof("Model selector %s chose %s (confidence: %.3f)",
+			r.ModelSelector.Name(), result.SelectedModel, result.Confidence)
+		return selected
+	}
+
+	// Fallback to first if selected model not found (shouldn't happen)
+	logging.Warnf("Selected model %s not found in candidates, using first model", result.SelectedModel)
+	return modelRefs[0]
 }
