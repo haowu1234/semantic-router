@@ -301,6 +301,7 @@ class GNNPredictor:
             print(f"Install tqdm for progress bar: pip install tqdm")
         
         for epoch in epoch_iter:
+            self._last_epoch = epoch  # 用于调试
             # 训练阶段
             self.model.train()
             total_loss = 0.0
@@ -381,6 +382,11 @@ class GNNPredictor:
             selected_idx = scores.argmax(dim=1)
             row_indices = torch.arange(len(selected_idx), device=self.device)
             selected_perf = val_perf[row_indices, selected_idx]
+            
+            # Debug: 检查选择分布
+            unique, counts = torch.unique(selected_idx, return_counts=True)
+            if hasattr(self, '_last_epoch') and self._last_epoch % 20 == 0:
+                print(f"    LLM selection distribution: {dict(zip(unique.tolist(), counts.tolist()))}")
             
             return selected_perf.mean().item()
     

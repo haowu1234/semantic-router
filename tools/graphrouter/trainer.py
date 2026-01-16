@@ -123,15 +123,32 @@ class GraphRouterTrainer:
         self.predictor.model.eval()
         
         with torch.no_grad():
-            # 获取预测
-            predictions = self.predictor.predict(test_data)
+            num_llms = self.dataset.num_llms
+            
+            # 确定要评估的 mask
+            if test_data.test_mask.any():
+                eval_mask = test_data.test_mask.bool()
+            else:
+                eval_mask = test_data.val_mask.bool()
+            
+            # 使用 val_mask 方式评估（不调用 predict，因为 predict 假设有 test_mask）
+            visible_mask = self.train_data.train_mask.bool()
+            
+            scores = self.predictor.model(
+                query_features=test_data.query_features,
+                llm_features=test_data.llm_features,
+                edge_index=test_data.edge_index,
+                edge_attr=test_data.edge_attr,
+                edge_mask=eval_mask,
+                visible_mask=visible_mask
+            )
             
             # 计算指标
-            num_llms = self.dataset.num_llms
-            test_mask = test_data.test_mask.bool() if test_data.test_mask.any() else test_data.val_mask.bool()
+            scores = scores.reshape(-1, num_llms)
+            predictions = scores.argmax(dim=1)
             
             # 真实性能
-            perf = test_data.edge_attr[test_mask].reshape(-1, num_llms)
+            perf = test_data.edge_attr[eval_mask].reshape(-1, num_llms)
             
             # 真实最佳 LLM
             true_best = perf.argmax(dim=1)
