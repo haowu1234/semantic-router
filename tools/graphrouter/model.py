@@ -90,16 +90,19 @@ class EncoderDecoderNet(nn.Module):
         # 特征对齐层
         self.align = FeatureAlign(query_dim, llm_dim, hidden_dim)
         
-        # GNN 卷积层（与 LLMRouter 一致）
+        # GNN 卷积层
+        # 注意：使用 mean 聚合避免值爆炸（LLMRouter 默认用 add，但我们数据量更大）
         self.conv1 = GeneralConv(
             in_channels=hidden_dim,
             out_channels=hidden_dim,
-            in_edge_channels=edge_dim
+            in_edge_channels=edge_dim,
+            aggr='mean'
         )
         self.conv2 = GeneralConv(
             in_channels=hidden_dim,
             out_channels=hidden_dim,
-            in_edge_channels=edge_dim
+            in_edge_channels=edge_dim,
+            aggr='mean'
         )
         
         # BatchNorm
@@ -340,8 +343,8 @@ class GNNPredictor:
             weight_decay=self.config.get('weight_decay', 1e-4)
         )
         
-        # 损失函数：使用 MarginRankingLoss 学习排序
-        self.criterion = nn.MarginRankingLoss(margin=0.1)
+        # 损失函数：与 LLMRouter 一致，使用 BCELoss
+        self.criterion = nn.BCELoss()
         
         # LLM 数量
         self.num_llms = self.config.get('num_llms', 10)
@@ -385,18 +388,22 @@ class GNNPredictor:
             total_loss = 0.0
             
             for _ in range(batch_size):
-                # 按 query 为单位随机掩码（确保每个 query 的所有 LLM 边同时被 mask 或不被 mask）
-                train_mask = train_data.train_mask.clone().bool()
-                num_total_edges = train_mask.size(0)
-                num_queries = num_total_edges // self.num_llms
+                # 与 LLMRouter 完全一致的掩码逻辑
+                # mask_train 一开始全是 True（训练边）
+                mask = train_data.train_mask.clone().bool()
                 
-                # 为每个 query 生成一个随机值，然后扩展到所有 LLM 边
-                query_random = torch.rand(num_queries, device=self.device) < mask_rate
-                # 扩展：每个 query 的决定应用到其所有 num_llms 条边
-                edge_random_mask = query_random.repeat_interleave(self.num_llms)
+                # 随机选择约 mask_rate 的边（这些边用于 GNN，不预测）
+                random_mask = torch.rand(mask.size(), device=self.device) < mask_rate
                 
-                edge_mask = train_mask & edge_random_mask
-                visible_mask = train_mask & ~edge_random_mask
+                # LLMRouter 逻辑：如果 mask=True 且 random=True，则设为 False
+                # 即：random_mask=True 的边不需要预测
+                mask = torch.where(mask & random_mask, torch.tensor(False, device=self.device), mask)
+                
+                # edge_can_see: 训练边中，不需要预测的边（用于 GNN 消息传递）
+                visible_mask = ~mask & train_data.train_mask.bool()
+                
+                # edge_mask: 需要预测的边
+                edge_mask = mask
                 
                 self.optimizer.zero_grad()
                 
@@ -409,19 +416,10 @@ class GNNPredictor:
                     visible_mask=visible_mask
                 )
                 
-                # Reshape scores 和 performance 为 [num_queries_masked, num_llms]
-                scores_reshaped = scores.reshape(-1, self.num_llms)
-                perf = train_data.edge_attr[edge_mask].reshape(-1, self.num_llms)
-                
-                # ListNet 风格损失：使用 KL 散度让预测分布接近真实分布
-                # 真实分布：基于 performance 的 softmax
-                # 预测分布：基于 score 的 softmax
-                temperature = 1.0
-                target_dist = F.softmax(perf / temperature, dim=1)
-                pred_dist = F.log_softmax(scores_reshaped / temperature, dim=1)
-                
-                # KL 散度损失
-                loss = F.kl_div(pred_dist, target_dist, reduction='batchmean')
+                # 使用 BCELoss（与 LLMRouter 一致）
+                # labels 是 one-hot：最佳 LLM 的边为 1，其他为 0
+                labels = train_data.labels[edge_mask]
+                loss = self.criterion(scores, labels)
                 
                 total_loss += loss.item()
                 loss.backward()
@@ -431,7 +429,7 @@ class GNNPredictor:
             
             # 验证阶段
             self.model.eval()
-            val_result = self._validate(val_data, train_data.train_mask)
+            val_result = self._validate(val_data, train_data)
             
             # 保存最佳模型
             if val_result > best_result:
@@ -456,11 +454,17 @@ class GNNPredictor:
         print(f"Training completed. Best validation result: {best_result:.4f}")
         return best_result
     
-    def _validate(self, val_data: Data, train_mask: torch.Tensor) -> float:
-        """验证模型"""
+    def _validate(self, val_data: Data, train_data: Data) -> float:
+        """
+        验证模型（与 LLMRouter 完全一致）
+        
+        关键：验证数据和训练数据使用同一个图结构，
+        只是通过 mask 区分哪些边用于训练，哪些边用于验证
+        """
         with torch.no_grad():
             val_mask = val_data.val_mask.bool()
-            visible_mask = train_mask.bool()
+            # 训练边作为可见边（用于 GNN 消息传递）
+            visible_mask = train_data.train_mask.bool()
             
             scores = self.model(
                 query_features=val_data.query_features,
@@ -471,7 +475,7 @@ class GNNPredictor:
                 visible_mask=visible_mask
             )
             
-            # 计算验证指标：选择的模型的平均 performance
+            # 计算验证指标
             scores = scores.reshape(-1, self.num_llms)
             val_perf = val_data.edge_attr[val_mask].reshape(-1, self.num_llms)
             
@@ -491,24 +495,35 @@ class GNNPredictor:
         """
         预测模式：返回每个 query 的最佳 LLM 索引
         
+        与 LLMRouter 一致：
+        - data 应该是由 _build_inference_graph 构建的推理图
+        - train_mask 表示 context 边（用于 GNN）
+        - val_mask/test_mask 表示需要预测的边
+        
         Args:
-            data: 预测数据
+            data: 推理数据（包含 context Query + new Query）
         
         Returns:
-            max_idx: [num_queries] 最佳 LLM 索引
+            max_idx: [num_new_queries] 最佳 LLM 索引
         """
         self.model.eval()
         
         with torch.no_grad():
-            test_mask = data.test_mask.bool()
-            visible_mask = (data.train_mask | data.val_mask).bool()
+            # 确定需要预测的边
+            if data.test_mask.any():
+                predict_mask = data.test_mask.bool()
+            else:
+                predict_mask = data.val_mask.bool()
+            
+            # context 边用于 GNN 消息传递
+            visible_mask = data.train_mask.bool()
             
             scores = self.model(
                 query_features=data.query_features,
                 llm_features=data.llm_features,
                 edge_index=data.edge_index,
                 edge_attr=data.edge_attr,
-                edge_mask=test_mask,
+                edge_mask=predict_mask,
                 visible_mask=visible_mask
             )
         

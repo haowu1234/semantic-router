@@ -172,31 +172,20 @@ class GraphRouterDataset:
             torch.from_numpy(self.performance_matrix).float()
         )
     
-    def get_train_val_masks(self) -> Tuple[torch.Tensor, torch.Tensor]:
+
+    
+    def get_train_val_split(self) -> Tuple[np.ndarray, np.ndarray]:
         """
-        生成训练/验证掩码
+        获取训练/验证 Query 索引划分
         
-        按 query 划分：同一 query 的所有边要么都在训练集，要么都在验证集
+        Returns:
+            (train_indices, val_indices): 训练和验证的 query 索引
         """
-        num_edges = self.num_queries * self.num_llms
-        
-        # 按 query 划分
         num_val_queries = int(self.num_queries * self.val_ratio)
         indices = np.random.permutation(self.num_queries)
-        val_query_indices = set(indices[:num_val_queries])
-        
-        train_mask = torch.zeros(num_edges, dtype=torch.bool)
-        val_mask = torch.zeros(num_edges, dtype=torch.bool)
-        
-        for q in range(self.num_queries):
-            start = q * self.num_llms
-            end = start + self.num_llms
-            if q in val_query_indices:
-                val_mask[start:end] = True
-            else:
-                train_mask[start:end] = True
-        
-        return train_mask, val_mask
+        val_indices = indices[:num_val_queries]
+        train_indices = indices[num_val_queries:]
+        return train_indices, val_indices
     
     def build_graph_data(
         self,
@@ -205,7 +194,12 @@ class GraphRouterDataset:
         is_train: bool = True
     ) -> Tuple[Any, Any]:
         """
-        构建图数据
+        构建图数据（与 LLMRouter _build_graph_data 完全一致）
+        
+        关键设计：
+        - 训练和验证使用**同一个图结构**（包含所有 query）
+        - 通过 mask 区分训练边和验证边
+        - 这与推理时不同（推理时把新 query 加入图）
         
         Args:
             query_embeddings: Query embedding 矩阵，默认使用数据集中的
@@ -239,10 +233,28 @@ class GraphRouterDataset:
         labels_tensor = torch.from_numpy(labels).float()
         
         if is_train:
-            train_mask, val_mask = self.get_train_val_masks()
-            test_mask = torch.zeros(num_queries * self.num_llms, dtype=torch.bool)
+            # === 与 LLMRouter 完全一致的划分方式 ===
+            # 按 query 划分，所有 query 都在同一个图中
+            train_indices, val_indices = self.get_train_val_split()
             
-            # 训练数据
+            # 创建边掩码
+            num_edges = num_queries * self.num_llms
+            train_mask = torch.zeros(num_edges, dtype=torch.float)
+            val_mask = torch.zeros(num_edges, dtype=torch.float)
+            
+            for q_idx in train_indices:
+                start = q_idx * self.num_llms
+                end = start + self.num_llms
+                train_mask[start:end] = 1
+            
+            for q_idx in val_indices:
+                start = q_idx * self.num_llms
+                end = start + self.num_llms
+                val_mask[start:end] = 1
+            
+            test_mask = torch.zeros(num_edges, dtype=torch.float)
+            
+            # 训练数据：edge_mask 指向训练边
             train_data = self.form_data.build(
                 query_features=query_tensor,
                 llm_features=llm_tensor,
@@ -256,7 +268,7 @@ class GraphRouterDataset:
                 test_mask=test_mask
             )
             
-            # 验证数据（使用相同的图结构，不同的掩码）
+            # 验证数据：同一个图结构，edge_mask 指向验证边
             val_data = self.form_data.build(
                 query_features=query_tensor,
                 llm_features=llm_tensor,
@@ -270,13 +282,17 @@ class GraphRouterDataset:
                 test_mask=test_mask
             )
             
+            # 保存索引供外部使用
+            self._train_indices = train_indices
+            self._val_indices = val_indices
+            
             return train_data, val_data
         else:
             # 测试数据
             num_edges = num_queries * self.num_llms
-            test_mask = torch.ones(num_edges, dtype=torch.bool)
-            train_mask = torch.zeros(num_edges, dtype=torch.bool)
-            val_mask = torch.zeros(num_edges, dtype=torch.bool)
+            test_mask = torch.ones(num_edges, dtype=torch.float)
+            train_mask = torch.zeros(num_edges, dtype=torch.float)
+            val_mask = torch.zeros(num_edges, dtype=torch.float)
             
             test_data = self.form_data.build(
                 query_features=query_tensor,
@@ -292,6 +308,99 @@ class GraphRouterDataset:
             )
             
             return test_data
+    
+    def build_inference_graph(
+        self,
+        new_query_embeddings: np.ndarray,
+        context_query_emb: np.ndarray = None,
+        context_perf: np.ndarray = None,
+        new_perf: np.ndarray = None
+    ) -> Any:
+        """
+        为新 Query 构建推理图（与 LLMRouter route_batch 一致）
+        
+        关键设计（推理时与训练时不同）:
+        1. 合并 context Query 和 new Query
+        2. new Query 的边权重设为 0（不泄露信息）
+        3. context 边可见（用于 GNN 消息传递）
+        4. new Query 边需要预测
+        
+        Args:
+            new_query_embeddings: 新 Query embedding（需要预测）
+            context_query_emb: 上下文 Query embedding（默认使用训练数据）
+            context_perf: 上下文 performance 矩阵
+            new_perf: 新 Query 真实 performance（仅用于评估）
+        
+        Returns:
+            推理图数据
+        """
+        if context_query_emb is None:
+            context_query_emb = self.query_embedding_matrix
+        if context_perf is None:
+            context_perf = self.performance_matrix
+        
+        num_context = len(context_query_emb)
+        num_new = len(new_query_embeddings)
+        num_total = num_context + num_new
+        
+        # 1. 合并 Query embeddings
+        all_query_emb = np.vstack([context_query_emb, new_query_embeddings])
+        
+        # 2. 合并 performance（new Query 的边权重设为 0）
+        new_fake_perf = np.zeros((num_new, self.num_llms))
+        all_perf = np.vstack([context_perf, new_fake_perf])
+        performance_flat = all_perf.flatten()
+        
+        # 构建边索引
+        edge_org = [q for q in range(num_total) for _ in range(self.num_llms)]
+        edge_des = list(range(self.num_llms)) * num_total
+        
+        # 标签（用于评估）
+        if new_perf is not None:
+            all_perf_for_label = np.vstack([context_perf, new_perf])
+        else:
+            all_perf_for_label = all_perf
+        best_llm_indices = np.argmax(all_perf_for_label, axis=1)
+        labels = np.eye(self.num_llms)[best_llm_indices].flatten()
+        
+        # 转换为 tensor
+        query_tensor = torch.from_numpy(all_query_emb).float()
+        llm_tensor = torch.from_numpy(self.llm_embedding_matrix).float()
+        edge_weights = torch.from_numpy(performance_flat).float()
+        labels_tensor = torch.from_numpy(labels).float()
+        
+        num_edges = num_total * self.num_llms
+        num_context_edges = num_context * self.num_llms
+        
+        # 3. 创建掩码
+        train_mask = torch.zeros(num_edges, dtype=torch.float)
+        train_mask[:num_context_edges] = 1  # context 边用于 GNN
+        
+        test_mask = torch.zeros(num_edges, dtype=torch.float)
+        test_mask[num_context_edges:] = 1  # new Query 边需要预测
+        
+        val_mask = torch.zeros(num_edges, dtype=torch.float)
+        
+        data = self.form_data.build(
+            query_features=query_tensor,
+            llm_features=llm_tensor,
+            edge_org=edge_org,
+            edge_des=edge_des,
+            edge_weights=edge_weights,
+            labels=labels_tensor,
+            edge_mask=test_mask,
+            train_mask=train_mask,
+            val_mask=val_mask,
+            test_mask=test_mask
+        )
+        
+        # 保存额外信息
+        data.num_context_queries = num_context
+        data.num_new_queries = num_new
+        if new_perf is not None:
+            data.new_query_perf = torch.from_numpy(new_perf).float()
+        
+        return data
 
 
 def load_dataset(config: Dict) -> GraphRouterDataset:
