@@ -112,10 +112,13 @@ def compute_llm_representations(
     """
     model.eval()
     
+    # 获取模型所在设备
+    device = next(model.parameters()).device
+    
     with torch.no_grad():
-        # 获取 embedding
-        query_emb = torch.from_numpy(dataset.query_embedding_matrix).float()
-        llm_emb = torch.from_numpy(dataset.llm_embedding_matrix).float()
+        # 获取 embedding 并移到正确设备
+        query_emb = torch.from_numpy(dataset.query_embedding_matrix).float().to(device)
+        llm_emb = torch.from_numpy(dataset.llm_embedding_matrix).float().to(device)
         
         # 特征对齐
         # aligned shape: [num_queries + num_llms, hidden_dim]

@@ -262,8 +262,8 @@ class GNNPredictor:
             weight_decay=self.config.get('weight_decay', 1e-4)
         )
         
-        # 损失函数
-        self.criterion = nn.BCELoss()
+        # 损失函数：使用 MarginRankingLoss 学习排序
+        self.criterion = nn.MarginRankingLoss(margin=0.1)
         
         # LLM 数量
         self.num_llms = self.config.get('num_llms', 10)
@@ -324,8 +324,20 @@ class GNNPredictor:
                     visible_mask=visible_mask
                 )
                 
-                labels = train_data.labels[edge_mask]
-                loss = self.criterion(scores, labels.reshape(-1))
+                # Reshape scores 和 performance 为 [num_queries, num_llms]
+                scores_reshaped = scores.reshape(-1, self.num_llms)
+                perf = train_data.edge_attr[edge_mask].reshape(-1, self.num_llms)
+                
+                # ListNet 风格损失：使用 KL 散度让预测分布接近真实分布
+                # 真实分布：基于 performance 的 softmax
+                # 预测分布：基于 score 的 softmax
+                temperature = 1.0
+                target_dist = F.softmax(perf / temperature, dim=1)
+                pred_dist = F.log_softmax(scores_reshaped / temperature, dim=1)
+                
+                # KL 散度损失
+                loss = F.kl_div(pred_dist, target_dist, reduction='batchmean')
+                
                 total_loss += loss.item()
                 loss.backward()
             
