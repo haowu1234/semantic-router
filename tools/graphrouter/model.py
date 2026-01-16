@@ -1,0 +1,408 @@
+"""
+GraphRouter GNN 模型定义
+
+基于 PyTorch Geometric 实现的图神经网络模型，用于学习 Query-LLM 关系。
+
+架构:
+1. FeatureAlign: 对齐 Query/LLM 特征到相同隐空间
+2. EncoderDecoderNet: 使用 GeneralConv 进行两层图卷积
+3. GNNPredictor: 封装训练、验证和预测逻辑
+"""
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch_geometric.nn import GeneralConv
+from torch_geometric.data import Data
+from torch.optim import AdamW
+from typing import Dict, Optional, Tuple
+
+
+class FeatureAlign(nn.Module):
+    """
+    特征对齐层：将 Query 和 LLM 特征映射到相同的隐空间维度。
+    
+    Args:
+        query_dim: Query embedding 维度
+        llm_dim: LLM embedding 维度
+        hidden_dim: 隐空间维度
+    """
+    
+    def __init__(self, query_dim: int, llm_dim: int, hidden_dim: int):
+        super().__init__()
+        self.query_transform = nn.Linear(query_dim, hidden_dim)
+        self.llm_transform = nn.Linear(llm_dim, hidden_dim)
+    
+    def forward(
+        self, 
+        query_features: torch.Tensor, 
+        llm_features: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        前向传播
+        
+        Args:
+            query_features: [num_queries, query_dim]
+            llm_features: [num_llms, llm_dim]
+        
+        Returns:
+            aligned_features: [num_queries + num_llms, hidden_dim]
+        """
+        aligned_query = self.query_transform(query_features)
+        aligned_llm = self.llm_transform(llm_features)
+        return torch.cat([aligned_query, aligned_llm], dim=0)
+
+
+class EncoderDecoderNet(nn.Module):
+    """
+    编码-解码网络：使用 GNN 进行消息传递和边预测。
+    
+    架构:
+    1. FeatureAlign: 特征对齐
+    2. GeneralConv x 2: 两层图卷积
+    3. Edge Prediction: 预测 Query-LLM 边的分数
+    
+    Args:
+        query_dim: Query embedding 维度
+        llm_dim: LLM embedding 维度
+        hidden_dim: 隐藏层维度
+        edge_dim: 边特征维度 (默认为 1，仅使用 performance)
+    """
+    
+    def __init__(
+        self, 
+        query_dim: int, 
+        llm_dim: int, 
+        hidden_dim: int = 64,
+        edge_dim: int = 1
+    ):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.edge_dim = edge_dim
+        
+        # 特征对齐层
+        self.align = FeatureAlign(query_dim, llm_dim, hidden_dim)
+        
+        # GNN 卷积层
+        self.conv1 = GeneralConv(
+            in_channels=hidden_dim,
+            out_channels=hidden_dim,
+            in_edge_channels=edge_dim
+        )
+        self.conv2 = GeneralConv(
+            in_channels=hidden_dim,
+            out_channels=hidden_dim,
+            in_edge_channels=edge_dim
+        )
+        
+        # BatchNorm
+        self.bn1 = nn.BatchNorm1d(hidden_dim)
+        self.bn2 = nn.BatchNorm1d(hidden_dim)
+        
+        # 边权重变换
+        self.edge_mlp = nn.Linear(edge_dim, edge_dim)
+    
+    def forward(
+        self,
+        query_features: torch.Tensor,
+        llm_features: torch.Tensor,
+        edge_index: torch.Tensor,
+        edge_attr: torch.Tensor,
+        edge_mask: torch.Tensor,
+        visible_mask: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        前向传播
+        
+        Args:
+            query_features: [num_queries, query_dim] Query 特征
+            llm_features: [num_llms, llm_dim] LLM 特征
+            edge_index: [2, num_edges] 边索引
+            edge_attr: [num_edges, edge_dim] 边权重 (performance)
+            edge_mask: [num_edges] 需要预测的边 (bool)
+            visible_mask: [num_edges] 可见的边 (bool)
+        
+        Returns:
+            scores: [num_masked_edges] 预测的边分数
+        """
+        # 获取可见边的索引和权重
+        visible_edge_index = edge_index[:, visible_mask]
+        visible_edge_attr = edge_attr[visible_mask]
+        
+        # 获取需要预测的边索引
+        predict_edge_index = edge_index[:, edge_mask]
+        
+        # 边权重变换
+        visible_edge_attr = F.leaky_relu(
+            self.edge_mlp(visible_edge_attr.reshape(-1, self.edge_dim))
+        )
+        
+        # 特征对齐
+        x0 = self.align(query_features, llm_features)
+        
+        # GNN 消息传递
+        x1 = F.leaky_relu(self.bn1(
+            self.conv1(x0, visible_edge_index, edge_attr=visible_edge_attr)
+        ))
+        x2 = self.bn2(
+            self.conv2(x1, visible_edge_index, edge_attr=visible_edge_attr)
+        )
+        
+        # 边预测：源节点初始特征 * 目标节点 GNN 特征
+        src_features = x0[predict_edge_index[0]]
+        dst_features = x2[predict_edge_index[1]]
+        scores = torch.sigmoid((src_features * dst_features).mean(dim=-1))
+        
+        return scores
+
+
+class FormData:
+    """
+    数据格式化类：将原始数据转换为 PyG Data 对象。
+    
+    Args:
+        device: 计算设备 (cpu/cuda)
+    """
+    
+    def __init__(self, device: str = "cpu"):
+        self.device = device
+    
+    def build(
+        self,
+        query_features: torch.Tensor,
+        llm_features: torch.Tensor,
+        edge_org: list,
+        edge_des: list,
+        edge_weights: torch.Tensor,
+        labels: torch.Tensor,
+        edge_mask: torch.Tensor,
+        train_mask: torch.Tensor,
+        val_mask: torch.Tensor,
+        test_mask: torch.Tensor
+    ) -> Data:
+        """
+        构建 PyG Data 对象
+        
+        Args:
+            query_features: [num_queries, query_dim]
+            llm_features: [num_llms, llm_dim]
+            edge_org: 源节点索引列表 (query 节点)
+            edge_des: 目标节点索引列表 (llm 节点偏移后)
+            edge_weights: [num_edges] 边权重
+            labels: [num_edges] 标签 (最佳 LLM 为 1)
+            edge_mask: [num_edges] 用于训练/预测的掩码
+            train_mask: [num_edges] 训练边掩码
+            val_mask: [num_edges] 验证边掩码
+            test_mask: [num_edges] 测试边掩码
+        """
+        query_features = query_features.to(self.device)
+        llm_features = llm_features.to(self.device)
+        
+        # 构建边索引：LLM 节点从 num_queries 开始编号
+        num_queries = query_features.shape[0]
+        des_node = [i + num_queries for i in edge_des]
+        edge_index = torch.tensor([edge_org, des_node], dtype=torch.long).to(self.device)
+        
+        # 边权重
+        edge_attr = edge_weights.reshape(-1, 1).float().to(self.device)
+        
+        return Data(
+            query_features=query_features,
+            llm_features=llm_features,
+            edge_index=edge_index,
+            edge_attr=edge_attr,
+            labels=labels.float().to(self.device),
+            edge_mask=edge_mask.to(self.device),
+            train_mask=train_mask.to(self.device),
+            val_mask=val_mask.to(self.device),
+            test_mask=test_mask.to(self.device),
+            num_queries=num_queries,
+            num_llms=llm_features.shape[0]
+        )
+
+
+class GNNPredictor:
+    """
+    GNN 预测器：封装模型训练、验证和预测逻辑。
+    
+    Args:
+        query_dim: Query embedding 维度
+        llm_dim: LLM embedding 维度
+        hidden_dim: 隐藏层维度
+        config: 训练配置字典
+        device: 计算设备
+    """
+    
+    def __init__(
+        self,
+        query_dim: int,
+        llm_dim: int,
+        hidden_dim: int = 64,
+        config: Optional[Dict] = None,
+        device: str = None
+    ):
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.config = config or {}
+        self.hidden_dim = hidden_dim
+        self.query_dim = query_dim
+        self.llm_dim = llm_dim
+        
+        # 初始化模型
+        self.model = EncoderDecoderNet(
+            query_dim=query_dim,
+            llm_dim=llm_dim,
+            hidden_dim=hidden_dim,
+            edge_dim=1
+        ).to(self.device)
+        
+        # 优化器
+        self.optimizer = AdamW(
+            self.model.parameters(),
+            lr=self.config.get('learning_rate', 0.001),
+            weight_decay=self.config.get('weight_decay', 1e-4)
+        )
+        
+        # 损失函数
+        self.criterion = nn.BCELoss()
+        
+        # LLM 数量
+        self.num_llms = self.config.get('num_llms', 10)
+    
+    def train_validate(
+        self,
+        train_data: Data,
+        val_data: Data,
+        save_path: Optional[str] = None
+    ) -> float:
+        """
+        训练和验证模型
+        
+        Args:
+            train_data: 训练数据 (PyG Data)
+            val_data: 验证数据 (PyG Data)
+            save_path: 模型保存路径
+        
+        Returns:
+            best_result: 最佳验证结果
+        """
+        best_result = -1.0
+        best_state = None
+        
+        train_epochs = self.config.get('train_epoch', 100)
+        batch_size = self.config.get('batch_size', 4)
+        mask_rate = self.config.get('train_mask_rate', 0.3)
+        
+        for epoch in range(train_epochs):
+            # 训练阶段
+            self.model.train()
+            total_loss = 0.0
+            
+            for _ in range(batch_size):
+                # 随机掩码部分训练边
+                mask = train_data.train_mask.clone().bool()
+                random_mask = torch.rand(mask.size(), device=self.device) < mask_rate
+                edge_mask = mask & random_mask
+                visible_mask = train_data.train_mask.bool() & ~edge_mask
+                
+                self.optimizer.zero_grad()
+                
+                scores = self.model(
+                    query_features=train_data.query_features,
+                    llm_features=train_data.llm_features,
+                    edge_index=train_data.edge_index,
+                    edge_attr=train_data.edge_attr,
+                    edge_mask=edge_mask,
+                    visible_mask=visible_mask
+                )
+                
+                labels = train_data.labels[edge_mask]
+                loss = self.criterion(scores, labels.reshape(-1))
+                total_loss += loss.item()
+                loss.backward()
+            
+            self.optimizer.step()
+            avg_loss = total_loss / batch_size
+            
+            # 验证阶段
+            self.model.eval()
+            val_result = self._validate(val_data, train_data.train_mask)
+            
+            # 保存最佳模型
+            if val_result > best_result:
+                best_result = val_result
+                best_state = {k: v.cpu().clone() for k, v in self.model.state_dict().items()}
+            
+            if epoch % 10 == 0:
+                print(f"Epoch {epoch}: train_loss={avg_loss:.4f}, val_result={val_result:.4f}")
+        
+        # 恢复最佳模型
+        if best_state:
+            self.model.load_state_dict(best_state)
+        
+        # 保存模型
+        if save_path:
+            torch.save(self.model.state_dict(), save_path)
+            print(f"Model saved to {save_path}")
+        
+        print(f"Training completed. Best validation result: {best_result:.4f}")
+        return best_result
+    
+    def _validate(self, val_data: Data, train_mask: torch.Tensor) -> float:
+        """验证模型"""
+        with torch.no_grad():
+            val_mask = val_data.val_mask.bool()
+            visible_mask = train_mask.bool()
+            
+            scores = self.model(
+                query_features=val_data.query_features,
+                llm_features=val_data.llm_features,
+                edge_index=val_data.edge_index,
+                edge_attr=val_data.edge_attr,
+                edge_mask=val_mask,
+                visible_mask=visible_mask
+            )
+            
+            # 计算验证指标：选择的模型的平均 performance
+            scores = scores.reshape(-1, self.num_llms)
+            val_perf = val_data.edge_attr[val_mask].reshape(-1, self.num_llms)
+            
+            # 选择得分最高的模型
+            selected_idx = scores.argmax(dim=1)
+            row_indices = torch.arange(len(selected_idx), device=self.device)
+            selected_perf = val_perf[row_indices, selected_idx]
+            
+            return selected_perf.mean().item()
+    
+    def predict(self, data: Data) -> torch.Tensor:
+        """
+        预测模式：返回每个 query 的最佳 LLM 索引
+        
+        Args:
+            data: 预测数据
+        
+        Returns:
+            max_idx: [num_queries] 最佳 LLM 索引
+        """
+        self.model.eval()
+        
+        with torch.no_grad():
+            test_mask = data.test_mask.bool()
+            visible_mask = (data.train_mask | data.val_mask).bool()
+            
+            scores = self.model(
+                query_features=data.query_features,
+                llm_features=data.llm_features,
+                edge_index=data.edge_index,
+                edge_attr=data.edge_attr,
+                edge_mask=test_mask,
+                visible_mask=visible_mask
+            )
+        
+        scores = scores.reshape(-1, self.num_llms)
+        return scores.argmax(dim=1)
+    
+    def load_model(self, path: str):
+        """加载模型权重"""
+        state_dict = torch.load(path, map_location=self.device)
+        self.model.load_state_dict(state_dict)
+        print(f"Model loaded from {path}")

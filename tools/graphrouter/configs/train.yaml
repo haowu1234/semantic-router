@@ -1,0 +1,39 @@
+# GraphRouter 训练配置 - 使用 data/ 目录下的数据
+# 
+# 数据概览:
+#   - 6194 unique queries
+#   - 9 LLMs (qwen2.5-7b, llama-3.1-8b, gemma-2-9b, etc.)
+#   - 113796 routing records
+#   - Performance range: 0.0 - 1.0, mean: 0.426
+
+# 数据路径
+data_path:
+  routing_data_train: 'data/routing_data.jsonl'
+  query_embedding_data: 'data/query_embeddings.pt'
+  llm_data: 'data/llm_candidates.json'
+
+# 模型保存路径
+model_path:
+  save_model_path: 'models/graphrouter.pt'
+  load_model_path: 'models/graphrouter.pt'
+
+# 超参数
+hparam:
+  # GNN 架构
+  hidden_dim: 64                # 隐藏层维度
+  
+  # 训练参数
+  learning_rate: 0.001          # 学习率
+  weight_decay: 0.0001          # L2 正则化
+  train_epoch: 100              # 训练轮数
+  batch_size: 4                 # 批大小
+  train_mask_rate: 0.3          # 边掩码率
+  
+  # 数据划分
+  val_split_ratio: 0.2          # 验证集比例
+  
+  # 推理参数
+  temperature: 1.0              # Softmax 温度
+  
+  # 可复现性
+  random_state: 42              # 随机种子

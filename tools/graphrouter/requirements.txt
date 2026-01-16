@@ -1,0 +1,20 @@
+# GraphRouter 训练工具依赖
+# 
+# 安装: pip install -r requirements.txt
+
+# PyTorch (根据 CUDA 版本选择)
+torch>=2.0.0
+
+# PyTorch Geometric
+torch-geometric>=2.3.0
+
+# 数据处理
+numpy>=1.24.0
+pandas>=2.0.0
+scikit-learn>=1.2.0
+
+# 配置
+pyyaml>=6.0
+
+# 可选: 用于评测
+# tqdm>=4.65.0

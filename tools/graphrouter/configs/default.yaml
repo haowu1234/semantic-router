@@ -1,0 +1,49 @@
+# GraphRouter 训练配置模板
+# 
+# 用法:
+#   python train.py --config configs/default.yaml --output model.json
+
+# 数据路径
+data_path:
+  # 路由训练数据 (JSONL 格式)
+  # 每行: {"query": "...", "model_name": "...", "performance": 0.92, "embedding_id": 0}
+  routing_data_train: 'data/routing_data.jsonl'
+  
+  # Query Embedding 张量 (.pt 或 .npy)
+  # Shape: [num_unique_queries, embedding_dim]
+  query_embedding_data: 'data/query_embeddings.pt'
+  
+  # LLM 配置 (JSON)
+  # {"model_name": {"model": "...", "embedding": [...], "cost_per_1k_tokens": 0.03}}
+  llm_data: 'data/llm_candidates.json'
+
+# 模型保存路径
+model_path:
+  # 训练好的 PyTorch checkpoint
+  save_model_path: 'models/graphrouter.pt'
+  # 推理时加载的模型
+  load_model_path: 'models/graphrouter.pt'
+
+# 超参数
+hparam:
+  # GNN 架构
+  hidden_dim: 64                # 隐藏层维度
+  
+  # 训练参数
+  learning_rate: 0.001          # 学习率
+  weight_decay: 0.0001          # L2 正则化
+  train_epoch: 100              # 训练轮数
+  batch_size: 4                 # 每次梯度更新的采样数
+  train_mask_rate: 0.3          # 边掩码率
+  
+  # 数据划分
+  val_split_ratio: 0.2          # 验证集比例
+  
+  # 推理参数
+  temperature: 1.0              # Softmax 温度
+                                # - 1.0: 标准 softmax
+                                # - <1.0: 更确定性（选择更集中）
+                                # - >1.0: 更随机（选择更分散）
+  
+  # 可复现性
+  random_state: 42              # 随机种子

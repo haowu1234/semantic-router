@@ -169,3 +169,5 @@ FactCHD_dataset/
 *.safetensors
 
 .vllm-sr/
+# GraphRouter training data (too large for git)
+tools/graphrouter/data/
