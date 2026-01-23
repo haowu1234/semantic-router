@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/vllm-project/semantic-router/dashboard/backend/config"
 )
 
 // ========================
@@ -273,6 +276,349 @@ type WebSearchResponse struct {
 	Results []SearchResult  `json:"results"`
 	Error   string          `json:"error,omitempty"`
 	Code    SearchErrorCode `json:"code,omitempty"`
+	Backend string          `json:"backend,omitempty"` // Which backend was used
+}
+
+// ========================
+// Search Backend Interface
+// ========================
+
+// SearchBackend defines the interface for different search providers
+type SearchBackend interface {
+	Search(query string, numResults int) ([]SearchResult, error)
+	Name() string
+}
+
+// SearchManager manages multiple search backends with fallback support
+type SearchManager struct {
+	backends []SearchBackend
+	mu       sync.RWMutex
+}
+
+var globalSearchManager *SearchManager
+var searchManagerOnce sync.Once
+
+// InitSearchManager initializes the search manager with configured backends
+func InitSearchManager(cfg *config.Config) {
+	searchManagerOnce.Do(func() {
+		globalSearchManager = &SearchManager{
+			backends: buildBackends(cfg),
+		}
+		log.Printf("Search backends initialized: %v", getBackendNames(globalSearchManager.backends))
+	})
+}
+
+func buildBackends(cfg *config.Config) []SearchBackend {
+	var backends []SearchBackend
+
+	backend := strings.ToLower(cfg.WebSearchBackend)
+	apiKey := cfg.WebSearchAPIKey
+
+	switch backend {
+	case "tavily":
+		if apiKey != "" {
+			backends = append(backends, &TavilyBackend{apiKey: apiKey})
+			log.Printf("Web search backend: Tavily (API key configured)")
+		} else {
+			log.Printf("Error: Tavily backend selected but no API key provided")
+		}
+	case "serper":
+		if apiKey != "" {
+			backends = append(backends, &SerperBackend{apiKey: apiKey})
+			log.Printf("Web search backend: Serper (API key configured)")
+		} else {
+			log.Printf("Error: Serper backend selected but no API key provided")
+		}
+	case "brave":
+		if apiKey != "" {
+			backends = append(backends, &BraveBackend{apiKey: apiKey})
+			log.Printf("Web search backend: Brave (API key configured)")
+		} else {
+			log.Printf("Error: Brave backend selected but no API key provided")
+		}
+	case "duckduckgo", "":
+		backends = append(backends, &DuckDuckGoBackend{})
+		log.Printf("Web search backend: DuckDuckGo (free, rate-limited)")
+	default:
+		log.Printf("Error: Unknown backend '%s', no search backend configured", backend)
+	}
+
+	return backends
+}
+
+func getBackendNames(backends []SearchBackend) []string {
+	names := make([]string, len(backends))
+	for i, b := range backends {
+		names[i] = b.Name()
+	}
+	return names
+}
+
+// Search performs a search using configured backend (no fallback)
+func (m *SearchManager) Search(query string, numResults int) ([]SearchResult, string, error) {
+	m.mu.RLock()
+	backends := m.backends
+	m.mu.RUnlock()
+
+	if len(backends) == 0 {
+		return nil, "", fmt.Errorf("no search backend configured")
+	}
+
+	// Use the configured backend (first one, no fallback)
+	backend := backends[0]
+	results, err := backend.Search(query, numResults)
+	if err != nil {
+		return nil, backend.Name(), err
+	}
+	return results, backend.Name(), nil
+}
+
+// ========================
+// Tavily Backend
+// ========================
+
+type TavilyBackend struct {
+	apiKey string
+}
+
+func (t *TavilyBackend) Name() string { return "tavily" }
+
+type tavilyRequest struct {
+	Query      string `json:"query"`
+	MaxResults int    `json:"max_results"`
+}
+
+type tavilyResponse struct {
+	Results []struct {
+		Title   string `json:"title"`
+		URL     string `json:"url"`
+		Content string `json:"content"`
+	} `json:"results"`
+}
+
+func (t *TavilyBackend) Search(query string, numResults int) ([]SearchResult, error) {
+	if numResults <= 0 {
+		numResults = defaultNumResults
+	}
+	if numResults > maxResultsLimit {
+		numResults = maxResultsLimit
+	}
+
+	reqBody := tavilyRequest{
+		Query:      query,
+		MaxResults: numResults,
+	}
+
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", "https://api.tavily.com/search", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+t.apiKey)
+
+	client := getHTTPClient()
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API error: status %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var tavilyResp tavilyResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tavilyResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	results := make([]SearchResult, 0, len(tavilyResp.Results))
+	for _, r := range tavilyResp.Results {
+		if !isValidURL(r.URL) {
+			continue
+		}
+		results = append(results, SearchResult{
+			Title:   r.Title,
+			URL:     r.URL,
+			Snippet: r.Content,
+			Domain:  extractDomain(r.URL),
+		})
+	}
+
+	return results, nil
+}
+
+// ========================
+// Serper Backend
+// ========================
+
+type SerperBackend struct {
+	apiKey string
+}
+
+func (s *SerperBackend) Name() string { return "serper" }
+
+type serperRequest struct {
+	Q   string `json:"q"`
+	Num int    `json:"num"`
+}
+
+type serperResponse struct {
+	Organic []struct {
+		Title   string `json:"title"`
+		Link    string `json:"link"`
+		Snippet string `json:"snippet"`
+	} `json:"organic"`
+}
+
+func (s *SerperBackend) Search(query string, numResults int) ([]SearchResult, error) {
+	if numResults <= 0 {
+		numResults = defaultNumResults
+	}
+	if numResults > maxResultsLimit {
+		numResults = maxResultsLimit
+	}
+
+	reqBody := serperRequest{
+		Q:   query,
+		Num: numResults,
+	}
+
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", "https://google.serper.dev/search", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-KEY", s.apiKey)
+
+	client := getHTTPClient()
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API error: status %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var serperResp serperResponse
+	if err := json.NewDecoder(resp.Body).Decode(&serperResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	results := make([]SearchResult, 0, len(serperResp.Organic))
+	for _, r := range serperResp.Organic {
+		if !isValidURL(r.Link) {
+			continue
+		}
+		results = append(results, SearchResult{
+			Title:   r.Title,
+			URL:     r.Link,
+			Snippet: r.Snippet,
+			Domain:  extractDomain(r.Link),
+		})
+	}
+
+	return results, nil
+}
+
+// ========================
+// Brave Backend
+// ========================
+
+type BraveBackend struct {
+	apiKey string
+}
+
+func (b *BraveBackend) Name() string { return "brave" }
+
+type braveResponse struct {
+	Web struct {
+		Results []struct {
+			Title       string `json:"title"`
+			URL         string `json:"url"`
+			Description string `json:"description"`
+		} `json:"results"`
+	} `json:"web"`
+}
+
+func (b *BraveBackend) Search(query string, numResults int) ([]SearchResult, error) {
+	if numResults <= 0 {
+		numResults = defaultNumResults
+	}
+	if numResults > maxResultsLimit {
+		numResults = maxResultsLimit
+	}
+
+	searchURL := fmt.Sprintf("https://api.search.brave.com/res/v1/web/search?q=%s&count=%d",
+		url.QueryEscape(query), numResults)
+
+	req, err := http.NewRequest("GET", searchURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Subscription-Token", b.apiKey)
+
+	client := getHTTPClient()
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API error: status %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var braveResp braveResponse
+	if err := json.NewDecoder(resp.Body).Decode(&braveResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	results := make([]SearchResult, 0, len(braveResp.Web.Results))
+	for _, r := range braveResp.Web.Results {
+		if !isValidURL(r.URL) {
+			continue
+		}
+		results = append(results, SearchResult{
+			Title:   r.Title,
+			URL:     r.URL,
+			Snippet: r.Description,
+			Domain:  extractDomain(r.URL),
+		})
+	}
+
+	return results, nil
+}
+
+// ========================
+// DuckDuckGo Backend (fallback)
+// ========================
+
+type DuckDuckGoBackend struct{}
+
+func (d *DuckDuckGoBackend) Name() string { return "duckduckgo" }
+
+func (d *DuckDuckGoBackend) Search(query string, numResults int) ([]SearchResult, error) {
+	return searchDuckDuckGo(query, numResults)
 }
 
 // ========================
@@ -630,14 +976,8 @@ func WebSearchHandler() http.HandlerFunc {
 			return
 		}
 
-		// Rate limiting check (per-IP + global)
+		// Rate limiting check (per-IP + global) - only for DuckDuckGo fallback
 		clientIP := getClientIP(r)
-		allowed, errCode := globalRateLimiter.isAllowed(clientIP)
-		if !allowed {
-			log.Printf("Rate limit exceeded for IP: %s (code: %s)", clientIP, errCode)
-			sendErrorResponse(w, "", errCode, http.StatusTooManyRequests)
-			return
-		}
 
 		// Parse request body
 		var req WebSearchRequest
@@ -652,11 +992,65 @@ func WebSearchHandler() http.HandlerFunc {
 			sendErrorResponse(w, req.Query, ErrCodeEmptyQuery, http.StatusBadRequest)
 			return
 		}
+		if len(req.Query) > maxQueryLength {
+			sendErrorResponse(w, req.Query, ErrCodeQueryTooLong, http.StatusBadRequest)
+			return
+		}
 
 		log.Printf("Web search request: query=%q, num_results=%d, ip=%s", req.Query, req.NumResults, clientIP)
 
-		// Perform search with retry
-		results, err := searchDuckDuckGo(req.Query, req.NumResults)
+		// Check if search manager is initialized
+		if globalSearchManager == nil {
+			log.Printf("Search manager not initialized, using DuckDuckGo directly")
+			// Rate limit for DuckDuckGo
+			allowed, errCode := globalRateLimiter.isAllowed(clientIP)
+			if !allowed {
+				log.Printf("Rate limit exceeded for IP: %s (code: %s)", clientIP, errCode)
+				sendErrorResponse(w, "", errCode, http.StatusTooManyRequests)
+				return
+			}
+			results, err := searchDuckDuckGo(req.Query, req.NumResults)
+			if err != nil {
+				log.Printf("Search error: %v", err)
+				sendErrorResponse(w, req.Query, ErrCodeSearchFailed, http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(WebSearchResponse{
+				Query:   req.Query,
+				Results: results,
+				Backend: "duckduckgo",
+			})
+			return
+		}
+
+		// Check if no backend configured
+		globalSearchManager.mu.RLock()
+		numBackends := len(globalSearchManager.backends)
+		globalSearchManager.mu.RUnlock()
+
+		if numBackends == 0 {
+			log.Printf("No search backend configured")
+			sendErrorResponse(w, req.Query, ErrCodeSearchFailed, http.StatusServiceUnavailable)
+			return
+		}
+
+		// Apply rate limit for DuckDuckGo backend
+		globalSearchManager.mu.RLock()
+		backendName := globalSearchManager.backends[0].Name()
+		globalSearchManager.mu.RUnlock()
+
+		if backendName == "duckduckgo" {
+			allowed, errCode := globalRateLimiter.isAllowed(clientIP)
+			if !allowed {
+				log.Printf("Rate limit exceeded for IP: %s (code: %s)", clientIP, errCode)
+				sendErrorResponse(w, "", errCode, http.StatusTooManyRequests)
+				return
+			}
+		}
+
+		// Use search manager
+		results, backend, err := globalSearchManager.Search(req.Query, req.NumResults)
 		if err != nil {
 			log.Printf("Search error: %v", err)
 
@@ -677,13 +1071,14 @@ func WebSearchHandler() http.HandlerFunc {
 			return
 		}
 
-		log.Printf("Web search completed: query=%q, results=%d", req.Query, len(results))
+		log.Printf("Web search completed: query=%q, results=%d, backend=%s", req.Query, len(results), backend)
 
 		// Send response
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(WebSearchResponse{
 			Query:   req.Query,
 			Results: results,
+			Backend: backend,
 		})
 	}
 }

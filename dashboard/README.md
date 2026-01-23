@@ -140,6 +140,44 @@ Optional:
 - `DASHBOARD_STATIC_DIR` — override static assets directory (defaults to `../frontend`).
   Note: The backend already adjusts frame-busting headers (X-Frame-Options/CSP) to allow embedding from the dashboard origin; no extra env flag is required.
 
+### Web Search Configuration
+
+The Playground's web search feature supports multiple backends. Configure via environment variables:
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `WEBSEARCH_BACKEND` | Search backend to use | `tavily`, `serper`, `brave`, `duckduckgo` |
+| `WEBSEARCH_API_KEY` | API key for the selected backend | `tvly-xxxxxxxx` |
+
+**Supported backends:**
+
+| Backend | API Key Required | Rate Limit | Notes |
+|---------|------------------|------------|-------|
+| `tavily` | Yes | Per plan | Recommended for production. [Get API key](https://tavily.com) |
+| `serper` | Yes | Per plan | Google search results. [Get API key](https://serper.dev) |
+| `brave` | Yes | Per plan | Privacy-focused. [Get API key](https://brave.com/search/api) |
+| `duckduckgo` | No | 5/min per IP | Default. Free but rate-limited for public use |
+
+**Usage with `vllm-sr serve`:**
+
+```bash
+# Use Tavily (recommended for production)
+export WEBSEARCH_BACKEND=tavily
+export WEBSEARCH_API_KEY=tvly-xxxxxxxx
+vllm-sr serve --image ghcr.io/vllm-project/semantic-router/vllm-sr
+
+# Use DuckDuckGo (default, no API key needed)
+vllm-sr serve --image ghcr.io/vllm-project/semantic-router/vllm-sr
+```
+
+**Local development:**
+
+```bash
+export WEBSEARCH_BACKEND=tavily
+export WEBSEARCH_API_KEY=tvly-xxxxxxxx
+go run main.go -port=8700 ...
+```
+
 Recommended upstream settings for embedding:
 
 - Grafana: set `GF_SECURITY_ALLOW_EMBEDDING=true` and prefer `access: proxy` datasource (already configured)

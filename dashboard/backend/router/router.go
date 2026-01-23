@@ -193,6 +193,7 @@ func Setup(cfg *config.Config) *http.ServeMux {
 	log.Printf("Tools DB API endpoint registered: /api/tools-db")
 
 	// Web Search endpoint for Playground tool execution
+	handlers.InitSearchManager(cfg)
 	mux.HandleFunc("/api/tools/web-search", handlers.WebSearchHandler())
 	log.Printf("Web Search API endpoint registered: /api/tools/web-search")
 

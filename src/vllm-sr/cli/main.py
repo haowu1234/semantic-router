@@ -163,6 +163,16 @@ def serve(config, image, image_pull_policy, readonly, platform):
                 env_vars[var] = os.environ[var]
                 log.info(f"Passing environment variable: {var}=***")
 
+        # Web search configuration
+        websearch_vars = ["WEBSEARCH_BACKEND", "WEBSEARCH_API_KEY"]
+        for var in websearch_vars:
+            if var in os.environ:
+                env_vars[var] = os.environ[var]
+                if "KEY" in var:
+                    log.info(f"Passing environment variable: {var}=***")
+                else:
+                    log.info(f"Passing environment variable: {var}={os.environ[var]}")
+
         # Dashboard read-only mode
         if readonly:
             env_vars["DASHBOARD_READONLY"] = "true"

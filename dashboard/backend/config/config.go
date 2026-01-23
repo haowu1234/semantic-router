@@ -27,6 +27,12 @@ type Config struct {
 
 	// Platform branding (e.g., "amd" for AMD GPU deployments)
 	Platform string
+
+	// Web Search configuration
+	// Supported backends: tavily, serper, brave, duckduckgo (default)
+	// No fallback: uses only the configured backend
+	WebSearchBackend string
+	WebSearchAPIKey  string
 }
 
 // env returns the env var or default
@@ -60,6 +66,10 @@ func LoadConfig() (*Config, error) {
 	// Platform branding
 	platform := flag.String("platform", env("DASHBOARD_PLATFORM", ""), "platform branding (e.g., 'amd' for AMD GPU deployments)")
 
+	// Web Search configuration
+	webSearchBackend := flag.String("websearch_backend", env("WEBSEARCH_BACKEND", "duckduckgo"), "web search backend (tavily, serper, brave, duckduckgo)")
+	webSearchAPIKey := flag.String("websearch_apikey", env("WEBSEARCH_API_KEY", ""), "API key for web search backend")
+
 	flag.Parse()
 
 	cfg.Port = *port
@@ -73,6 +83,8 @@ func LoadConfig() (*Config, error) {
 	cfg.EnvoyURL = *envoyURL
 	cfg.ReadonlyMode = *readonlyMode
 	cfg.Platform = *platform
+	cfg.WebSearchBackend = *webSearchBackend
+	cfg.WebSearchAPIKey = *webSearchAPIKey
 
 	// Resolve config file path to absolute path
 	absConfigPath, err := filepath.Abs(cfg.ConfigFile)
