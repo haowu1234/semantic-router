@@ -1,0 +1,446 @@
+/**
+ * MCP Configuration Panel Styles
+ */
+
+.panel {
+  background: var(--bg-secondary, #1e1e2e);
+  border: 1px solid var(--border-color, #313244);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  max-height: 600px;
+  width: 100%;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-color, #313244);
+}
+
+.header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary, #cdd6f4);
+}
+
+.headerActions {
+  display: flex;
+  gap: 8px;
+}
+
+.refreshBtn,
+.closeBtn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary, #a6adc8);
+  cursor: pointer;
+  font-size: 18px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.refreshBtn:hover,
+.closeBtn:hover {
+  background: var(--bg-hover, #313244);
+  color: var(--text-primary, #cdd6f4);
+}
+
+.loading,
+.empty {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--text-secondary, #a6adc8);
+}
+
+.error {
+  padding: 12px 20px;
+  background: rgba(243, 139, 168, 0.1);
+  color: #f38ba8;
+  border-bottom: 1px solid var(--border-color, #313244);
+}
+
+.serverList {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.serverCard {
+  background: var(--bg-tertiary, #181825);
+  border: 1px solid var(--border-color, #313244);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 8px;
+  transition: border-color 0.2s;
+}
+
+.serverCard:hover {
+  border-color: var(--accent-color, #89b4fa);
+}
+
+.serverHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.serverInfo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.statusDot {
+  font-size: 10px;
+}
+
+.statusDot[data-status="connected"] {
+  color: #a6e3a1;
+}
+
+.statusDot[data-status="connecting"] {
+  color: #f9e2af;
+  animation: pulse 1s infinite;
+}
+
+.statusDot[data-status="error"] {
+  color: #f38ba8;
+}
+
+.statusDot[data-status="disconnected"] {
+  color: var(--text-secondary, #a6adc8);
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.serverName {
+  font-weight: 500;
+  color: var(--text-primary, #cdd6f4);
+}
+
+.transportBadge {
+  font-size: 11px;
+  padding: 2px 6px;
+  background: var(--bg-secondary, #1e1e2e);
+  border: 1px solid var(--border-color, #313244);
+  border-radius: 4px;
+  color: var(--text-secondary, #a6adc8);
+}
+
+.serverActions {
+  display: flex;
+  gap: 4px;
+}
+
+.actionBtn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary, #a6adc8);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 14px;
+  transition: all 0.2s;
+}
+
+.actionBtn:hover:not(:disabled) {
+  background: var(--bg-hover, #313244);
+  color: var(--text-primary, #cdd6f4);
+}
+
+.actionBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.serverDescription {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text-secondary, #a6adc8);
+}
+
+.toolsList {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.toolsLabel {
+  font-size: 12px;
+  color: var(--text-secondary, #a6adc8);
+}
+
+.toolBadge {
+  font-size: 11px;
+  padding: 2px 8px;
+  background: rgba(137, 180, 250, 0.1);
+  border: 1px solid rgba(137, 180, 250, 0.3);
+  border-radius: 4px;
+  color: #89b4fa;
+}
+
+.moreTools {
+  font-size: 11px;
+  color: var(--text-secondary, #a6adc8);
+}
+
+.serverError {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #f38ba8;
+  padding: 6px 10px;
+  background: rgba(243, 139, 168, 0.1);
+  border-radius: 4px;
+}
+
+.footer {
+  padding: 12px 20px;
+  border-top: 1px solid var(--border-color, #313244);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.addBtn {
+  background: var(--accent-color, #89b4fa);
+  color: var(--bg-primary, #1e1e2e);
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.addBtn:hover {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+.summary {
+  font-size: 12px;
+  color: var(--text-secondary, #a6adc8);
+}
+
+/* Dialog Styles */
+.dialogOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
+}
+
+.dialog {
+  background: var(--bg-secondary, #1e1e2e);
+  border: 1px solid var(--border-color, #313244);
+  border-radius: 12px;
+  width: 90%;
+  max-width: 500px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+}
+
+.dialogHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-color, #313244);
+}
+
+.dialogHeader h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary, #cdd6f4);
+}
+
+.dialogContent {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.formGroup {
+  margin-bottom: 16px;
+}
+
+.formGroup label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary, #cdd6f4);
+}
+
+.formGroup input[type="text"],
+.formGroup input[type="number"],
+.formGroup textarea {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--bg-tertiary, #181825);
+  border: 1px solid var(--border-color, #313244);
+  border-radius: 6px;
+  color: var(--text-primary, #cdd6f4);
+  font-size: 14px;
+  transition: border-color 0.2s;
+}
+
+.formGroup input:focus,
+.formGroup textarea:focus {
+  outline: none;
+  border-color: var(--accent-color, #89b4fa);
+}
+
+.formGroup textarea {
+  resize: vertical;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 13px;
+}
+
+.radioGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.radioLabel {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-tertiary, #181825);
+  border: 1px solid var(--border-color, #313244);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.radioLabel:hover {
+  border-color: var(--accent-color, #89b4fa);
+}
+
+.radioLabel input[type="radio"] {
+  margin-top: 2px;
+}
+
+.radioLabel span {
+  font-weight: 500;
+  color: var(--text-primary, #cdd6f4);
+}
+
+.radioLabel small {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary, #a6adc8);
+  margin-top: 2px;
+}
+
+.checkboxLabel {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.checkboxLabel input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+}
+
+.checkboxLabel span {
+  font-weight: normal;
+}
+
+.testSuccess {
+  padding: 12px;
+  background: rgba(166, 227, 161, 0.1);
+  border: 1px solid rgba(166, 227, 161, 0.3);
+  border-radius: 6px;
+  color: #a6e3a1;
+  font-size: 13px;
+}
+
+.testError {
+  padding: 12px;
+  background: rgba(243, 139, 168, 0.1);
+  border: 1px solid rgba(243, 139, 168, 0.3);
+  border-radius: 6px;
+  color: #f38ba8;
+  font-size: 13px;
+}
+
+.dialogFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border-color, #313244);
+}
+
+.cancelBtn,
+.testBtn,
+.saveBtn {
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.cancelBtn {
+  background: transparent;
+  border: 1px solid var(--border-color, #313244);
+  color: var(--text-secondary, #a6adc8);
+}
+
+.cancelBtn:hover {
+  background: var(--bg-hover, #313244);
+  color: var(--text-primary, #cdd6f4);
+}
+
+.testBtn {
+  background: transparent;
+  border: 1px solid var(--accent-color, #89b4fa);
+  color: #89b4fa;
+}
+
+.testBtn:hover:not(:disabled) {
+  background: rgba(137, 180, 250, 0.1);
+}
+
+.testBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.saveBtn {
+  background: var(--accent-color, #89b4fa);
+  border: none;
+  color: var(--bg-primary, #1e1e2e);
+}
+
+.saveBtn:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.saveBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

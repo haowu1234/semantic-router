@@ -279,6 +279,9 @@ func Setup(cfg *config.Config) *http.ServeMux {
 		log.Printf("Evaluation feature disabled")
 	}
 
+	// MCP endpoints (if enabled)
+	SetupMCP(mux, cfg)
+
 	// Envoy proxy for chat completions (if configured)
 	// Chat completions must go through Envoy's ext_proc pipeline
 	var envoyProxy *httputil.ReverseProxy

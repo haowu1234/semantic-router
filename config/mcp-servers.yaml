@@ -1,0 +1,51 @@
+# MCP (Model Context Protocol) Servers Configuration
+# 官方协议版本: 2025-06-18
+# 
+# 此文件配置 Dashboard 连接的 MCP 服务器
+# 支持两种官方传输协议:
+#   - stdio: 本地命令行工具 (filesystem, git, shell 等)
+#   - streamable-http: 远程 HTTP 服务 (支持 OAuth 2.1)
+
+version: "1.0"
+protocol_version: "2025-06-18"
+
+servers: []
+
+# 配置示例:
+#
+# servers:
+#   # Stdio 传输示例 - 本地文件系统访问
+#   - id: "fs-mcp-001"
+#     name: "Filesystem MCP"
+#     description: "本地文件系统访问工具"
+#     transport: "stdio"
+#     enabled: true
+#     connection:
+#       command: "npx"
+#       args:
+#         - "-y"
+#         - "@modelcontextprotocol/server-filesystem"
+#         - "/Users/workspace"
+#     options:
+#       autoReconnect: true
+#       timeout: 30000
+#
+#   # Streamable HTTP + OAuth 示例
+#   - id: "analytics-mcp-002"
+#     name: "AI Analytics"
+#     description: "AI 驱动的数据分析服务"
+#     transport: "streamable-http"
+#     enabled: true
+#     connection:
+#       url: "https://analytics.example.com/mcp"
+#     security:
+#       oauth:
+#         clientId: "dashboard-client"
+#         authorizationUrl: "https://auth.example.com/authorize"
+#         tokenUrl: "https://auth.example.com/token"
+#         scopes:
+#           - "read"
+#           - "analyze"
+#         usePKCE: true
+#     options:
+#       timeout: 60000
