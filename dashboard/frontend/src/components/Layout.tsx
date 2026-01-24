@@ -16,6 +16,7 @@ const Layout: React.FC<LayoutProps> = ({ children, configSection, onConfigSectio
   const navigate = useNavigate()
   const isConfigPage = location.pathname === '/config'
   const isSystemPage = isConfigPage && configSection === 'router-config'
+  const isMCPPage = isConfigPage && configSection === 'mcp'
   const isObservabilityPage = ['/status', '/logs', '/monitoring', '/tracing'].includes(location.pathname)
 
   // Close system dropdown when clicking outside
@@ -103,7 +104,7 @@ const Layout: React.FC<LayoutProps> = ({ children, configSection, onConfigSectio
             {/* System Dropdown (includes router-config and observability) */}
             <div className={styles.systemDropdown}>
               <button
-                className={`${styles.navLink} ${styles.dropdownTrigger} ${(isSystemPage || isObservabilityPage) ? styles.navLinkActive : ''}`}
+                className={`${styles.navLink} ${styles.dropdownTrigger} ${(isSystemPage || isMCPPage || isObservabilityPage) ? styles.navLinkActive : ''}`}
                 onClick={(e) => {
                   e.stopPropagation()
                   setSystemDropdownOpen(!systemDropdownOpen)
@@ -133,6 +134,16 @@ const Layout: React.FC<LayoutProps> = ({ children, configSection, onConfigSectio
                     }}
                   >
                     Router Config
+                  </button>
+                  <button
+                    className={`${styles.dropdownItem} ${isMCPPage ? styles.dropdownItemActive : ''}`}
+                    onClick={() => {
+                      onConfigSectionChange?.('mcp')
+                      navigate('/config')
+                      setSystemDropdownOpen(false)
+                    }}
+                  >
+                    MCP Servers
                   </button>
                   <div className={styles.dropdownDivider}></div>
                   <NavLink
