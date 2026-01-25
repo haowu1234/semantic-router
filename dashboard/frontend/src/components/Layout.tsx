@@ -143,7 +143,7 @@ const Layout: React.FC<LayoutProps> = ({ children, configSection, onConfigSectio
                       setSystemDropdownOpen(false)
                     }}
                   >
-                    MCP Servers
+                    MCP Servers & Tools
                   </button>
                   <div className={styles.dropdownDivider}></div>
                   <NavLink

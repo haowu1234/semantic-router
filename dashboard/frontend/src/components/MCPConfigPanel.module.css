@@ -8,7 +8,7 @@
   border-radius: 12px;
   display: flex;
   flex-direction: column;
-  max-height: 600px;
+  max-height: 800px;
   width: 100%;
 }
 
@@ -74,25 +74,47 @@
   background: var(--bg-tertiary, #181825);
   border: 1px solid var(--border-color, #313244);
   border-radius: 8px;
-  padding: 12px 16px;
-  margin-bottom: 8px;
+  margin-bottom: 12px;
   transition: border-color 0.2s;
+  overflow: hidden;
 }
 
 .serverCard:hover {
   border-color: var(--accent-color, #89b4fa);
 }
 
+.serverCard.builtInSection {
+  border-color: rgba(166, 227, 161, 0.3);
+}
+
+.serverCard.builtInSection:hover {
+  border-color: rgba(166, 227, 161, 0.6);
+}
+
 .serverHeader {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  padding: 12px 16px;
+  user-select: none;
+}
+
+.serverHeader:hover {
+  background: var(--bg-hover, rgba(49, 50, 68, 0.5));
 }
 
 .serverInfo {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+}
+
+.expandIcon {
+  font-size: 10px;
+  color: var(--text-secondary, #a6adc8);
+  width: 12px;
+  transition: transform 0.2s;
 }
 
 .statusDot {
@@ -135,6 +157,40 @@
   color: var(--text-secondary, #a6adc8);
 }
 
+.statusBadge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.statusBadge.connected {
+  background: rgba(166, 227, 161, 0.15);
+  color: #a6e3a1;
+}
+
+.statusBadge.connecting {
+  background: rgba(249, 226, 175, 0.15);
+  color: #f9e2af;
+}
+
+.statusBadge.disconnected {
+  background: var(--bg-secondary, #1e1e2e);
+  color: var(--text-secondary, #a6adc8);
+}
+
+.statusBadge.error {
+  background: rgba(243, 139, 168, 0.15);
+  color: #f38ba8;
+}
+
+.toolCount {
+  font-size: 11px;
+  color: var(--text-secondary, #a6adc8);
+  margin-left: 4px;
+}
+
 .serverActions {
   display: flex;
   gap: 4px;
@@ -162,11 +218,161 @@
 }
 
 .serverDescription {
-  margin-top: 8px;
+  padding: 0 16px 8px;
   font-size: 13px;
   color: var(--text-secondary, #a6adc8);
 }
 
+.serverError {
+  margin: 8px 16px;
+  font-size: 12px;
+  color: #f38ba8;
+  padding: 8px 12px;
+  background: rgba(243, 139, 168, 0.1);
+  border-radius: 4px;
+}
+
+.connectionHint {
+  padding: 8px 16px;
+  font-size: 12px;
+  color: var(--text-secondary, #a6adc8);
+  font-style: italic;
+}
+
+/* Tools Container & Cards */
+.toolsContainer {
+  border-top: 1px solid var(--border-color, #313244);
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.toolsLoading {
+  padding: 20px;
+  text-align: center;
+  color: var(--text-secondary, #a6adc8);
+  font-size: 13px;
+}
+
+.toolCard {
+  background: var(--bg-secondary, #1e1e2e);
+  border: 1px solid var(--border-color, #313244);
+  border-radius: 6px;
+  padding: 12px;
+  transition: border-color 0.2s;
+}
+
+.toolCard:hover {
+  border-color: rgba(137, 180, 250, 0.5);
+}
+
+.toolHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.toolIcon {
+  font-size: 14px;
+}
+
+.toolName {
+  font-weight: 600;
+  font-size: 14px;
+  color: #89b4fa;
+  font-family: 'SF Mono', Monaco, Consolas, monospace;
+}
+
+.categoryBadge {
+  font-size: 10px;
+  padding: 2px 6px;
+  background: rgba(203, 166, 247, 0.15);
+  color: #cba6f7;
+  border-radius: 4px;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.toolDescription {
+  font-size: 13px;
+  color: var(--text-secondary, #a6adc8);
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+
+.toolTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.tagBadge {
+  font-size: 10px;
+  padding: 2px 6px;
+  background: var(--bg-tertiary, #181825);
+  border: 1px solid var(--border-color, #313244);
+  border-radius: 3px;
+  color: var(--text-secondary, #a6adc8);
+}
+
+.toolParams {
+  font-size: 12px;
+}
+
+.paramsLabel {
+  font-weight: 500;
+  color: var(--text-secondary, #a6adc8);
+  display: block;
+  margin-bottom: 6px;
+}
+
+.paramsList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.paramItem {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding-left: 12px;
+}
+
+.paramName {
+  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  font-weight: 500;
+  color: #f9e2af;
+}
+
+.paramType {
+  font-size: 11px;
+  color: var(--text-secondary, #a6adc8);
+}
+
+.paramRequired {
+  color: #f38ba8;
+  font-weight: bold;
+}
+
+.paramDesc {
+  font-size: 11px;
+  color: var(--text-secondary, #a6adc8);
+  opacity: 0.8;
+}
+
+.noParams {
+  color: var(--text-secondary, #a6adc8);
+  font-style: italic;
+  padding-left: 12px;
+}
+
+/* Legacy tools list (for old badge style, if needed) */
 .toolsList {
   margin-top: 8px;
   display: flex;
@@ -194,21 +400,14 @@
   color: var(--text-secondary, #a6adc8);
 }
 
-.serverError {
-  margin-top: 8px;
-  font-size: 12px;
-  color: #f38ba8;
-  padding: 6px 10px;
-  background: rgba(243, 139, 168, 0.1);
-  border-radius: 4px;
-}
-
 .footer {
   padding: 12px 20px;
   border-top: 1px solid var(--border-color, #313244);
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
 .addBtn {

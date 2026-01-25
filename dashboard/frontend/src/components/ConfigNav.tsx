@@ -44,8 +44,8 @@ const ConfigNav: React.FC<ConfigNavProps> = ({ activeSection, onSectionChange })
     {
       id: 'mcp' as ConfigSection,
       icon: '🔌',
-      title: 'MCP Servers',
-      description: 'Model Context Protocol servers'
+      title: 'MCP Servers & Tools',
+      description: 'MCP servers and all available tools'
     },
     {
       id: 'topology' as ConfigSection,
