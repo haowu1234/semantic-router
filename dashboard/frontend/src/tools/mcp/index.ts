@@ -32,6 +32,8 @@ export * as mcpApi from './api'
 // Hooks
 export { useMCPServers } from './useMCPServers'
 export type { UseMCPServersReturn } from './useMCPServers'
+export { useMCPToolSync } from './useMCPToolSync'
+export type { UseMCPToolSyncOptions, UseMCPToolSyncReturn } from './useMCPToolSync'
 
 // Bridge
 export {
