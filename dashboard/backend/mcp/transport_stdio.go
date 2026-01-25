@@ -9,8 +9,10 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // StdioTransport Stdio 传输实现
@@ -52,6 +54,8 @@ func NewStdioTransport(config *StdioConfig) *StdioTransport {
 }
 
 // Connect 启动子进程并建立连接
+// 注意：ctx 仅用于控制连接初始化超时，不会传递给子进程
+// 子进程的生命周期由 Disconnect() 方法管理
 func (t *StdioTransport) Connect(ctx context.Context) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -63,9 +67,10 @@ func (t *StdioTransport) Connect(ctx context.Context) error {
 		return nil
 	}
 
-	// 创建命令
-	t.cmd = exec.CommandContext(ctx, t.config.Command, t.config.Args...)
-	log.Printf("[MCP-Stdio] Created command: %s %v", t.config.Command, t.config.Args)
+	// 创建命令 - 不使用 ctx，因为我们希望子进程在 HTTP 请求结束后继续运行
+	// 子进程的生命周期由 Disconnect() 方法管理
+	t.cmd = exec.Command(t.config.Command, t.config.Args...)
+	log.Printf("[MCP-Stdio] Created command (without context): %s %v", t.config.Command, t.config.Args)
 
 	// 设置工作目录
 	if t.config.Cwd != "" {
@@ -99,19 +104,71 @@ func (t *StdioTransport) Connect(ctx context.Context) error {
 	log.Printf("[MCP-Stdio] Starting process...")
 	if err := t.cmd.Start(); err != nil {
 		log.Printf("[MCP-Stdio] Failed to start process: %v", err)
-		return fmt.Errorf("failed to start process: %w", err)
+		// 提供更详细的错误信息
+		if os.IsNotExist(err) || (err.Error() != "" && (strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such file"))) {
+			return fmt.Errorf("command not found: '%s' - please ensure the command is installed and in PATH", t.config.Command)
+		}
+		if os.IsPermission(err) || (err.Error() != "" && strings.Contains(err.Error(), "permission denied")) {
+			return fmt.Errorf("permission denied: cannot execute '%s' - please check file permissions", t.config.Command)
+		}
+		return fmt.Errorf("failed to start process '%s': %w", t.config.Command, err)
 	}
 	log.Printf("[MCP-Stdio] Process started successfully, PID: %d", t.cmd.Process.Pid)
 
+	// 创建用于收集 stderr 的 buffer 和同步通道
+	stderrBuf := &strings.Builder{}
+	processExited := make(chan error, 1)
+
+	// 启动进程监控协程，监控进程退出状态
+	go func() {
+		err := t.cmd.Wait()
+		processExited <- err
+	}()
+
+	// 启动 stderr 读取协程 (用于调试和捕获错误)
+	log.Printf("[MCP-Stdio] Starting stderr reader goroutine")
+	go t.readStderrWithBuffer(stderrBuf)
+
+	// 等待一小段时间，检查进程是否立即退出
+	// 这对于捕获 "command not found"、"file not found" 等启动错误很重要
+	log.Printf("[MCP-Stdio] Waiting briefly to check if process exits immediately...")
+
+	select {
+	case err := <-processExited:
+		// 进程立即退出了，这通常意味着启动失败
+		// 多等一小会儿让 stderr 读取完成
+		time.Sleep(50 * time.Millisecond)
+		stderrOutput := stderrBuf.String()
+		log.Printf("[MCP-Stdio] Process exited immediately with error: %v, stderr: %s", err, stderrOutput)
+
+		errMsg := "process exited immediately"
+		if err != nil {
+			errMsg = fmt.Sprintf("process exited immediately with: %v", err)
+		}
+		if stderrOutput != "" {
+			errMsg = fmt.Sprintf("%s, stderr: %s", errMsg, strings.TrimSpace(stderrOutput))
+		}
+		return fmt.Errorf("failed to start MCP server: %s", errMsg)
+
+	case <-time.After(200 * time.Millisecond):
+		// 进程在 200ms 后仍在运行，认为启动成功
+		log.Printf("[MCP-Stdio] Process still running after 200ms, assuming successful start")
+	}
+
 	t.connected = true
+
+	// 启动后台协程监控进程退出
+	go func() {
+		err := <-processExited
+		log.Printf("[MCP-Stdio] Process exited: %v", err)
+		t.mu.Lock()
+		t.connected = false
+		t.mu.Unlock()
+	}()
 
 	// 启动响应读取协程
 	log.Printf("[MCP-Stdio] Starting response reader goroutine")
 	go t.readResponses()
-
-	// 启动 stderr 读取协程 (用于调试)
-	log.Printf("[MCP-Stdio] Starting stderr reader goroutine")
-	go t.readStderr()
 
 	log.Printf("[MCP-Stdio] Connect() completed successfully")
 	return nil
@@ -133,10 +190,9 @@ func (t *StdioTransport) Disconnect() error {
 		_ = t.stdin.Close()
 	}
 
-	// 等待进程退出
+	// 强制杀死进程（Wait() 已在后台协程中处理）
 	if t.cmd != nil && t.cmd.Process != nil {
 		_ = t.cmd.Process.Kill()
-		_ = t.cmd.Wait()
 	}
 
 	// 清理 pending 请求
@@ -246,15 +302,29 @@ func (t *StdioTransport) CallStreaming(ctx context.Context, method string, param
 // readResponses 读取子进程响应
 func (t *StdioTransport) readResponses() {
 	log.Printf("[MCP-Stdio] readResponses() goroutine started")
-	scanner := bufio.NewScanner(t.stdout)
-	// 增大缓冲区以处理大响应
-	scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024)
 
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		log.Printf("[MCP-Stdio] Received line from stdout: %s", string(line))
+	// 使用 bufio.Reader 而不是 Scanner，更可靠地处理行输入
+	reader := bufio.NewReader(t.stdout)
+	log.Printf("[MCP-Stdio] Reader created, starting read loop...")
+
+	for {
+		log.Printf("[MCP-Stdio] Waiting to read line from stdout...")
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			if err == io.EOF {
+				log.Printf("[MCP-Stdio] EOF received from stdout")
+			} else {
+				log.Printf("[MCP-Stdio] Read error: %v", err)
+			}
+			break
+		}
+
+		log.Printf("[MCP-Stdio] Raw line received (len=%d): %s", len(line), string(line))
+		// 去除换行符
+		line = []byte(strings.TrimSpace(string(line)))
+		log.Printf("[MCP-Stdio] Trimmed line (len=%d): %s", len(line), string(line))
 		if len(line) == 0 {
-			log.Printf("[MCP-Stdio] Empty line, skipping")
+			log.Printf("[MCP-Stdio] Empty line after trim, skipping")
 			continue
 		}
 
@@ -284,13 +354,12 @@ func (t *StdioTransport) readResponses() {
 			t.pendingMu.RUnlock()
 
 			if ok {
+				log.Printf("[MCP-Stdio] Sending response to pending channel (id=%d)", id)
 				ch <- &resp
+			} else {
+				log.Printf("[MCP-Stdio] No pending request found for id=%d", id)
 			}
 		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		log.Printf("[MCP-Stdio] Scanner error: %v", err)
 	}
 
 	// 连接断开
@@ -312,6 +381,22 @@ func (t *StdioTransport) readStderr() {
 		log.Printf("[MCP-Stdio] Stderr scanner error: %v", err)
 	}
 	log.Printf("[MCP-Stdio] readStderr() goroutine exiting")
+}
+
+// readStderrWithBuffer 读取 stderr 并同时写入 buffer（用于启动错误检测）
+func (t *StdioTransport) readStderrWithBuffer(buf *strings.Builder) {
+	log.Printf("[MCP-Stdio] readStderrWithBuffer() goroutine started")
+	scanner := bufio.NewScanner(t.stderr)
+	for scanner.Scan() {
+		line := scanner.Text()
+		log.Printf("[MCP-Stdio] STDERR: %s", line)
+		buf.WriteString(line)
+		buf.WriteString("\n")
+	}
+	if err := scanner.Err(); err != nil {
+		log.Printf("[MCP-Stdio] Stderr scanner error: %v", err)
+	}
+	log.Printf("[MCP-Stdio] readStderrWithBuffer() goroutine exiting")
 }
 
 // SetNotifyHandler 设置通知处理器

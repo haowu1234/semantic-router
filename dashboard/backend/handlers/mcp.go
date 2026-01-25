@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/vllm-project/semantic-router/dashboard/backend/mcp"
@@ -214,7 +216,12 @@ func (h *MCPHandler) ConnectServerHandler() http.HandlerFunc {
 			return
 		}
 
-		if err := h.manager.Connect(r.Context(), id); err != nil {
+		// 使用独立的 context 带超时，而不是 HTTP 请求的 context
+		// 这样 MCP 服务器进程不会因为 HTTP 请求结束而被取消
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		if err := h.manager.Connect(ctx, id); err != nil {
 			http.Error(w, "Failed to connect: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -305,7 +312,11 @@ func (h *MCPHandler) TestConnectionHandler() http.HandlerFunc {
 			return
 		}
 
-		if err := h.manager.TestConnection(r.Context(), &config); err != nil {
+		// 使用独立的 context 带超时
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		if err := h.manager.TestConnection(ctx, &config); err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(map[string]interface{}{
