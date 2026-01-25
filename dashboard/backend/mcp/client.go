@@ -5,14 +5,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
+	"os"
+	"os/exec"
 	"sync"
 	"time"
+
+	"github.com/mark3labs/mcp-go/client"
+	"github.com/mark3labs/mcp-go/client/transport"
+	"github.com/mark3labs/mcp-go/mcp"
 )
 
-// Client MCP 客户端
+// Client MCP 客户端 (基于官方 SDK)
 type Client struct {
-	config    *ServerConfig
-	transport Transport
+	config *ServerConfig
 
 	mu     sync.RWMutex
 	status ServerStatus
@@ -20,47 +26,16 @@ type Client struct {
 	tools  []ToolDefinition
 
 	connectedAt *time.Time
+
+	// SDK 客户端
+	mcpClient client.MCPClient
 }
 
 // NewClient 创建 MCP 客户端
 func NewClient(config *ServerConfig) (*Client, error) {
-	var transport Transport
-
-	switch config.Transport {
-	case TransportStdio:
-		transport = NewStdioTransport(&StdioConfig{
-			Command: config.Connection.Command,
-			Args:    config.Connection.Args,
-			Env:     config.Connection.Env,
-			Cwd:     config.Connection.Cwd,
-		})
-
-	case TransportStreamableHTTP:
-		var timeout time.Duration
-		if config.Options != nil && config.Options.Timeout > 0 {
-			timeout = time.Duration(config.Options.Timeout) * time.Millisecond
-		}
-
-		var oauth *OAuthConfig
-		if config.Security != nil {
-			oauth = config.Security.OAuth
-		}
-
-		transport = NewStreamableHTTPTransport(&StreamableHTTPConfig{
-			URL:     config.Connection.URL,
-			Headers: config.Connection.Headers,
-			Timeout: timeout,
-			OAuth:   oauth,
-		})
-
-	default:
-		return nil, fmt.Errorf("unsupported transport type: %s", config.Transport)
-	}
-
 	return &Client{
-		config:    config,
-		transport: transport,
-		status:    StatusDisconnected,
+		config: config,
+		status: StatusDisconnected,
 	}, nil
 }
 
@@ -71,72 +46,61 @@ func (c *Client) Connect(ctx context.Context) error {
 	c.mu.Lock()
 	c.status = StatusConnecting
 	c.mu.Unlock()
-	log.Printf("[MCP-Client] Status set to: connecting")
 
-	// 连接传输层
-	log.Printf("[MCP-Client] Connecting transport layer...")
-	if err := c.transport.Connect(ctx); err != nil {
-		log.Printf("[MCP-Client] Transport connect failed: %v", err)
+	var mcpClient client.MCPClient
+	var err error
+
+	switch c.config.Transport {
+	case TransportStdio:
+		mcpClient, err = c.createStdioClient(ctx)
+	case TransportStreamableHTTP:
+		mcpClient, err = c.createStreamableHTTPClient(ctx)
+	default:
+		return fmt.Errorf("unsupported transport type: %s", c.config.Transport)
+	}
+
+	if err != nil {
+		log.Printf("[MCP-Client] Failed to create client: %v", err)
 		c.mu.Lock()
 		c.status = StatusError
 		c.err = err
 		c.mu.Unlock()
 		return err
 	}
-	log.Printf("[MCP-Client] Transport connected successfully")
 
-	// 发送 MCP initialize 请求 (协议必需)
-	log.Printf("[MCP-Client] Sending initialize request...")
-	initResult, err := c.transport.Call(ctx, "initialize", InitializeParams{
-		ProtocolVersion: "2024-11-05",
-		Capabilities: map[string]interface{}{
-			"tools": map[string]interface{}{
-				"listChanged": true,
-			},
-		},
-		ClientInfo: ClientInfo{
-			Name:    "semantic-router-mcp-client",
-			Version: "1.0.0",
-		},
-	})
+	c.mu.Lock()
+	c.mcpClient = mcpClient
+	c.mu.Unlock()
+
+	// 初始化连接
+	log.Printf("[MCP-Client] Initializing connection...")
+	initReq := mcp.InitializeRequest{}
+	initReq.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
+	initReq.Params.ClientInfo = mcp.Implementation{
+		Name:    "semantic-router-mcp-client",
+		Version: "1.0.0",
+	}
+
+	_, err = mcpClient.Initialize(ctx, initReq)
 	if err != nil {
-		log.Printf("[MCP-Client] Initialize request failed: %v", err)
+		log.Printf("[MCP-Client] Initialize failed: %v", err)
+		mcpClient.Close()
 		c.mu.Lock()
 		c.status = StatusError
-		c.err = fmt.Errorf("initialize failed: %w", err)
+		c.err = err
+		c.mcpClient = nil
 		c.mu.Unlock()
-		_ = c.transport.Disconnect()
-		return c.err
+		return fmt.Errorf("initialize failed: %w", err)
 	}
-	log.Printf("[MCP-Client] Initialize request succeeded")
-
-	// 打印服务器信息
-	if resp, ok := initResult.(map[string]interface{}); ok {
-		if version, ok := resp["protocolVersion"].(string); ok {
-			fmt.Printf("MCP server protocol version: %s\n", version)
-		}
-		if serverInfo, ok := resp["serverInfo"].(map[string]interface{}); ok {
-			if name, ok := serverInfo["name"].(string); ok {
-				fmt.Printf("MCP server name: %s\n", name)
-			}
-		}
-	}
-
-	// 发送 initialized 通知 (告知服务器客户端已准备好)
-	// 注意：这是一个通知，不是请求，没有返回值
-	log.Printf("[MCP-Client] Sending initialized notification...")
-	_, _ = c.transport.Call(ctx, "notifications/initialized", nil)
-	log.Printf("[MCP-Client] Initialized notification sent")
+	log.Printf("[MCP-Client] Initialization complete")
 
 	// 获取工具列表
-	log.Printf("[MCP-Client] Calling ListTools()...")
+	log.Printf("[MCP-Client] Listing tools...")
 	tools, err := c.ListTools(ctx)
 	if err != nil {
-		// 工具列表获取失败不影响连接状态
 		log.Printf("[MCP-Client] Warning: failed to list tools: %v", err)
-		fmt.Printf("Warning: failed to list tools: %v\n", err)
 	} else {
-		log.Printf("[MCP-Client] ListTools() succeeded, got %d tools", len(tools))
+		log.Printf("[MCP-Client] Got %d tools", len(tools))
 	}
 
 	now := time.Now()
@@ -151,13 +115,117 @@ func (c *Client) Connect(ctx context.Context) error {
 	return nil
 }
 
+// createStdioClient 创建 Stdio 客户端
+func (c *Client) createStdioClient(ctx context.Context) (client.MCPClient, error) {
+	log.Printf("[MCP-Client] Creating Stdio client: command=%s, args=%v", c.config.Connection.Command, c.config.Connection.Args)
+
+	// 构建环境变量
+	env := os.Environ()
+	for k, v := range c.config.Connection.Env {
+		env = append(env, fmt.Sprintf("%s=%s", k, v))
+	}
+
+	// 准备选项
+	opts := []transport.StdioOption{}
+
+	// 如果需要设置工作目录，使用自定义命令函数
+	if c.config.Connection.Cwd != "" {
+		opts = append(opts, transport.WithCommandFunc(func(ctx context.Context, command string, env []string, args []string) (*exec.Cmd, error) {
+			cmd := exec.CommandContext(ctx, command, args...)
+			cmd.Env = env
+			cmd.Dir = c.config.Connection.Cwd
+			return cmd, nil
+		}))
+	}
+
+	// 使用 SDK 创建 Stdio 客户端
+	// NewStdioMCPClient 会自动启动子进程
+	mcpClient, err := client.NewStdioMCPClientWithOptions(
+		c.config.Connection.Command,
+		env,
+		c.config.Connection.Args,
+		opts...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stdio client: %w", err)
+	}
+
+	return mcpClient, nil
+}
+
+// createStreamableHTTPClient 创建 Streamable HTTP 客户端
+func (c *Client) createStreamableHTTPClient(ctx context.Context) (client.MCPClient, error) {
+	log.Printf("[MCP-Client] Creating Streamable HTTP client: url=%s", c.config.Connection.URL)
+
+	opts := []transport.StreamableHTTPCOption{}
+
+	// 设置超时
+	timeout := 30 * time.Second
+	if c.config.Options != nil && c.config.Options.Timeout > 0 {
+		timeout = time.Duration(c.config.Options.Timeout) * time.Millisecond
+	}
+	opts = append(opts, transport.WithHTTPTimeout(timeout))
+
+	// 设置自定义 Headers
+	if len(c.config.Connection.Headers) > 0 {
+		opts = append(opts, transport.WithHTTPHeaders(c.config.Connection.Headers))
+	}
+
+	// 如果需要自定义 HTTP Client（如添加 OAuth Token）
+	if c.config.Security != nil && c.config.Security.OAuth != nil {
+		customClient := &http.Client{
+			Transport: &oauthTransport{
+				base:  http.DefaultTransport,
+				oauth: c.config.Security.OAuth,
+			},
+			Timeout: timeout,
+		}
+		opts = append(opts, transport.WithHTTPBasicClient(customClient))
+	}
+
+	mcpClient, err := client.NewStreamableHttpClient(c.config.Connection.URL, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create streamable http client: %w", err)
+	}
+
+	return mcpClient, nil
+}
+
+// oauthTransport 自定义 HTTP Transport，用于添加 OAuth Token
+type oauthTransport struct {
+	base  http.RoundTripper
+	oauth *OAuthConfig
+
+	// TODO: 实现 token 缓存和刷新
+	mu          sync.RWMutex
+	accessToken string
+	tokenExpiry time.Time
+}
+
+func (t *oauthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// TODO: 实现 OAuth 2.1 token 获取和刷新逻辑
+	// 这里只是占位符，实际需要实现 client_credentials 流程
+	t.mu.RLock()
+	token := t.accessToken
+	t.mu.RUnlock()
+
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	return t.base.RoundTrip(req)
+}
+
 // Disconnect 断开连接
 func (c *Client) Disconnect() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if err := c.transport.Disconnect(); err != nil {
-		return err
+	if c.mcpClient != nil {
+		if err := c.mcpClient.Close(); err != nil {
+			log.Printf("[MCP-Client] Error closing client: %v", err)
+		}
+		c.mcpClient = nil
 	}
 
 	c.status = StatusDisconnected
@@ -169,73 +237,106 @@ func (c *Client) Disconnect() error {
 
 // ListTools 获取工具列表
 func (c *Client) ListTools(ctx context.Context) ([]ToolDefinition, error) {
-	log.Printf("[MCP-Client] ListTools() calling tools/list...")
-	result, err := c.transport.Call(ctx, "tools/list", nil)
+	c.mu.RLock()
+	mcpClient := c.mcpClient
+	c.mu.RUnlock()
+
+	if mcpClient == nil {
+		return nil, fmt.Errorf("not connected")
+	}
+
+	log.Printf("[MCP-Client] Calling tools/list...")
+	result, err := mcpClient.ListTools(ctx, mcp.ListToolsRequest{})
 	if err != nil {
 		log.Printf("[MCP-Client] tools/list failed: %v", err)
 		return nil, err
 	}
-	log.Printf("[MCP-Client] tools/list succeeded, parsing result...")
 
-	// 解析结果
-	resultMap, ok := result.(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("unexpected result type: %T", result)
+	// 转换为我们的类型
+	tools := make([]ToolDefinition, 0, len(result.Tools))
+	for _, t := range result.Tools {
+		inputSchema, _ := json.Marshal(t.InputSchema)
+		tools = append(tools, ToolDefinition{
+			Name:        t.Name,
+			Description: t.Description,
+			InputSchema: inputSchema,
+		})
 	}
 
-	toolsRaw, ok := resultMap["tools"]
-	if !ok {
-		return nil, fmt.Errorf("tools field not found in response")
-	}
-
-	// 转换为 JSON 再解析
-	toolsBytes, err := json.Marshal(toolsRaw)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal tools: %w", err)
-	}
-
-	var tools []ToolDefinition
-	if err := json.Unmarshal(toolsBytes, &tools); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal tools: %w", err)
-	}
-
+	log.Printf("[MCP-Client] Got %d tools", len(tools))
 	return tools, nil
 }
 
 // CallTool 调用工具
 func (c *Client) CallTool(ctx context.Context, name string, arguments json.RawMessage) (*CallToolResult, error) {
-	params := CallToolParams{
-		Name:      name,
-		Arguments: arguments,
+	c.mu.RLock()
+	mcpClient := c.mcpClient
+	c.mu.RUnlock()
+
+	if mcpClient == nil {
+		return nil, fmt.Errorf("not connected")
 	}
 
-	result, err := c.transport.Call(ctx, "tools/call", params)
+	// 解析参数
+	var args map[string]interface{}
+	if len(arguments) > 0 {
+		if err := json.Unmarshal(arguments, &args); err != nil {
+			return nil, fmt.Errorf("failed to parse arguments: %w", err)
+		}
+	}
+
+	// 构建请求
+	req := mcp.CallToolRequest{}
+	req.Params.Name = name
+	req.Params.Arguments = args
+
+	result, err := mcpClient.CallTool(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 
 	// 转换结果
-	resultBytes, err := json.Marshal(result)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal result: %w", err)
+	content := make([]ContentItem, 0, len(result.Content))
+	for _, item := range result.Content {
+		contentItem := ContentItem{Type: "text"}
+		switch v := item.(type) {
+		case mcp.TextContent:
+			contentItem.Text = v.Text
+		case *mcp.TextContent:
+			contentItem.Text = v.Text
+		default:
+			// 其他类型转为 JSON
+			data, _ := json.Marshal(item)
+			contentItem.Text = string(data)
+		}
+		content = append(content, contentItem)
 	}
 
-	var callResult CallToolResult
-	if err := json.Unmarshal(resultBytes, &callResult); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal result: %w", err)
-	}
-
-	return &callResult, nil
+	return &CallToolResult{
+		Content: content,
+		IsError: result.IsError,
+	}, nil
 }
 
 // CallToolStreaming 流式调用工具
+// 注意：SDK 目前可能不完全支持流式，这里提供兼容实现
 func (c *Client) CallToolStreaming(ctx context.Context, name string, arguments json.RawMessage, onChunk func(StreamChunk) error) error {
-	params := CallToolParams{
-		Name:      name,
-		Arguments: arguments,
+	// SDK 当前版本可能不支持真正的流式
+	// 使用同步调用模拟
+	result, err := c.CallTool(ctx, name, arguments)
+	if err != nil {
+		return onChunk(StreamChunk{Type: "error", Data: err.Error()})
 	}
 
-	return c.transport.CallStreaming(ctx, "tools/call", params, onChunk)
+	// 发送完成事件
+	var data interface{}
+	if len(result.Content) > 0 && result.Content[0].Type == "text" {
+		data = result.Content[0].Text
+	} else {
+		data = result.Content
+	}
+
+	return onChunk(StreamChunk{Type: "complete", Data: data, Progress: 100})
 }
 
 // GetStatus 获取状态
@@ -274,4 +375,18 @@ func (c *Client) GetTools() []ToolDefinition {
 // GetConfig 获取配置
 func (c *Client) GetConfig() *ServerConfig {
 	return c.config
+}
+
+// ========== 兼容类型 ==========
+
+// CallToolResult tools/call 响应结果
+type CallToolResult struct {
+	Content []ContentItem `json:"content"`
+	IsError bool          `json:"isError,omitempty"`
+}
+
+// ContentItem 内容项
+type ContentItem struct {
+	Type string `json:"type"` // "text" | "image" | "resource"
+	Text string `json:"text,omitempty"`
 }

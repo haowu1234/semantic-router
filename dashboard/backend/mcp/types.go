@@ -1,5 +1,5 @@
 // Package mcp provides MCP (Model Context Protocol) client implementation
-// following the official MCP 2025-06-18 specification.
+// using the official mcp-go SDK (github.com/mark3labs/mcp-go).
 package mcp
 
 import (
@@ -113,7 +113,7 @@ type ServerOptions struct {
 	MaxRetries int `json:"max_retries,omitempty" yaml:"max_retries,omitempty"`
 }
 
-// ToolDefinition MCP 工具定义 (官方 2025-06-18 规范)
+// ToolDefinition MCP 工具定义
 type ToolDefinition struct {
 	// 工具名称
 	Name string `json:"name"`
@@ -121,8 +121,6 @@ type ToolDefinition struct {
 	Description string `json:"description,omitempty"`
 	// 输入参数 Schema (JSON Schema)
 	InputSchema json.RawMessage `json:"inputSchema"`
-	// 输出结果 Schema (JSON Schema) - 官方新增
-	OutputSchema json.RawMessage `json:"outputSchema,omitempty"`
 }
 
 // Tool 完整的工具信息 (包含来源服务器)
@@ -174,101 +172,6 @@ type ServerState struct {
 	Error       string           `json:"error,omitempty"`
 	Tools       []ToolDefinition `json:"tools,omitempty"`
 	ConnectedAt *time.Time       `json:"connected_at,omitempty"`
-}
-
-// ========== JSON-RPC Types ==========
-
-// JSONRPCRequest JSON-RPC 2.0 请求
-type JSONRPCRequest struct {
-	JSONRPC string      `json:"jsonrpc"`
-	ID      interface{} `json:"id"`
-	Method  string      `json:"method"`
-	Params  interface{} `json:"params,omitempty"`
-}
-
-// JSONRPCResponse JSON-RPC 2.0 响应
-type JSONRPCResponse struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      interface{}     `json:"id"`
-	Result  json.RawMessage `json:"result,omitempty"`
-	Error   *JSONRPCError   `json:"error,omitempty"`
-}
-
-// JSONRPCError JSON-RPC 错误
-type JSONRPCError struct {
-	Code    int         `json:"code"`
-	Message string      `json:"message"`
-	Data    interface{} `json:"data,omitempty"`
-}
-
-// ========== MCP Protocol Types ==========
-
-// InitializeParams initialize 请求参数
-type InitializeParams struct {
-	ProtocolVersion string                 `json:"protocolVersion"`
-	Capabilities    map[string]interface{} `json:"capabilities"`
-	ClientInfo      ClientInfo             `json:"clientInfo"`
-}
-
-// ClientInfo 客户端信息
-type ClientInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-}
-
-// InitializeResult initialize 响应结果
-type InitializeResult struct {
-	ProtocolVersion string                 `json:"protocolVersion"`
-	Capabilities    map[string]interface{} `json:"capabilities"`
-	ServerInfo      ServerInfo             `json:"serverInfo"`
-}
-
-// ServerInfo 服务器信息
-type ServerInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-}
-
-// ListToolsResult tools/list 响应结果
-type ListToolsResult struct {
-	Tools []ToolDefinition `json:"tools"`
-}
-
-// CallToolParams tools/call 请求参数
-type CallToolParams struct {
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments,omitempty"`
-}
-
-// CallToolResult tools/call 响应结果
-type CallToolResult struct {
-	Content []ContentItem `json:"content"`
-	IsError bool          `json:"isError,omitempty"`
-}
-
-// ContentItem 内容项
-type ContentItem struct {
-	Type string `json:"type"` // "text" | "image" | "resource"
-	Text string `json:"text,omitempty"`
-	// 其他类型的字段...
-}
-
-// ========== Elicitation Types (官方新增) ==========
-
-// ElicitationRequest 服务器请求用户输入
-type ElicitationRequest struct {
-	ID                  string          `json:"id"`
-	Message             string          `json:"message"`
-	Schema              json.RawMessage `json:"schema"`
-	RequestedPermission string          `json:"requested_permission,omitempty"`
-	ServerID            string          `json:"server_id"`
-}
-
-// ElicitationResponse 用户响应
-type ElicitationResponse struct {
-	RequestID string      `json:"request_id"`
-	Action    string      `json:"action"` // "approve" | "deny"
-	Data      interface{} `json:"data,omitempty"`
 }
 
 // ========== Config File Types ==========
