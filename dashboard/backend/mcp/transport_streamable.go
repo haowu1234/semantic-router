@@ -105,6 +105,16 @@ func (t *StreamableHTTPTransport) Connect(ctx context.Context) error {
 
 // Call 执行 JSON-RPC 调用 (官方规范实现)
 func (t *StreamableHTTPTransport) Call(ctx context.Context, method string, params interface{}) (interface{}, error) {
+	// 对于非 initialize 方法，检查连接状态
+	if method != "initialize" {
+		t.mu.RLock()
+		if !t.connected {
+			t.mu.RUnlock()
+			return nil, fmt.Errorf("not connected: please call Connect() first")
+		}
+		t.mu.RUnlock()
+	}
+
 	id := t.requestID.Add(1)
 
 	reqBody := JSONRPCRequest{
@@ -266,6 +276,11 @@ func (t *StreamableHTTPTransport) parseSSEStream(body io.Reader, onChunk func(St
 
 	for scanner.Scan() {
 		line := scanner.Text()
+
+		// 忽略心跳注释（以 : 开头）
+		if strings.HasPrefix(line, ":") {
+			continue
+		}
 
 		switch {
 		case strings.HasPrefix(line, "event:"):
