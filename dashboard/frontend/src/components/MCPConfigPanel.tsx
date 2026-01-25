@@ -6,6 +6,8 @@
 import React, { useState, useCallback, useEffect } from 'react'
 import { useMCPServers } from '../tools/mcp'
 import type { MCPServerConfig, MCPServerState, MCPTransportType, MCPToolDefinition } from '../tools/mcp'
+import { toolRegistry } from '../tools'
+import type { RegisteredTool } from '../tools'
 import styles from './MCPConfigPanel.module.css'
 
 // 内置工具类型定义
@@ -60,9 +62,11 @@ export const MCPConfigPanel: React.FC<MCPConfigPanelProps> = ({ onClose }) => {
   const [expandedServers, setExpandedServers] = useState<Set<string>>(new Set())
   // 内置工具展开状态
   const [builtInExpanded, setBuiltInExpanded] = useState(false)
-  // 内置工具数据
-  const [builtInTools, setBuiltInTools] = useState<BuiltInTool[]>([])
-  const [builtInLoading, setBuiltInLoading] = useState(false)
+  // 后端 tools_db.json 工具数据
+  const [toolsDbTools, setToolsDbTools] = useState<BuiltInTool[]>([])
+  const [toolsDbLoading, setToolsDbLoading] = useState(false)
+  // 前端注册的内置工具
+  const [registryTools, setRegistryTools] = useState<RegisteredTool[]>([])
 
   // 初始化折叠状态
   useEffect(() => {
@@ -72,23 +76,29 @@ export const MCPConfigPanel: React.FC<MCPConfigPanelProps> = ({ onClose }) => {
     setExpandedServers(new Set(connectedIds))
   }, [servers.length]) // 只在服务器数量变化时更新
 
-  // 获取内置工具
+  // 获取前端注册的内置工具
   useEffect(() => {
-    const fetchBuiltInTools = async () => {
-      setBuiltInLoading(true)
+    const tools = toolRegistry.getAll()
+    setRegistryTools(tools)
+  }, [])
+
+  // 获取后端 tools_db.json 工具（可选）
+  useEffect(() => {
+    const fetchToolsDb = async () => {
+      setToolsDbLoading(true)
       try {
         const response = await fetch('/api/tools-db')
         if (response.ok) {
           const data = await response.json()
-          setBuiltInTools(data || [])
+          setToolsDbTools(data || [])
         }
       } catch (err) {
-        console.error('Failed to load built-in tools:', err)
+        console.error('Failed to load tools_db:', err)
       } finally {
-        setBuiltInLoading(false)
+        setToolsDbLoading(false)
       }
     }
-    fetchBuiltInTools()
+    fetchToolsDb()
   }, [])
 
   // 切换服务器展开/折叠
@@ -228,10 +238,44 @@ export const MCPConfigPanel: React.FC<MCPConfigPanelProps> = ({ onClose }) => {
     )
   }
 
+  // 渲染前端注册工具的参数
+  const renderRegistryToolParameters = (tool: RegisteredTool) => {
+    const params = tool.definition.function.parameters
+    if (!params || params.type !== 'object') {
+      return <span className={styles.noParams}>No parameters</span>
+    }
+    
+    const properties = params.properties || {}
+    const required = params.required || []
+    const entries = Object.entries(properties)
+    
+    if (entries.length === 0) {
+      return <span className={styles.noParams}>No parameters</span>
+    }
+
+    return (
+      <div className={styles.paramsList}>
+        {entries.map(([name, prop]) => {
+          const propData = prop as { type?: string; description?: string }
+          return (
+            <div key={name} className={styles.paramItem}>
+              <span className={styles.paramName}>{name}</span>
+              <span className={styles.paramType}>({propData.type || 'any'})</span>
+              {required.includes(name) && <span className={styles.paramRequired}>*</span>}
+              {propData.description && (
+                <span className={styles.paramDesc}>{propData.description}</span>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
   // 计算统计信息
   const connectedCount = servers.filter(s => s.status === 'connected').length
   const mcpToolsCount = tools.length
-  const builtInCount = builtInTools.length
+  const builtInCount = registryTools.length + toolsDbTools.length
   const totalToolsCount = mcpToolsCount + builtInCount
 
   if (loading) {
@@ -270,7 +314,7 @@ export const MCPConfigPanel: React.FC<MCPConfigPanelProps> = ({ onClose }) => {
 
       <div className={styles.serverList}>
         {/* MCP Servers Section */}
-        {servers.length === 0 && builtInTools.length === 0 ? (
+        {servers.length === 0 && registryTools.length === 0 && toolsDbTools.length === 0 ? (
           <div className={styles.empty}>
             No MCP servers configured and no built-in tools available.
             <br />
@@ -386,8 +430,8 @@ export const MCPConfigPanel: React.FC<MCPConfigPanelProps> = ({ onClose }) => {
               )
             })}
 
-            {/* Built-in Tools Section */}
-            {builtInTools.length > 0 && (
+            {/* Built-in Tools Section - 前端注册的工具 */}
+            {registryTools.length > 0 && (
               <div className={`${styles.serverCard} ${styles.builtInSection}`}>
                 <div 
                   className={styles.serverHeader}
@@ -400,25 +444,75 @@ export const MCPConfigPanel: React.FC<MCPConfigPanelProps> = ({ onClose }) => {
                     </span>
                     <span className={styles.statusDot} data-status="connected">●</span>
                     <span className={styles.serverName}>Built-in Tools</span>
-                    <span className={styles.transportBadge}>Internal</span>
+                    <span className={styles.transportBadge}>Frontend</span>
                     <span className={`${styles.statusBadge} ${styles.connected}`}>
                       active
                     </span>
                     <span className={styles.toolCount}>
-                      {builtInTools.length} tools
+                      {registryTools.length} tools
                     </span>
                   </div>
                 </div>
                 <div className={styles.serverDescription}>
-                  Pre-configured tools for common tasks (weather, search, calculation, etc.)
+                  Executable tools registered in the frontend (web search, open web, etc.)
                 </div>
 
                 {builtInExpanded && (
                   <div className={styles.toolsContainer}>
-                    {builtInLoading ? (
-                      <div className={styles.toolsLoading}>Loading built-in tools...</div>
+                    {registryTools.map((tool) => (
+                      <div key={tool.metadata.id} className={styles.toolCard}>
+                        <div className={styles.toolHeader}>
+                          <span className={styles.toolIcon}>🔧</span>
+                          <span className={styles.toolName}>{tool.metadata.displayName}</span>
+                          <span className={styles.categoryBadge}>{tool.metadata.category}</span>
+                        </div>
+                        <div className={styles.toolDescription}>
+                          {tool.definition.function.description}
+                        </div>
+                        <div className={styles.toolParams}>
+                          <span className={styles.paramsLabel}>Parameters:</span>
+                          {renderRegistryToolParameters(tool)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Tools DB Section - 后端 tools_db.json 工具 */}
+            {toolsDbTools.length > 0 && (
+              <div className={`${styles.serverCard} ${styles.toolsDbSection}`}>
+                <div 
+                  className={styles.serverHeader}
+                  onClick={() => setBuiltInExpanded(!builtInExpanded)}
+                  style={{ cursor: 'pointer' }}
+                >
+                  <div className={styles.serverInfo}>
+                    <span className={styles.expandIcon}>
+                      {builtInExpanded ? '▼' : '▶'}
+                    </span>
+                    <span className={styles.statusDot} data-status="connected">●</span>
+                    <span className={styles.serverName}>Semantic Router Tools</span>
+                    <span className={styles.transportBadge}>Backend</span>
+                    <span className={`${styles.statusBadge} ${styles.connected}`}>
+                      active
+                    </span>
+                    <span className={styles.toolCount}>
+                      {toolsDbTools.length} tools
+                    </span>
+                  </div>
+                </div>
+                <div className={styles.serverDescription}>
+                  Tool definitions for semantic routing (from tools_db.json)
+                </div>
+
+                {builtInExpanded && (
+                  <div className={styles.toolsContainer}>
+                    {toolsDbLoading ? (
+                      <div className={styles.toolsLoading}>Loading tools...</div>
                     ) : (
-                      builtInTools.map((tool) => (
+                      toolsDbTools.map((tool) => (
                         <div key={tool.tool.function.name} className={styles.toolCard}>
                           <div className={styles.toolHeader}>
                             <span className={styles.toolIcon}>🔧</span>

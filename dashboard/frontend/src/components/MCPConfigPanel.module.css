@@ -91,6 +91,14 @@
   border-color: rgba(166, 227, 161, 0.6);
 }
 
+.serverCard.toolsDbSection {
+  border-color: rgba(249, 226, 175, 0.3);
+}
+
+.serverCard.toolsDbSection:hover {
+  border-color: rgba(249, 226, 175, 0.6);
+}
+
 .serverHeader {
   display: flex;
   align-items: center;
