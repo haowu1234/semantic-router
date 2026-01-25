@@ -78,6 +78,44 @@ func (c *Client) Connect(ctx context.Context) error {
 		return err
 	}
 
+	// 发送 MCP initialize 请求 (协议必需)
+	initResult, err := c.transport.Call(ctx, "initialize", InitializeParams{
+		ProtocolVersion: "2024-11-05",
+		Capabilities: map[string]interface{}{
+			"tools": map[string]interface{}{
+				"listChanged": true,
+			},
+		},
+		ClientInfo: ClientInfo{
+			Name:    "semantic-router-mcp-client",
+			Version: "1.0.0",
+		},
+	})
+	if err != nil {
+		c.mu.Lock()
+		c.status = StatusError
+		c.err = fmt.Errorf("initialize failed: %w", err)
+		c.mu.Unlock()
+		_ = c.transport.Disconnect()
+		return c.err
+	}
+
+	// 打印服务器信息
+	if resp, ok := initResult.(map[string]interface{}); ok {
+		if version, ok := resp["protocolVersion"].(string); ok {
+			fmt.Printf("MCP server protocol version: %s\n", version)
+		}
+		if serverInfo, ok := resp["serverInfo"].(map[string]interface{}); ok {
+			if name, ok := serverInfo["name"].(string); ok {
+				fmt.Printf("MCP server name: %s\n", name)
+			}
+		}
+	}
+
+	// 发送 initialized 通知 (告知服务器客户端已准备好)
+	// 注意：这是一个通知，不是请求，没有返回值
+	_, _ = c.transport.Call(ctx, "notifications/initialized", nil)
+
 	// 获取工具列表
 	tools, err := c.ListTools(ctx)
 	if err != nil {
