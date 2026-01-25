@@ -5,7 +5,7 @@
 
 import React, { useState, useCallback, useEffect } from 'react'
 import { useMCPServers } from '../tools/mcp'
-import type { MCPServerConfig, MCPServerState, MCPTransportType, MCPTool } from '../tools/mcp'
+import type { MCPServerConfig, MCPServerState, MCPTransportType, MCPToolDefinition } from '../tools/mcp'
 import styles from './MCPConfigPanel.module.css'
 
 // 内置工具类型定义
@@ -164,7 +164,7 @@ export const MCPConfigPanel: React.FC<MCPConfigPanelProps> = ({ onClose }) => {
   }
 
   // 解析工具参数
-  const renderToolParameters = (tool: MCPTool) => {
+  const renderToolParameters = (tool: MCPToolDefinition) => {
     const schema = tool.inputSchema
     if (!schema || schema.type !== 'object') {
       return <span className={styles.noParams}>No parameters</span>
