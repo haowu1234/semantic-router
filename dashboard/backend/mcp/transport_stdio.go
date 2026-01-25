@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"sync"
@@ -55,12 +56,16 @@ func (t *StdioTransport) Connect(ctx context.Context) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	log.Printf("[MCP-Stdio] Connect() called, command: %s, args: %v", t.config.Command, t.config.Args)
+
 	if t.connected {
+		log.Printf("[MCP-Stdio] Already connected, skipping")
 		return nil
 	}
 
 	// 创建命令
 	t.cmd = exec.CommandContext(ctx, t.config.Command, t.config.Args...)
+	log.Printf("[MCP-Stdio] Created command: %s %v", t.config.Command, t.config.Args)
 
 	// 设置工作目录
 	if t.config.Cwd != "" {
@@ -91,18 +96,24 @@ func (t *StdioTransport) Connect(ctx context.Context) error {
 	}
 
 	// 启动进程
+	log.Printf("[MCP-Stdio] Starting process...")
 	if err := t.cmd.Start(); err != nil {
+		log.Printf("[MCP-Stdio] Failed to start process: %v", err)
 		return fmt.Errorf("failed to start process: %w", err)
 	}
+	log.Printf("[MCP-Stdio] Process started successfully, PID: %d", t.cmd.Process.Pid)
 
 	t.connected = true
 
 	// 启动响应读取协程
+	log.Printf("[MCP-Stdio] Starting response reader goroutine")
 	go t.readResponses()
 
 	// 启动 stderr 读取协程 (用于调试)
+	log.Printf("[MCP-Stdio] Starting stderr reader goroutine")
 	go t.readStderr()
 
+	log.Printf("[MCP-Stdio] Connect() completed successfully")
 	return nil
 }
 
@@ -181,23 +192,32 @@ func (t *StdioTransport) Call(ctx context.Context, method string, params interfa
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
+	log.Printf("[MCP-Stdio] Sending request (id=%d, method=%s): %s", id, method, string(reqBytes))
+
 	t.mu.Lock()
 	_, err = t.stdin.Write(append(reqBytes, '\n'))
 	t.mu.Unlock()
 
 	if err != nil {
+		log.Printf("[MCP-Stdio] Failed to write request: %v", err)
 		return nil, fmt.Errorf("failed to write request: %w", err)
 	}
+	log.Printf("[MCP-Stdio] Request sent successfully, waiting for response...")
 
 	// 等待响应
+	log.Printf("[MCP-Stdio] Waiting for response (id=%d)...", id)
 	select {
 	case <-ctx.Done():
+		log.Printf("[MCP-Stdio] Context cancelled while waiting for response (id=%d): %v", id, ctx.Err())
 		return nil, ctx.Err()
 	case resp, ok := <-respCh:
 		if !ok {
+			log.Printf("[MCP-Stdio] Response channel closed (id=%d)", id)
 			return nil, fmt.Errorf("connection closed")
 		}
+		log.Printf("[MCP-Stdio] Received response (id=%d): result_len=%d, error=%v", id, len(resp.Result), resp.Error)
 		if resp.Error != nil {
+			log.Printf("[MCP-Stdio] RPC error (id=%d): code=%d, message=%s", id, resp.Error.Code, resp.Error.Message)
 			return nil, fmt.Errorf("RPC error %d: %s", resp.Error.Code, resp.Error.Message)
 		}
 
@@ -208,6 +228,7 @@ func (t *StdioTransport) Call(ctx context.Context, method string, params interfa
 				return nil, fmt.Errorf("failed to unmarshal result: %w", err)
 			}
 		}
+		log.Printf("[MCP-Stdio] Request completed successfully (id=%d)", id)
 		return result, nil
 	}
 }
@@ -224,13 +245,16 @@ func (t *StdioTransport) CallStreaming(ctx context.Context, method string, param
 
 // readResponses 读取子进程响应
 func (t *StdioTransport) readResponses() {
+	log.Printf("[MCP-Stdio] readResponses() goroutine started")
 	scanner := bufio.NewScanner(t.stdout)
 	// 增大缓冲区以处理大响应
 	scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024)
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
+		log.Printf("[MCP-Stdio] Received line from stdout: %s", string(line))
 		if len(line) == 0 {
+			log.Printf("[MCP-Stdio] Empty line, skipping")
 			continue
 		}
 
@@ -238,8 +262,10 @@ func (t *StdioTransport) readResponses() {
 		var resp JSONRPCResponse
 		if err := json.Unmarshal(line, &resp); err != nil {
 			// 可能是通知或其他格式
+			log.Printf("[MCP-Stdio] Failed to parse as JSON-RPC response: %v", err)
 			continue
 		}
+		log.Printf("[MCP-Stdio] Parsed JSON-RPC response: id=%v", resp.ID)
 
 		// 如果有 ID，是响应
 		if resp.ID != nil {
@@ -263,7 +289,12 @@ func (t *StdioTransport) readResponses() {
 		}
 	}
 
+	if err := scanner.Err(); err != nil {
+		log.Printf("[MCP-Stdio] Scanner error: %v", err)
+	}
+
 	// 连接断开
+	log.Printf("[MCP-Stdio] readResponses() goroutine exiting, marking as disconnected")
 	t.mu.Lock()
 	t.connected = false
 	t.mu.Unlock()
@@ -271,11 +302,16 @@ func (t *StdioTransport) readResponses() {
 
 // readStderr 读取 stderr (用于调试)
 func (t *StdioTransport) readStderr() {
+	log.Printf("[MCP-Stdio] readStderr() goroutine started")
 	scanner := bufio.NewScanner(t.stderr)
 	for scanner.Scan() {
-		// 可以记录日志或处理错误信息
-		_ = scanner.Text()
+		line := scanner.Text()
+		log.Printf("[MCP-Stdio] STDERR: %s", line)
 	}
+	if err := scanner.Err(); err != nil {
+		log.Printf("[MCP-Stdio] Stderr scanner error: %v", err)
+	}
+	log.Printf("[MCP-Stdio] readStderr() goroutine exiting")
 }
 
 // SetNotifyHandler 设置通知处理器

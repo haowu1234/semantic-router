@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 )
@@ -65,20 +66,27 @@ func NewClient(config *ServerConfig) (*Client, error) {
 
 // Connect 建立连接
 func (c *Client) Connect(ctx context.Context) error {
+	log.Printf("[MCP-Client] Connect() called for server: %s (transport: %s)", c.config.Name, c.config.Transport)
+
 	c.mu.Lock()
 	c.status = StatusConnecting
 	c.mu.Unlock()
+	log.Printf("[MCP-Client] Status set to: connecting")
 
 	// 连接传输层
+	log.Printf("[MCP-Client] Connecting transport layer...")
 	if err := c.transport.Connect(ctx); err != nil {
+		log.Printf("[MCP-Client] Transport connect failed: %v", err)
 		c.mu.Lock()
 		c.status = StatusError
 		c.err = err
 		c.mu.Unlock()
 		return err
 	}
+	log.Printf("[MCP-Client] Transport connected successfully")
 
 	// 发送 MCP initialize 请求 (协议必需)
+	log.Printf("[MCP-Client] Sending initialize request...")
 	initResult, err := c.transport.Call(ctx, "initialize", InitializeParams{
 		ProtocolVersion: "2024-11-05",
 		Capabilities: map[string]interface{}{
@@ -92,6 +100,7 @@ func (c *Client) Connect(ctx context.Context) error {
 		},
 	})
 	if err != nil {
+		log.Printf("[MCP-Client] Initialize request failed: %v", err)
 		c.mu.Lock()
 		c.status = StatusError
 		c.err = fmt.Errorf("initialize failed: %w", err)
@@ -99,6 +108,7 @@ func (c *Client) Connect(ctx context.Context) error {
 		_ = c.transport.Disconnect()
 		return c.err
 	}
+	log.Printf("[MCP-Client] Initialize request succeeded")
 
 	// 打印服务器信息
 	if resp, ok := initResult.(map[string]interface{}); ok {
@@ -114,13 +124,19 @@ func (c *Client) Connect(ctx context.Context) error {
 
 	// 发送 initialized 通知 (告知服务器客户端已准备好)
 	// 注意：这是一个通知，不是请求，没有返回值
+	log.Printf("[MCP-Client] Sending initialized notification...")
 	_, _ = c.transport.Call(ctx, "notifications/initialized", nil)
+	log.Printf("[MCP-Client] Initialized notification sent")
 
 	// 获取工具列表
+	log.Printf("[MCP-Client] Calling ListTools()...")
 	tools, err := c.ListTools(ctx)
 	if err != nil {
 		// 工具列表获取失败不影响连接状态
+		log.Printf("[MCP-Client] Warning: failed to list tools: %v", err)
 		fmt.Printf("Warning: failed to list tools: %v\n", err)
+	} else {
+		log.Printf("[MCP-Client] ListTools() succeeded, got %d tools", len(tools))
 	}
 
 	now := time.Now()
@@ -131,6 +147,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	c.connectedAt = &now
 	c.mu.Unlock()
 
+	log.Printf("[MCP-Client] Connect() completed, status: connected, tools: %d", len(tools))
 	return nil
 }
 
@@ -152,10 +169,13 @@ func (c *Client) Disconnect() error {
 
 // ListTools 获取工具列表
 func (c *Client) ListTools(ctx context.Context) ([]ToolDefinition, error) {
+	log.Printf("[MCP-Client] ListTools() calling tools/list...")
 	result, err := c.transport.Call(ctx, "tools/list", nil)
 	if err != nil {
+		log.Printf("[MCP-Client] tools/list failed: %v", err)
 		return nil, err
 	}
+	log.Printf("[MCP-Client] tools/list succeeded, parsing result...")
 
 	// 解析结果
 	resultMap, ok := result.(map[string]interface{})
