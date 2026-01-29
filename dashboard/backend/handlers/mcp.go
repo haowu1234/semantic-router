@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -370,9 +371,13 @@ func (h *MCPHandler) ExecuteToolHandler() http.HandlerFunc {
 
 		var req mcp.ToolExecuteRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			log.Printf("[MCP-Handler] ExecuteTool: failed to decode request: %v", err)
 			http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+
+		log.Printf("[MCP-Handler] ExecuteTool: server_id=%s, tool_name=%s, arguments=%s",
+			req.ServerID, req.ToolName, string(req.Arguments))
 
 		if req.ServerID == "" {
 			http.Error(w, "server_id is required", http.StatusBadRequest)
@@ -386,10 +391,12 @@ func (h *MCPHandler) ExecuteToolHandler() http.HandlerFunc {
 
 		result, err := h.manager.ExecuteTool(r.Context(), req.ServerID, req.ToolName, req.Arguments)
 		if err != nil {
+			log.Printf("[MCP-Handler] ExecuteTool: failed: %v", err)
 			http.Error(w, "Failed to execute tool: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
+		log.Printf("[MCP-Handler] ExecuteTool: success")
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(result)
 	}

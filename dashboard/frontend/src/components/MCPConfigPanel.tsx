@@ -426,97 +426,111 @@ export const MCPConfigPanel: React.FC<MCPConfigPanelProps> = ({ onClose }) => {
 
       <div className={styles.serverList}>
         {/* ========== Available Tools Section ========== */}
-        {allAvailableTools.length > 0 && (
-          <div className={styles.availableToolsSection}>
-            <div 
-              className={styles.sectionHeader}
-              onClick={() => setToolsSectionExpanded(!toolsSectionExpanded)}
-            >
-              <div className={styles.sectionTitle}>
-                <span className={styles.expandIcon}>
-                  {toolsSectionExpanded ? '▼' : '▶'}
-                </span>
-                <span>🧰 Available Tools</span>
-                <span className={styles.toolCountBadge}>
-                  {allAvailableTools.length} tools
-                </span>
-              </div>
-              {toolsSectionExpanded && (
-                <div className={styles.toolSearchWrapper} onClick={e => e.stopPropagation()}>
-                  <input
-                    type="text"
-                    className={styles.toolSearchInput}
-                    placeholder="🔍 Search tools..."
-                    value={toolSearch}
-                    onChange={e => setToolSearch(e.target.value)}
-                  />
-                  {toolSearch && (
-                    <button 
-                      className={styles.clearSearchBtn}
-                      onClick={() => setToolSearch('')}
-                    >
-                      ×
-                    </button>
-                  )}
-                </div>
-              )}
+        <div className={styles.availableToolsSection}>
+          <div 
+            className={styles.sectionHeader}
+            onClick={() => setToolsSectionExpanded(!toolsSectionExpanded)}
+          >
+            <div className={styles.sectionTitle}>
+              <span className={styles.expandIcon}>
+                {toolsSectionExpanded ? '▼' : '▶'}
+              </span>
+              <span>🧰 Available Tools</span>
+              <span className={styles.toolCountBadge}>
+                {allAvailableTools.length} tools
+              </span>
             </div>
-
-            {toolsSectionExpanded && (
-              <>
-                <div 
-                  className={styles.toolsGridWrapper}
-                  style={{ maxHeight: TOOLS_GRID_MAX_HEIGHT }}
-                >
-                  <div className={styles.toolsGrid}>
-                    {filteredTools.map(tool => (
-                      <div 
-                        key={tool.id} 
-                        className={`${styles.toolGridCard} ${styles[`source_${tool.sourceType}`]}`}
-                        onClick={() => setSelectedTool(tool)}
-                      >
-                        <div className={styles.toolGridHeader}>
-                          <span className={styles.toolGridIcon}>🔧</span>
-                          <span className={styles.toolGridName}>{tool.name}</span>
-                        </div>
-                        <div className={styles.toolGridDesc}>
-                          {tool.description.length > 60 
-                            ? tool.description.slice(0, 60) + '...' 
-                            : tool.description || 'No description'}
-                        </div>
-                        <div className={styles.toolGridFooter}>
-                          <span className={`${styles.sourceTypeBadge} ${styles[tool.sourceType]}`}>
-                            {tool.sourceType === 'mcp' ? '🔌 MCP' : 
-                             tool.sourceType === 'frontend' ? '⚡ Frontend' : '🌐 Backend'}
-                          </span>
-                          <span className={styles.sourceNameBadge}>{tool.source}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Tool count footer */}
-                {filteredTools.length > 0 && (
-                  <div className={styles.toolsGridFooter}>
-                    <span className={styles.toolCountInfo}>
-                      {toolSearch ? `${filteredTools.length} of ${allAvailableTools.length} tools` : `${allAvailableTools.length} tools available`}
-                    </span>
-                    {filteredTools.length > 6 && (
-                      <span className={styles.scrollHint}>↕ Scroll to see more</span>
-                    )}
-                  </div>
+            {toolsSectionExpanded && allAvailableTools.length > 0 && (
+              <div className={styles.toolSearchWrapper} onClick={e => e.stopPropagation()}>
+                <input
+                  type="text"
+                  className={styles.toolSearchInput}
+                  placeholder="🔍 Search tools..."
+                  value={toolSearch}
+                  onChange={e => setToolSearch(e.target.value)}
+                />
+                {toolSearch && (
+                  <button 
+                    className={styles.clearSearchBtn}
+                    onClick={() => setToolSearch('')}
+                  >
+                    ×
+                  </button>
                 )}
-
-                {filteredTools.length === 0 && toolSearch && (
-                  <div className={styles.noToolsFound}>
-                    No matching tools found
-                  </div>
-                )}
-              </>
+              </div>
             )}
           </div>
-        )}
+
+          {toolsSectionExpanded && (
+            <>
+              {/* Empty state when no tools available */}
+              {allAvailableTools.length === 0 && (
+                <div className={styles.noToolsAvailable}>
+                  <span className={styles.emptyIcon}>🔧</span>
+                  <p>No tools available</p>
+                  <span className={styles.emptyHint}>
+                    Connect an MCP server or add built-in tools to see them here
+                  </span>
+                </div>
+              )}
+
+              {/* Tools grid when tools exist */}
+              {allAvailableTools.length > 0 && (
+                <>
+                  <div 
+                    className={styles.toolsGridWrapper}
+                    style={{ maxHeight: TOOLS_GRID_MAX_HEIGHT }}
+                  >
+                    <div className={styles.toolsGrid}>
+                      {filteredTools.map(tool => (
+                        <div 
+                          key={tool.id} 
+                          className={`${styles.toolGridCard} ${styles[`source_${tool.sourceType}`]}`}
+                          onClick={() => setSelectedTool(tool)}
+                        >
+                          <div className={styles.toolGridHeader}>
+                            <span className={styles.toolGridIcon}>🔧</span>
+                            <span className={styles.toolGridName}>{tool.name}</span>
+                          </div>
+                          <div className={styles.toolGridDesc}>
+                            {tool.description.length > 60 
+                              ? tool.description.slice(0, 60) + '...' 
+                              : tool.description || 'No description'}
+                          </div>
+                          <div className={styles.toolGridFooter}>
+                            <span className={`${styles.sourceTypeBadge} ${styles[tool.sourceType]}`}>
+                              {tool.sourceType === 'mcp' ? '🔌 MCP' : 
+                               tool.sourceType === 'frontend' ? '⚡ Frontend' : '🌐 Backend'}
+                            </span>
+                            <span className={styles.sourceNameBadge}>{tool.source}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Tool count footer */}
+                  {filteredTools.length > 0 && (
+                    <div className={styles.toolsGridFooter}>
+                      <span className={styles.toolCountInfo}>
+                        {toolSearch ? `${filteredTools.length} of ${allAvailableTools.length} tools` : `${allAvailableTools.length} tools available`}
+                      </span>
+                      {filteredTools.length > 6 && (
+                        <span className={styles.scrollHint}>↕ Scroll to see more</span>
+                      )}
+                    </div>
+                  )}
+
+                  {filteredTools.length === 0 && toolSearch && (
+                    <div className={styles.noToolsFound}>
+                      No matching tools found
+                    </div>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </div>
 
         {/* ========== MCP Servers Section ========== */}
         <div className={styles.mcpServersSection}>

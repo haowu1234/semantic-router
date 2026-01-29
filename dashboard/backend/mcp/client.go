@@ -256,6 +256,29 @@ func (c *Client) ListTools(ctx context.Context) ([]ToolDefinition, error) {
 	tools := make([]ToolDefinition, 0, len(result.Tools))
 	for _, t := range result.Tools {
 		inputSchema, _ := json.Marshal(t.InputSchema)
+
+		// 打印工具详细信息，包括完整的 InputSchema
+		log.Printf("[MCP-Client] Tool discovered: name=%s", t.Name)
+		log.Printf("[MCP-Client]   description: %s", t.Description)
+		log.Printf("[MCP-Client]   inputSchema: %s", string(inputSchema))
+
+		// 从序列化后的 JSON 解析，打印 required 字段和 properties
+		var schemaMap map[string]interface{}
+		if err := json.Unmarshal(inputSchema, &schemaMap); err == nil {
+			if required, ok := schemaMap["required"]; ok {
+				log.Printf("[MCP-Client]   required params: %v", required)
+			}
+			if properties, ok := schemaMap["properties"]; ok {
+				if propsMap, ok := properties.(map[string]interface{}); ok {
+					log.Printf("[MCP-Client]   properties count: %d", len(propsMap))
+					for propName, propSchema := range propsMap {
+						propJSON, _ := json.Marshal(propSchema)
+						log.Printf("[MCP-Client]     - %s: %s", propName, string(propJSON))
+					}
+				}
+			}
+		}
+
 		tools = append(tools, ToolDefinition{
 			Name:        t.Name,
 			Description: t.Description,
@@ -269,11 +292,15 @@ func (c *Client) ListTools(ctx context.Context) ([]ToolDefinition, error) {
 
 // CallTool 调用工具
 func (c *Client) CallTool(ctx context.Context, name string, arguments json.RawMessage) (*CallToolResult, error) {
+	log.Printf("[MCP-Client] CallTool() called: tool=%s, server=%s", name, c.config.Name)
+	log.Printf("[MCP-Client] CallTool() arguments: %s", string(arguments))
+
 	c.mu.RLock()
 	mcpClient := c.mcpClient
 	c.mu.RUnlock()
 
 	if mcpClient == nil {
+		log.Printf("[MCP-Client] CallTool() error: not connected")
 		return nil, fmt.Errorf("not connected")
 	}
 
@@ -281,19 +308,24 @@ func (c *Client) CallTool(ctx context.Context, name string, arguments json.RawMe
 	var args map[string]interface{}
 	if len(arguments) > 0 {
 		if err := json.Unmarshal(arguments, &args); err != nil {
+			log.Printf("[MCP-Client] CallTool() error: failed to parse arguments: %v", err)
 			return nil, fmt.Errorf("failed to parse arguments: %w", err)
 		}
 	}
+	log.Printf("[MCP-Client] CallTool() parsed args: %+v", args)
 
 	// 构建请求
 	req := mcp.CallToolRequest{}
 	req.Params.Name = name
 	req.Params.Arguments = args
 
+	log.Printf("[MCP-Client] CallTool() sending request to MCP server...")
 	result, err := mcpClient.CallTool(ctx, req)
 	if err != nil {
+		log.Printf("[MCP-Client] CallTool() MCP server error: %v", err)
 		return nil, err
 	}
+	log.Printf("[MCP-Client] CallTool() success, content items: %d, isError: %v", len(result.Content), result.IsError)
 
 	// 转换结果
 	content := make([]ContentItem, 0, len(result.Content))
