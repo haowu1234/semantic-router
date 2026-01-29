@@ -1,16 +1,16 @@
 /**
  * MCP Configuration Panel Component
- * MCP 服务器与工具配置管理面板
+ * Configuration panel for MCP servers and tools management
  */
 
-import React, { useState, useCallback, useEffect } from 'react'
+import React, { useState, useCallback, useEffect, useMemo } from 'react'
 import { useMCPServers } from '../tools/mcp'
 import type { MCPServerConfig, MCPServerState, MCPTransportType, MCPToolDefinition } from '../tools/mcp'
 import { toolRegistry } from '../tools'
 import type { RegisteredTool } from '../tools'
 import styles from './MCPConfigPanel.module.css'
 
-// 内置工具类型定义
+// Built-in tool type definitions
 interface BuiltInToolParameter {
   type: string
   description?: string
@@ -36,6 +36,25 @@ interface BuiltInTool {
   tags: string[]
 }
 
+// Unified tool type - for Available Tools section
+interface UnifiedTool {
+  id: string
+  name: string
+  description: string
+  source: string           // Source name
+  sourceType: 'mcp' | 'frontend' | 'backend'
+  parameters: {
+    name: string
+    type: string
+    description?: string
+    required: boolean
+  }[]
+  rawTool: MCPToolDefinition | RegisteredTool | BuiltInTool
+}
+
+// Max visible height for tools grid (scrollable)
+const TOOLS_GRID_MAX_HEIGHT = 320
+
 interface MCPConfigPanelProps {
   onClose?: () => void
 }
@@ -58,31 +77,39 @@ export const MCPConfigPanel: React.FC<MCPConfigPanelProps> = ({ onClose }) => {
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [editingServer, setEditingServer] = useState<MCPServerConfig | null>(null)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
-  // 折叠状态：默认已连接的展开，未连接的折叠
+  // Collapse state: connected servers expanded by default, disconnected collapsed
   const [expandedServers, setExpandedServers] = useState<Set<string>>(new Set())
-  // 内置工具展开状态
+  // Built-in tools expand state
   const [builtInExpanded, setBuiltInExpanded] = useState(false)
-  // 后端 tools_db.json 工具数据
+  // Backend tools_db.json tool data
   const [toolsDbTools, setToolsDbTools] = useState<BuiltInTool[]>([])
   const [toolsDbLoading, setToolsDbLoading] = useState(false)
-  // 前端注册的内置工具
+  // Frontend registered built-in tools
   const [registryTools, setRegistryTools] = useState<RegisteredTool[]>([])
 
-  // 初始化折叠状态
+  // ========== Available Tools section states ==========
+  // Tool search
+  const [toolSearch, setToolSearch] = useState('')
+  // Tool detail modal
+  const [selectedTool, setSelectedTool] = useState<UnifiedTool | null>(null)
+  // Available Tools section collapse state
+  const [toolsSectionExpanded, setToolsSectionExpanded] = useState(true)
+
+  // Initialize collapse state
   useEffect(() => {
     const connectedIds = servers
       .filter(s => s.status === 'connected')
       .map(s => s.config.id)
     setExpandedServers(new Set(connectedIds))
-  }, [servers.length]) // 只在服务器数量变化时更新
+  }, [servers.length]) // Only update when server count changes
 
-  // 获取前端注册的内置工具
+  // Get frontend registered built-in tools
   useEffect(() => {
     const tools = toolRegistry.getAll()
     setRegistryTools(tools)
   }, [])
 
-  // 获取后端 tools_db.json 工具（可选）
+  // Get backend tools_db.json tools (optional)
   useEffect(() => {
     const fetchToolsDb = async () => {
       setToolsDbLoading(true)
@@ -101,7 +128,92 @@ export const MCPConfigPanel: React.FC<MCPConfigPanelProps> = ({ onClose }) => {
     fetchToolsDb()
   }, [])
 
-  // 切换服务器展开/折叠
+  // Aggregate all available tools
+  const allAvailableTools = useMemo<UnifiedTool[]>(() => {
+    const result: UnifiedTool[] = []
+
+    // 1. MCP server tools (connected only)
+    servers.filter(s => s.status === 'connected').forEach(server => {
+      server.tools?.forEach(tool => {
+        const schema = tool.inputSchema
+        const properties = (schema?.properties || {}) as Record<string, { type?: string; description?: string }>
+        const required = schema?.required || []
+        
+        result.push({
+          id: `mcp-${server.config.id}-${tool.name}`,
+          name: tool.name,
+          description: tool.description || '',
+          source: server.config.name,
+          sourceType: 'mcp',
+          parameters: Object.entries(properties).map(([name, prop]) => ({
+            name,
+            type: prop.type || 'any',
+            description: prop.description,
+            required: required.includes(name)
+          })),
+          rawTool: tool
+        })
+      })
+    })
+
+    // 2. Frontend built-in tools
+    registryTools.forEach(tool => {
+      const params = tool.definition.function.parameters
+      const properties = (params?.properties || {}) as Record<string, { type?: string; description?: string }>
+      const required = params?.required || []
+      
+      result.push({
+        id: `frontend-${tool.metadata.id}`,
+        name: tool.metadata.displayName,
+        description: tool.definition.function.description,
+        source: 'Built-in',
+        sourceType: 'frontend',
+        parameters: Object.entries(properties).map(([name, prop]) => ({
+          name,
+          type: prop.type || 'any',
+          description: prop.description,
+          required: required.includes(name)
+        })),
+        rawTool: tool
+      })
+    })
+
+    // 3. Backend tools_db tools
+    toolsDbTools.forEach(tool => {
+      const params = tool.tool.function.parameters
+      const properties = params?.properties || {}
+      const required = params?.required || []
+      
+      result.push({
+        id: `backend-${tool.tool.function.name}`,
+        name: tool.tool.function.name,
+        description: tool.tool.function.description,
+        source: 'Semantic Router',
+        sourceType: 'backend',
+        parameters: Object.entries(properties).map(([name, prop]) => ({
+          name,
+          type: prop.type || 'any',
+          description: prop.description,
+          required: required.includes(name)
+        })),
+        rawTool: tool
+      })
+    })
+
+    return result
+  }, [servers, registryTools, toolsDbTools])
+
+  // Search filter
+  const filteredTools = useMemo(() => {
+    if (!toolSearch.trim()) return allAvailableTools
+    const search = toolSearch.toLowerCase()
+    return allAvailableTools.filter(tool => 
+      tool.name.toLowerCase().includes(search) ||
+      tool.description.toLowerCase().includes(search) ||
+      tool.source.toLowerCase().includes(search)
+    )
+  }, [allAvailableTools, toolSearch])
+  // Toggle server expand/collapse
   const toggleServerExpand = useCallback((serverId: string) => {
     setExpandedServers(prev => {
       const next = new Set(prev)
@@ -114,7 +226,7 @@ export const MCPConfigPanel: React.FC<MCPConfigPanelProps> = ({ onClose }) => {
     })
   }, [])
 
-  // 处理连接/断开
+  // Handle connect/disconnect
   const handleToggleConnection = useCallback(async (server: MCPServerState) => {
     setActionLoading(server.config.id)
     try {
@@ -122,7 +234,7 @@ export const MCPConfigPanel: React.FC<MCPConfigPanelProps> = ({ onClose }) => {
         await disconnect(server.config.id)
       } else {
         await connect(server.config.id)
-        // 连接后自动展开
+        // Auto expand after connection
         setExpandedServers(prev => new Set(prev).add(server.config.id))
       }
     } catch (err) {
@@ -132,7 +244,7 @@ export const MCPConfigPanel: React.FC<MCPConfigPanelProps> = ({ onClose }) => {
     }
   }, [connect, disconnect])
 
-  // 处理删除
+  // Handle delete
   const handleDelete = useCallback(async (id: string) => {
     if (!window.confirm('Are you sure you want to delete this MCP server?')) {
       return
@@ -147,7 +259,7 @@ export const MCPConfigPanel: React.FC<MCPConfigPanelProps> = ({ onClose }) => {
     }
   }, [deleteServer])
 
-  // 获取状态图标
+  // Get status icon
   const getStatusIcon = (status: MCPServerState['status']) => {
     switch (status) {
       case 'connected':
@@ -161,7 +273,7 @@ export const MCPConfigPanel: React.FC<MCPConfigPanelProps> = ({ onClose }) => {
     }
   }
 
-  // 获取传输类型标签
+  // Get transport type label
   const getTransportLabel = (transport: MCPTransportType) => {
     switch (transport) {
       case 'stdio':
@@ -173,7 +285,7 @@ export const MCPConfigPanel: React.FC<MCPConfigPanelProps> = ({ onClose }) => {
     }
   }
 
-  // 解析工具参数
+  // Parse tool parameters
   const renderToolParameters = (tool: MCPToolDefinition) => {
     const schema = tool.inputSchema
     if (!schema || schema.type !== 'object') {
@@ -207,7 +319,7 @@ export const MCPConfigPanel: React.FC<MCPConfigPanelProps> = ({ onClose }) => {
     )
   }
 
-  // 渲染内置工具参数
+  // Render built-in tool parameters
   const renderBuiltInToolParameters = (tool: BuiltInTool) => {
     const params = tool.tool.function.parameters
     if (!params || !params.properties) {
@@ -238,7 +350,7 @@ export const MCPConfigPanel: React.FC<MCPConfigPanelProps> = ({ onClose }) => {
     )
   }
 
-  // 渲染前端注册工具的参数
+  // Render frontend registered tool parameters
   const renderRegistryToolParameters = (tool: RegisteredTool) => {
     const params = tool.definition.function.parameters
     if (!params || params.type !== 'object') {
@@ -272,7 +384,7 @@ export const MCPConfigPanel: React.FC<MCPConfigPanelProps> = ({ onClose }) => {
     )
   }
 
-  // 计算统计信息
+  // Calculate statistics
   const connectedCount = servers.filter(s => s.status === 'connected').length
   const mcpToolsCount = tools.length
   const builtInCount = registryTools.length + toolsDbTools.length
@@ -313,235 +425,340 @@ export const MCPConfigPanel: React.FC<MCPConfigPanelProps> = ({ onClose }) => {
       )}
 
       <div className={styles.serverList}>
-        {/* MCP Servers Section */}
-        {servers.length === 0 && registryTools.length === 0 && toolsDbTools.length === 0 ? (
-          <div className={styles.empty}>
-            No MCP servers configured and no built-in tools available.
-            <br />
-            Click "Add MCP Server" to get started.
-          </div>
-        ) : (
-          <>
-            {/* MCP Servers */}
-            {servers.map((server) => {
-              const isExpanded = expandedServers.has(server.config.id)
-              const hasTools = server.status === 'connected' && server.tools && server.tools.length > 0
+        {/* ========== Available Tools Section ========== */}
+        {allAvailableTools.length > 0 && (
+          <div className={styles.availableToolsSection}>
+            <div 
+              className={styles.sectionHeader}
+              onClick={() => setToolsSectionExpanded(!toolsSectionExpanded)}
+            >
+              <div className={styles.sectionTitle}>
+                <span className={styles.expandIcon}>
+                  {toolsSectionExpanded ? '▼' : '▶'}
+                </span>
+                <span>🧰 Available Tools</span>
+                <span className={styles.toolCountBadge}>
+                  {allAvailableTools.length} tools
+                </span>
+              </div>
+              {toolsSectionExpanded && (
+                <div className={styles.toolSearchWrapper} onClick={e => e.stopPropagation()}>
+                  <input
+                    type="text"
+                    className={styles.toolSearchInput}
+                    placeholder="🔍 Search tools..."
+                    value={toolSearch}
+                    onChange={e => setToolSearch(e.target.value)}
+                  />
+                  {toolSearch && (
+                    <button 
+                      className={styles.clearSearchBtn}
+                      onClick={() => setToolSearch('')}
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
 
-              return (
-                <div key={server.config.id} className={styles.serverCard}>
-                  {/* Server Header - Clickable to expand/collapse */}
+            {toolsSectionExpanded && (
+              <>
+                <div 
+                  className={styles.toolsGridWrapper}
+                  style={{ maxHeight: TOOLS_GRID_MAX_HEIGHT }}
+                >
+                  <div className={styles.toolsGrid}>
+                    {filteredTools.map(tool => (
+                      <div 
+                        key={tool.id} 
+                        className={`${styles.toolGridCard} ${styles[`source_${tool.sourceType}`]}`}
+                        onClick={() => setSelectedTool(tool)}
+                      >
+                        <div className={styles.toolGridHeader}>
+                          <span className={styles.toolGridIcon}>🔧</span>
+                          <span className={styles.toolGridName}>{tool.name}</span>
+                        </div>
+                        <div className={styles.toolGridDesc}>
+                          {tool.description.length > 60 
+                            ? tool.description.slice(0, 60) + '...' 
+                            : tool.description || 'No description'}
+                        </div>
+                        <div className={styles.toolGridFooter}>
+                          <span className={`${styles.sourceTypeBadge} ${styles[tool.sourceType]}`}>
+                            {tool.sourceType === 'mcp' ? '🔌 MCP' : 
+                             tool.sourceType === 'frontend' ? '⚡ Frontend' : '🌐 Backend'}
+                          </span>
+                          <span className={styles.sourceNameBadge}>{tool.source}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Tool count footer */}
+                {filteredTools.length > 0 && (
+                  <div className={styles.toolsGridFooter}>
+                    <span className={styles.toolCountInfo}>
+                      {toolSearch ? `${filteredTools.length} of ${allAvailableTools.length} tools` : `${allAvailableTools.length} tools available`}
+                    </span>
+                    {filteredTools.length > 6 && (
+                      <span className={styles.scrollHint}>↕ Scroll to see more</span>
+                    )}
+                  </div>
+                )}
+
+                {filteredTools.length === 0 && toolSearch && (
+                  <div className={styles.noToolsFound}>
+                    No matching tools found
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ========== MCP Servers Section ========== */}
+        <div className={styles.mcpServersSection}>
+          <div className={styles.sectionHeader}>
+            <div className={styles.sectionTitle}>
+              <span>📡 MCP Servers</span>
+              <span className={styles.serverCountBadge}>
+                {connectedCount} / {servers.length} connected
+              </span>
+            </div>
+          </div>
+
+          {/* MCP Servers Section */}
+          {servers.length === 0 && registryTools.length === 0 && toolsDbTools.length === 0 ? (
+            <div className={styles.empty}>
+              No MCP servers configured and no built-in tools available.
+              <br />
+              Click "Add MCP Server" to get started.
+            </div>
+          ) : (
+            <>
+              {/* MCP Servers */}
+              {servers.map((server) => {
+                const isExpanded = expandedServers.has(server.config.id)
+                const hasTools = server.status === 'connected' && server.tools && server.tools.length > 0
+
+                return (
+                  <div key={server.config.id} className={styles.serverCard}>
+                    {/* Server Header - Clickable to expand/collapse */}
+                    <div 
+                      className={styles.serverHeader}
+                      onClick={() => hasTools && toggleServerExpand(server.config.id)}
+                      style={{ cursor: hasTools ? 'pointer' : 'default' }}
+                    >
+                      <div className={styles.serverInfo}>
+                        {hasTools && (
+                          <span className={styles.expandIcon}>
+                            {isExpanded ? '▼' : '▶'}
+                          </span>
+                        )}
+                        {getStatusIcon(server.status)}
+                        <span className={styles.serverName}>{server.config.name}</span>
+                        <span className={styles.transportBadge}>
+                          {getTransportLabel(server.config.transport)}
+                        </span>
+                        <span className={`${styles.statusBadge} ${styles[server.status]}`}>
+                          {server.status}
+                        </span>
+                        {hasTools && (
+                          <span className={styles.toolCount}>
+                            {server.tools!.length} tools
+                          </span>
+                        )}
+                      </div>
+                      <div className={styles.serverActions} onClick={e => e.stopPropagation()}>
+                        <button
+                          className={styles.actionBtn}
+                          onClick={() => handleToggleConnection(server)}
+                          disabled={actionLoading === server.config.id}
+                          title={server.status === 'connected' ? 'Disconnect' : 'Connect'}
+                        >
+                          {actionLoading === server.config.id ? '...' : 
+                            server.status === 'connected' ? '⏹' : '▶'}
+                        </button>
+                        <button
+                          className={styles.actionBtn}
+                          onClick={() => setEditingServer(server.config)}
+                          title="Edit"
+                        >
+                          ⚙
+                        </button>
+                        <button
+                          className={styles.actionBtn}
+                          onClick={() => handleDelete(server.config.id)}
+                          disabled={actionLoading === server.config.id}
+                          title="Delete"
+                        >
+                          🗑
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Server Description */}
+                    {server.config.description && (
+                      <div className={styles.serverDescription}>
+                        {server.config.description}
+                      </div>
+                    )}
+
+                    {/* Server Error */}
+                    {server.error && (
+                      <div className={styles.serverError}>
+                        {server.error}
+                      </div>
+                    )}
+
+                    {/* Disconnected hint */}
+                    {server.status !== 'connected' && !server.error && (
+                      <div className={styles.connectionHint}>
+                        Click ▶ to connect and load tools
+                      </div>
+                    )}
+
+                    {/* Tools List - Collapsible */}
+                    {hasTools && isExpanded && (
+                      <div className={styles.toolsContainer}>
+                        {server.tools!.map((tool) => (
+                          <div key={tool.name} className={styles.toolCard}>
+                            <div className={styles.toolHeader}>
+                              <span className={styles.toolIcon}>🔧</span>
+                              <span className={styles.toolName}>{tool.name}</span>
+                            </div>
+                            {tool.description && (
+                              <div className={styles.toolDescription}>
+                                {tool.description}
+                              </div>
+                            )}
+                            <div className={styles.toolParams}>
+                              <span className={styles.paramsLabel}>Parameters:</span>
+                              {renderToolParameters(tool)}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+
+              {/* Built-in Tools Section - Frontend registered tools */}
+              {registryTools.length > 0 && (
+                <div className={`${styles.serverCard} ${styles.builtInSection}`}>
                   <div 
                     className={styles.serverHeader}
-                    onClick={() => hasTools && toggleServerExpand(server.config.id)}
-                    style={{ cursor: hasTools ? 'pointer' : 'default' }}
+                    onClick={() => setBuiltInExpanded(!builtInExpanded)}
+                    style={{ cursor: 'pointer' }}
                   >
                     <div className={styles.serverInfo}>
-                      {hasTools && (
-                        <span className={styles.expandIcon}>
-                          {isExpanded ? '▼' : '▶'}
-                        </span>
-                      )}
-                      {getStatusIcon(server.status)}
-                      <span className={styles.serverName}>{server.config.name}</span>
-                      <span className={styles.transportBadge}>
-                        {getTransportLabel(server.config.transport)}
+                      <span className={styles.expandIcon}>
+                        {builtInExpanded ? '▼' : '▶'}
                       </span>
-                      <span className={`${styles.statusBadge} ${styles[server.status]}`}>
-                        {server.status}
+                      <span className={styles.statusDot} data-status="connected">●</span>
+                      <span className={styles.serverName}>Built-in Tools</span>
+                      <span className={styles.transportBadge}>Frontend</span>
+                      <span className={`${styles.statusBadge} ${styles.connected}`}>
+                        active
                       </span>
-                      {hasTools && (
-                        <span className={styles.toolCount}>
-                          {server.tools!.length} tools
-                        </span>
-                      )}
-                    </div>
-                    <div className={styles.serverActions} onClick={e => e.stopPropagation()}>
-                      <button
-                        className={styles.actionBtn}
-                        onClick={() => handleToggleConnection(server)}
-                        disabled={actionLoading === server.config.id}
-                        title={server.status === 'connected' ? 'Disconnect' : 'Connect'}
-                      >
-                        {actionLoading === server.config.id ? '...' : 
-                          server.status === 'connected' ? '⏹' : '▶'}
-                      </button>
-                      <button
-                        className={styles.actionBtn}
-                        onClick={() => setEditingServer(server.config)}
-                        title="Edit"
-                      >
-                        ⚙
-                      </button>
-                      <button
-                        className={styles.actionBtn}
-                        onClick={() => handleDelete(server.config.id)}
-                        disabled={actionLoading === server.config.id}
-                        title="Delete"
-                      >
-                        🗑
-                      </button>
+                      <span className={styles.toolCount}>
+                        {registryTools.length} tools
+                      </span>
                     </div>
                   </div>
+                  <div className={styles.serverDescription}>
+                    Executable tools registered in the frontend (web search, open web, etc.)
+                  </div>
 
-                  {/* Server Description */}
-                  {server.config.description && (
-                    <div className={styles.serverDescription}>
-                      {server.config.description}
-                    </div>
-                  )}
-
-                  {/* Server Error */}
-                  {server.error && (
-                    <div className={styles.serverError}>
-                      {server.error}
-                    </div>
-                  )}
-
-                  {/* Disconnected hint */}
-                  {server.status !== 'connected' && !server.error && (
-                    <div className={styles.connectionHint}>
-                      Click ▶ to connect and load tools
-                    </div>
-                  )}
-
-                  {/* Tools List - Collapsible */}
-                  {hasTools && isExpanded && (
+                  {builtInExpanded && (
                     <div className={styles.toolsContainer}>
-                      {server.tools!.map((tool) => (
-                        <div key={tool.name} className={styles.toolCard}>
+                      {registryTools.map((tool) => (
+                        <div key={tool.metadata.id} className={styles.toolCard}>
                           <div className={styles.toolHeader}>
                             <span className={styles.toolIcon}>🔧</span>
-                            <span className={styles.toolName}>{tool.name}</span>
+                            <span className={styles.toolName}>{tool.metadata.displayName}</span>
+                            <span className={styles.categoryBadge}>{tool.metadata.category}</span>
                           </div>
-                          {tool.description && (
-                            <div className={styles.toolDescription}>
-                              {tool.description}
-                            </div>
-                          )}
+                          <div className={styles.toolDescription}>
+                            {tool.definition.function.description}
+                          </div>
                           <div className={styles.toolParams}>
                             <span className={styles.paramsLabel}>Parameters:</span>
-                            {renderToolParameters(tool)}
+                            {renderRegistryToolParameters(tool)}
                           </div>
                         </div>
                       ))}
                     </div>
                   )}
                 </div>
-              )
-            })}
+              )}
 
-            {/* Built-in Tools Section - 前端注册的工具 */}
-            {registryTools.length > 0 && (
-              <div className={`${styles.serverCard} ${styles.builtInSection}`}>
-                <div 
-                  className={styles.serverHeader}
-                  onClick={() => setBuiltInExpanded(!builtInExpanded)}
-                  style={{ cursor: 'pointer' }}
-                >
-                  <div className={styles.serverInfo}>
-                    <span className={styles.expandIcon}>
-                      {builtInExpanded ? '▼' : '▶'}
-                    </span>
-                    <span className={styles.statusDot} data-status="connected">●</span>
-                    <span className={styles.serverName}>Built-in Tools</span>
-                    <span className={styles.transportBadge}>Frontend</span>
-                    <span className={`${styles.statusBadge} ${styles.connected}`}>
-                      active
-                    </span>
-                    <span className={styles.toolCount}>
-                      {registryTools.length} tools
-                    </span>
+              {/* Tools DB Section - Backend tools_db.json tools */}
+              {toolsDbTools.length > 0 && (
+                <div className={`${styles.serverCard} ${styles.toolsDbSection}`}>
+                  <div 
+                    className={styles.serverHeader}
+                    onClick={() => setBuiltInExpanded(!builtInExpanded)}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <div className={styles.serverInfo}>
+                      <span className={styles.expandIcon}>
+                        {builtInExpanded ? '▼' : '▶'}
+                      </span>
+                      <span className={styles.statusDot} data-status="connected">●</span>
+                      <span className={styles.serverName}>Semantic Router Tools</span>
+                      <span className={styles.transportBadge}>Backend</span>
+                      <span className={`${styles.statusBadge} ${styles.connected}`}>
+                        active
+                      </span>
+                      <span className={styles.toolCount}>
+                        {toolsDbTools.length} tools
+                      </span>
+                    </div>
                   </div>
-                </div>
-                <div className={styles.serverDescription}>
-                  Executable tools registered in the frontend (web search, open web, etc.)
-                </div>
-
-                {builtInExpanded && (
-                  <div className={styles.toolsContainer}>
-                    {registryTools.map((tool) => (
-                      <div key={tool.metadata.id} className={styles.toolCard}>
-                        <div className={styles.toolHeader}>
-                          <span className={styles.toolIcon}>🔧</span>
-                          <span className={styles.toolName}>{tool.metadata.displayName}</span>
-                          <span className={styles.categoryBadge}>{tool.metadata.category}</span>
-                        </div>
-                        <div className={styles.toolDescription}>
-                          {tool.definition.function.description}
-                        </div>
-                        <div className={styles.toolParams}>
-                          <span className={styles.paramsLabel}>Parameters:</span>
-                          {renderRegistryToolParameters(tool)}
-                        </div>
-                      </div>
-                    ))}
+                  <div className={styles.serverDescription}>
+                    Tool definitions for semantic routing (from tools_db.json)
                   </div>
-                )}
-              </div>
-            )}
 
-            {/* Tools DB Section - 后端 tools_db.json 工具 */}
-            {toolsDbTools.length > 0 && (
-              <div className={`${styles.serverCard} ${styles.toolsDbSection}`}>
-                <div 
-                  className={styles.serverHeader}
-                  onClick={() => setBuiltInExpanded(!builtInExpanded)}
-                  style={{ cursor: 'pointer' }}
-                >
-                  <div className={styles.serverInfo}>
-                    <span className={styles.expandIcon}>
-                      {builtInExpanded ? '▼' : '▶'}
-                    </span>
-                    <span className={styles.statusDot} data-status="connected">●</span>
-                    <span className={styles.serverName}>Semantic Router Tools</span>
-                    <span className={styles.transportBadge}>Backend</span>
-                    <span className={`${styles.statusBadge} ${styles.connected}`}>
-                      active
-                    </span>
-                    <span className={styles.toolCount}>
-                      {toolsDbTools.length} tools
-                    </span>
-                  </div>
-                </div>
-                <div className={styles.serverDescription}>
-                  Tool definitions for semantic routing (from tools_db.json)
-                </div>
-
-                {builtInExpanded && (
-                  <div className={styles.toolsContainer}>
-                    {toolsDbLoading ? (
-                      <div className={styles.toolsLoading}>Loading tools...</div>
-                    ) : (
-                      toolsDbTools.map((tool) => (
-                        <div key={tool.tool.function.name} className={styles.toolCard}>
-                          <div className={styles.toolHeader}>
-                            <span className={styles.toolIcon}>🔧</span>
-                            <span className={styles.toolName}>{tool.tool.function.name}</span>
-                            <span className={styles.categoryBadge}>{tool.category}</span>
-                          </div>
-                          <div className={styles.toolDescription}>
-                            {tool.tool.function.description}
-                          </div>
-                          {tool.tags && tool.tags.length > 0 && (
-                            <div className={styles.toolTags}>
-                              {tool.tags.map(tag => (
-                                <span key={tag} className={styles.tagBadge}>{tag}</span>
-                              ))}
+                  {builtInExpanded && (
+                    <div className={styles.toolsContainer}>
+                      {toolsDbLoading ? (
+                        <div className={styles.toolsLoading}>Loading tools...</div>
+                      ) : (
+                        toolsDbTools.map((tool) => (
+                          <div key={tool.tool.function.name} className={styles.toolCard}>
+                            <div className={styles.toolHeader}>
+                              <span className={styles.toolIcon}>🔧</span>
+                              <span className={styles.toolName}>{tool.tool.function.name}</span>
+                              <span className={styles.categoryBadge}>{tool.category}</span>
                             </div>
-                          )}
-                          <div className={styles.toolParams}>
-                            <span className={styles.paramsLabel}>Parameters:</span>
-                            {renderBuiltInToolParameters(tool)}
+                            <div className={styles.toolDescription}>
+                              {tool.tool.function.description}
+                            </div>
+                            {tool.tags && tool.tags.length > 0 && (
+                              <div className={styles.toolTags}>
+                                {tool.tags.map(tag => (
+                                  <span key={tag} className={styles.tagBadge}>{tag}</span>
+                                ))}
+                              </div>
+                            )}
+                            <div className={styles.toolParams}>
+                              <span className={styles.paramsLabel}>Parameters:</span>
+                              {renderBuiltInToolParameters(tool)}
+                            </div>
                           </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-          </>
-        )}
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </div>
 
       <div className={styles.footer}>
@@ -576,11 +793,121 @@ export const MCPConfigPanel: React.FC<MCPConfigPanelProps> = ({ onClose }) => {
           }}
         />
       )}
+
+      {/* Tool Detail Modal */}
+      {selectedTool && (
+        <ToolDetailModal
+          tool={selectedTool}
+          onClose={() => setSelectedTool(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+// ========== Tool Detail Modal Component ==========
+interface ToolDetailModalProps {
+  tool: UnifiedTool
+  onClose: () => void
+}
+
+const ToolDetailModal: React.FC<ToolDetailModalProps> = ({ tool, onClose }) => {
+  return (
+    <div className={styles.dialogOverlay} onClick={onClose}>
+      <div className={styles.toolDetailDialog} onClick={e => e.stopPropagation()}>
+        <div className={styles.dialogHeader}>
+          <div className={styles.toolDetailTitle}>
+            <span className={styles.toolDetailIcon}>🔧</span>
+            <h3>{tool.name}</h3>
+            <span className={`${styles.sourceTypeBadge} ${styles[tool.sourceType]}`}>
+              {tool.sourceType === 'mcp' ? '🔌 MCP' : 
+               tool.sourceType === 'frontend' ? '⚡ Frontend' : '🌐 Backend'}
+            </span>
+          </div>
+          <button className={styles.closeBtn} onClick={onClose}>×</button>
+        </div>
+
+        <div className={styles.toolDetailContent}>
+          {/* Source info */}
+          <div className={styles.toolDetailSource}>
+            <span className={styles.detailLabel}>Source:</span>
+            <span className={styles.detailValue}>{tool.source}</span>
+          </div>
+
+          {/* Description */}
+          <div className={styles.toolDetailDescription}>
+            <span className={styles.detailLabel}>Description:</span>
+            <p>{tool.description || 'No description'}</p>
+          </div>
+
+          {/* Parameters list */}
+          <div className={styles.toolDetailParams}>
+            <span className={styles.detailLabel}>
+              Parameters ({tool.parameters.length}):
+            </span>
+            {tool.parameters.length === 0 ? (
+              <p className={styles.noParamsHint}>This tool requires no parameters</p>
+            ) : (
+              <div className={styles.paramDetailList}>
+                {tool.parameters.map(param => (
+                  <div key={param.name} className={styles.paramDetailItem}>
+                    <div className={styles.paramDetailHeader}>
+                      <span className={styles.paramDetailName}>{param.name}</span>
+                      <span className={styles.paramDetailType}>({param.type})</span>
+                      {param.required && (
+                        <span className={styles.paramDetailRequired}>Required</span>
+                      )}
+                    </div>
+                    {param.description && (
+                      <div className={styles.paramDetailDesc}>
+                        {param.description}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className={styles.dialogFooter}>
+          <button className={styles.cancelBtn} onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
 
 // ========== Server Dialog Component ==========
+/**
+ * Parse headers string to object
+ * Format: "Header-Name: value" (one per line)
+ */
+function parseHeaders(headersStr: string): Record<string, string> | undefined {
+  if (!headersStr.trim()) return undefined
+  
+  const headers: Record<string, string> = {}
+  const lines = headersStr.split('\n')
+  
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    
+    const colonIndex = trimmed.indexOf(':')
+    if (colonIndex === -1) continue
+    
+    const key = trimmed.slice(0, colonIndex).trim()
+    const value = trimmed.slice(colonIndex + 1).trim()
+    
+    if (key && value) {
+      headers[key] = value
+    }
+  }
+  
+  return Object.keys(headers).length > 0 ? headers : undefined
+}
 
 interface MCPServerDialogProps {
   server: MCPServerConfig | null
@@ -606,6 +933,12 @@ const MCPServerDialog: React.FC<MCPServerDialogProps> = ({
   
   // HTTP config
   const [url, setUrl] = useState(server?.connection?.url || '')
+  // Headers for authentication (key:value per line)
+  const [headers, setHeaders] = useState(() => {
+    const h = server?.connection?.headers
+    if (!h || Object.keys(h).length === 0) return ''
+    return Object.entries(h).map(([k, v]) => `${k}: ${v}`).join('\n')
+  })
   
   // Options
   const [timeout, setTimeout] = useState(server?.options?.timeout?.toString() || '30000')
@@ -630,6 +963,7 @@ const MCPServerDialog: React.FC<MCPServerDialogProps> = ({
             }
           : {
               url,
+              headers: parseHeaders(headers),
             },
         options: {
           timeout: parseInt(timeout) || 30000,
@@ -656,7 +990,7 @@ const MCPServerDialog: React.FC<MCPServerDialogProps> = ({
         enabled,
         connection: transport === 'stdio'
           ? { command, args: args.split('\n').filter(a => a.trim()) }
-          : { url },
+          : { url, headers: parseHeaders(headers) },
         options: { timeout: parseInt(timeout) || 30000 },
       }
       const result = await onTest(config)
@@ -747,15 +1081,27 @@ const MCPServerDialog: React.FC<MCPServerDialogProps> = ({
               </div>
             </>
           ) : (
-            <div className={styles.formGroup}>
-              <label>URL *</label>
-              <input
-                type="text"
-                value={url}
-                onChange={e => setUrl(e.target.value)}
-                placeholder="https://api.example.com/mcp"
-              />
-            </div>
+            <>
+              <div className={styles.formGroup}>
+                <label>URL *</label>
+                <input
+                  type="text"
+                  value={url}
+                  onChange={e => setUrl(e.target.value)}
+                  placeholder="https://api.example.com/mcp"
+                />
+              </div>
+              <div className={styles.formGroup}>
+                <label>Headers (for authentication, one per line)</label>
+                <textarea
+                  value={headers}
+                  onChange={e => setHeaders(e.target.value)}
+                  placeholder={"Authorization: Bearer your-token\nX-API-Key: your-api-key"}
+                  rows={3}
+                />
+                <small className={styles.fieldHint}>Format: Header-Name: value (one per line)</small>
+              </div>
+            </>
           )}
 
           <div className={styles.formGroup}>
