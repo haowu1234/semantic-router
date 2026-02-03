@@ -169,18 +169,88 @@ class ConcurrentAlgorithmConfig(BaseModel):
     on_error: Optional[str] = "skip"
 
 
+class RLDrivenAlgorithmConfig(BaseModel):
+    """Configuration for RL-driven model selection algorithm.
+
+    Based on Router-R1 (arXiv:2506.09033) - RL multi-round routing with reward structure.
+    Uses Thompson Sampling or epsilon-greedy for exploration/exploitation balance.
+    """
+
+    # Use Thompson Sampling for exploration/exploitation balance
+    # When false, uses epsilon-greedy with exploration_rate as epsilon
+    use_thompson_sampling: Optional[bool] = True
+
+    # Initial exploration rate (higher = more exploration)
+    # Range: 0.0-1.0, default: 0.3
+    exploration_rate: Optional[float] = 0.3
+
+    # Exploration decay reduces exploration over time (per 100 selections)
+    # Range: 0.0-1.0, default: 0.99 (1% decay per 100 selections)
+    exploration_decay: Optional[float] = 0.99
+
+    # Minimum exploration rate to maintain
+    # Range: 0.0-1.0, default: 0.05
+    min_exploration: Optional[float] = 0.05
+
+    # Enable per-user preference tracking
+    enable_personalization: Optional[bool] = True
+
+    # Blend between global and user-specific preferences
+    # Range: 0.0-1.0, where 1.0 = fully personalized, 0.0 = fully global
+    personalization_blend: Optional[float] = 0.7
+
+    # Weight for within-session feedback (higher = more recent session influence)
+    session_context_weight: Optional[float] = 0.3
+
+    # Weight for auto-detected feedback signals
+    # Range: 0.0-1.0, default: 0.5 (implicit feedback counts half as much)
+    implicit_feedback_weight: Optional[float] = 0.5
+
+    # Enable cost-aware exploration (prefer cheaper models for exploration)
+    cost_awareness: Optional[bool] = True
+
+    # Cost influence when cost_awareness is enabled
+    cost_weight: Optional[float] = 0.2
+
+    # Enable Router-R1 multi-round routing
+    # When enabled, the router may query multiple models and aggregate responses
+    enable_multi_round_aggregation: Optional[bool] = False
+
+    # Maximum number of models to query in multi-round mode
+    max_aggregation_rounds: Optional[int] = 3
+
+    # File path for persisting RL state (optional)
+    storage_path: Optional[str] = None
+
+    # Interval for automatic saves (default: 30s)
+    auto_save_interval: Optional[str] = None
+
+    # Router-R1 Reward Configuration (arXiv:2506.09033)
+
+    # Enable Router-R1 style reward computation
+    use_router_r1_rewards: Optional[bool] = False
+
+    # Performance-cost tradeoff in reward: R = R_format + (1-α)*R_outcome + α*R_cost
+    # Range: 0.0-1.0, where 0.0 = pure outcome, 1.0 = pure cost
+    cost_reward_alpha: Optional[float] = 0.3
+
+    # Penalty for incorrect response format
+    format_reward_penalty: Optional[float] = -1.0
+
+
 class AlgorithmConfig(BaseModel):
     """Algorithm configuration for multi-model decisions.
 
     Specifies how multiple models in a decision should be orchestrated.
     """
 
-    # Algorithm type: "sequential", "confidence", "concurrent"
+    # Algorithm type: "sequential", "confidence", "concurrent", "rl_driven"
     type: str
 
     # Algorithm-specific configurations (only one should be set based on type)
     confidence: Optional[ConfidenceAlgorithmConfig] = None
     concurrent: Optional[ConcurrentAlgorithmConfig] = None
+    rl_driven: Optional[RLDrivenAlgorithmConfig] = None
 
 
 class PluginType(str, Enum):
@@ -386,19 +456,6 @@ class Providers(BaseModel):
     external_models: Optional[List[ExternalModel]] = []
 
 
-class LooperConfig(BaseModel):
-    """Looper configuration for multi-model orchestration.
-
-    The looper handles multi-model decisions with algorithms like confidence routing.
-    It makes HTTP calls through Envoy to execute model calls sequentially or concurrently.
-    """
-
-    enabled: Optional[bool] = True  # Enable/disable looper
-    endpoint: Optional[str] = None  # OpenAI-compatible endpoint (e.g., "http://localhost:8888/v1/chat/completions")
-    timeout_seconds: Optional[int] = 120  # Timeout for each model call
-    headers: Optional[Dict[str, str]] = {}  # Optional headers (e.g., Authorization)
-
-
 class UserConfig(BaseModel):
     """Complete user configuration."""
 
@@ -407,7 +464,6 @@ class UserConfig(BaseModel):
     signals: Optional[Signals] = None
     decisions: List[Decision]
     providers: Providers
-    looper: Optional[LooperConfig] = None  # Optional looper configuration
 
     class Config:
         populate_by_name = True

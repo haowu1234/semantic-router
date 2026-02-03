@@ -67,6 +67,61 @@ func NewRLDrivenLooper(cfg *config.LooperConfig) *RLDrivenLooper {
 	}
 }
 
+// getOrCreateSelector returns an RLDrivenSelector configured from the request's algorithm config
+// If the request has decision-level rl_driven config, create a new selector with those settings
+// Otherwise, use the default global selector
+func (l *RLDrivenLooper) getOrCreateSelector(req *Request) *selection.RLDrivenSelector {
+	// Check if request has decision-level RL config
+	if req.Algorithm != nil && req.Algorithm.RLDriven != nil {
+		cfg := req.Algorithm.RLDriven
+		logging.Infof("[RLDrivenLooper] Using decision-level RL config: Thompson=%v, MultiRound=%v, MaxRounds=%d",
+			cfg.UseThompsonSampling, cfg.EnableMultiRoundAggregation, cfg.MaxAggregationRounds)
+
+		// Convert config.RLDrivenSelectionConfig to selection.RLDrivenConfig
+		rlCfg := &selection.RLDrivenConfig{
+			UseThompsonSampling:         cfg.UseThompsonSampling,
+			ExplorationRate:             cfg.ExplorationRate,
+			ExplorationDecay:            cfg.ExplorationDecay,
+			MinExploration:              cfg.MinExploration,
+			EnablePersonalization:       cfg.EnablePersonalization,
+			PersonalizationBlend:        cfg.PersonalizationBlend,
+			SessionContextWeight:        cfg.SessionContextWeight,
+			ImplicitFeedbackWeight:      cfg.ImplicitFeedbackWeight,
+			CostAwareness:               cfg.CostAwareness,
+			CostWeight:                  cfg.CostWeight,
+			EnableMultiRoundAggregation: cfg.EnableMultiRoundAggregation,
+			MaxAggregationRounds:        cfg.MaxAggregationRounds,
+			StoragePath:                 cfg.StoragePath,
+			AutoSaveInterval:            cfg.AutoSaveInterval,
+			UseRouterR1Rewards:          cfg.UseRouterR1Rewards,
+			CostRewardAlpha:             cfg.CostRewardAlpha,
+			FormatRewardPenalty:         cfg.FormatRewardPenalty,
+		}
+
+		// Apply defaults for zero values
+		if rlCfg.ExplorationRate == 0 {
+			rlCfg.ExplorationRate = 0.3
+		}
+		if rlCfg.ExplorationDecay == 0 {
+			rlCfg.ExplorationDecay = 0.99
+		}
+		if rlCfg.MinExploration == 0 {
+			rlCfg.MinExploration = 0.05
+		}
+		if rlCfg.PersonalizationBlend == 0 {
+			rlCfg.PersonalizationBlend = 0.7
+		}
+		if rlCfg.MaxAggregationRounds == 0 {
+			rlCfg.MaxAggregationRounds = 3
+		}
+
+		return selection.NewRLDrivenSelector(rlCfg)
+	}
+
+	// Use the global selector
+	return l.selector
+}
+
 // Execute implements the RL-driven multi-round routing algorithm.
 // It uses Thompson Sampling to select models and aggregates their responses.
 func (l *RLDrivenLooper) Execute(ctx context.Context, req *Request) (*Response, error) {
@@ -77,11 +132,14 @@ func (l *RLDrivenLooper) Execute(ctx context.Context, req *Request) (*Response, 
 	logging.Infof("[RLDrivenLooper] Starting multi-round execution with %d candidate models, streaming=%v",
 		len(req.ModelRefs), req.IsStreaming)
 
+	// Get or create selector based on decision-level config
+	selector := l.getOrCreateSelector(req)
+
 	// Build selection context from request
 	selCtx := l.buildSelectionContext(req)
 
 	// Use SelectMultiRound to determine which models to call
-	multiRoundResult, err := l.selector.SelectMultiRound(ctx, selCtx)
+	multiRoundResult, err := selector.SelectMultiRound(ctx, selCtx)
 	if err != nil {
 		logging.Warnf("[RLDrivenLooper] SelectMultiRound failed, falling back to all models: %v", err)
 		// Fallback: use all models if multi-round selection fails
@@ -153,7 +211,7 @@ func (l *RLDrivenLooper) Execute(ctx context.Context, req *Request) (*Response, 
 	}
 
 	// Use the selector's AggregateResponses to combine results
-	aggregatedContent, bestModel, err := l.selector.AggregateResponses(responses, scores)
+	aggregatedContent, bestModel, err := selector.AggregateResponses(responses, scores)
 	if err != nil {
 		logging.Warnf("[RLDrivenLooper] AggregateResponses failed, using first response: %v", err)
 		// Fallback: use first response

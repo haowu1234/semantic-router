@@ -486,14 +486,6 @@ def merge_configs(user_config: UserConfig, defaults: Dict[str, Any]) -> Dict[str
     log.info(f"  Added {len(user_config.providers.models)} models")
     log.info(f"  Added {len(provider_config['vllm_endpoints'])} endpoints")
 
-    # Merge looper configuration from user config (if provided)
-    if user_config.looper:
-        looper_config = merged.get("looper", {})
-        user_looper = user_config.looper.model_dump(exclude_none=True)
-        looper_config.update(user_looper)
-        merged["looper"] = looper_config
-        log.info(f"  Merged looper configuration from user config")
-
     log.info("✓ Configuration merged successfully")
 
     return merged

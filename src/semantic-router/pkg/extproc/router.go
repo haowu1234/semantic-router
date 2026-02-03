@@ -214,6 +214,7 @@ func NewOpenAIRouter(configPath string) (*OpenAIRouter, error) {
 	// Per-decision config takes precedence over global config
 	var eloFromDecision *config.EloSelectionConfig
 	var routerDCFromDecision *config.RouterDCSelectionConfig
+	var rlDrivenFromDecision *config.RLDrivenSelectionConfig
 	for _, decision := range cfg.IntelligentRouting.Decisions {
 		if decision.Algorithm != nil {
 			if decision.Algorithm.Type == "elo" && decision.Algorithm.Elo != nil && eloFromDecision == nil {
@@ -221,6 +222,9 @@ func NewOpenAIRouter(configPath string) (*OpenAIRouter, error) {
 			}
 			if decision.Algorithm.Type == "router_dc" && decision.Algorithm.RouterDC != nil && routerDCFromDecision == nil {
 				routerDCFromDecision = decision.Algorithm.RouterDC
+			}
+			if decision.Algorithm.Type == "rl_driven" && decision.Algorithm.RLDriven != nil && rlDrivenFromDecision == nil {
+				rlDrivenFromDecision = decision.Algorithm.RLDriven
 			}
 		}
 	}
@@ -294,6 +298,34 @@ func NewOpenAIRouter(configPath string) (*OpenAIRouter, error) {
 		CostWeight:          hybridCfg.CostWeight,
 		QualityGapThreshold: hybridCfg.QualityGapThreshold,
 		NormalizeScores:     hybridCfg.NormalizeScores,
+	}
+
+	// Build RLDriven config: per-decision takes precedence
+	modelSelectionCfg.RLDriven = selection.DefaultRLDrivenConfig()
+	if rlDrivenFromDecision != nil {
+		modelSelectionCfg.RLDriven = &selection.RLDrivenConfig{
+			UseThompsonSampling:         rlDrivenFromDecision.UseThompsonSampling,
+			ExplorationRate:             rlDrivenFromDecision.ExplorationRate,
+			ExplorationDecay:            rlDrivenFromDecision.ExplorationDecay,
+			MinExploration:              rlDrivenFromDecision.MinExploration,
+			EnablePersonalization:       rlDrivenFromDecision.EnablePersonalization,
+			PersonalizationBlend:        rlDrivenFromDecision.PersonalizationBlend,
+			SessionContextWeight:        rlDrivenFromDecision.SessionContextWeight,
+			ImplicitFeedbackWeight:      rlDrivenFromDecision.ImplicitFeedbackWeight,
+			CostAwareness:               rlDrivenFromDecision.CostAwareness,
+			CostWeight:                  rlDrivenFromDecision.CostWeight,
+			EnableMultiRoundAggregation: rlDrivenFromDecision.EnableMultiRoundAggregation,
+			MaxAggregationRounds:        rlDrivenFromDecision.MaxAggregationRounds,
+			StoragePath:                 rlDrivenFromDecision.StoragePath,
+			AutoSaveInterval:            rlDrivenFromDecision.AutoSaveInterval,
+			UseRouterR1Rewards:          rlDrivenFromDecision.UseRouterR1Rewards,
+			CostRewardAlpha:             rlDrivenFromDecision.CostRewardAlpha,
+			FormatRewardPenalty:         rlDrivenFromDecision.FormatRewardPenalty,
+		}
+		logging.Infof("[Router] Using per-decision RLDriven config: Thompson=%v, MultiRound=%v, MaxRounds=%d",
+			rlDrivenFromDecision.UseThompsonSampling,
+			rlDrivenFromDecision.EnableMultiRoundAggregation,
+			rlDrivenFromDecision.MaxAggregationRounds)
 	}
 
 	// Create selection factory and initialize all selectors

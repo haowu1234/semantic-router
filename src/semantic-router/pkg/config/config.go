@@ -1321,11 +1321,76 @@ type AlgorithmConfig struct {
 	RouterDC *RouterDCSelectionConfig `yaml:"router_dc,omitempty"`
 	AutoMix  *AutoMixSelectionConfig  `yaml:"automix,omitempty"`
 	Hybrid   *HybridSelectionConfig   `yaml:"hybrid,omitempty"`
+	RLDriven *RLDrivenSelectionConfig `yaml:"rl_driven,omitempty"`
 
 	// OnError defines behavior when algorithm fails: "skip" or "fail"
 	// - "skip": Skip and use fallback (default)
 	// - "fail": Return error immediately
 	OnError string `yaml:"on_error,omitempty"`
+}
+
+// RLDrivenSelectionConfig configures the RL-driven model selector
+// Based on Router-R1 (arXiv:2506.09033) - RL multi-round routing with reward structure
+type RLDrivenSelectionConfig struct {
+	// UseThompsonSampling enables Thompson Sampling for exploration/exploitation
+	// When false, uses epsilon-greedy with ExplorationRate as epsilon
+	UseThompsonSampling bool `yaml:"use_thompson_sampling,omitempty"`
+
+	// ExplorationRate controls initial exploration (higher = more exploration)
+	// Range: 0.0-1.0, default: 0.3
+	ExplorationRate float64 `yaml:"exploration_rate,omitempty"`
+
+	// ExplorationDecay reduces exploration over time (per 100 selections)
+	// Range: 0.0-1.0, default: 0.99 (1% decay per 100 selections)
+	ExplorationDecay float64 `yaml:"exploration_decay,omitempty"`
+
+	// MinExploration is the minimum exploration rate to maintain
+	// Range: 0.0-1.0, default: 0.05
+	MinExploration float64 `yaml:"min_exploration,omitempty"`
+
+	// EnablePersonalization enables per-user preference tracking
+	EnablePersonalization bool `yaml:"enable_personalization,omitempty"`
+
+	// PersonalizationBlend controls blend between global and user-specific preferences
+	// Range: 0.0-1.0, where 1.0 = fully personalized, 0.0 = fully global
+	PersonalizationBlend float64 `yaml:"personalization_blend,omitempty"`
+
+	// SessionContextWeight controls influence of within-session feedback
+	SessionContextWeight float64 `yaml:"session_context_weight,omitempty"`
+
+	// ImplicitFeedbackWeight controls weight of auto-detected feedback signals
+	// Range: 0.0-1.0, default: 0.5
+	ImplicitFeedbackWeight float64 `yaml:"implicit_feedback_weight,omitempty"`
+
+	// CostAwareness enables cost-aware exploration
+	CostAwareness bool `yaml:"cost_awareness,omitempty"`
+
+	// CostWeight controls cost influence when CostAwareness is enabled
+	CostWeight float64 `yaml:"cost_weight,omitempty"`
+
+	// EnableMultiRoundAggregation enables Router-R1 multi-round routing
+	EnableMultiRoundAggregation bool `yaml:"enable_multi_round_aggregation,omitempty"`
+
+	// MaxAggregationRounds is the maximum number of models to query in multi-round mode
+	MaxAggregationRounds int `yaml:"max_aggregation_rounds,omitempty"`
+
+	// StoragePath is the file path for persisting RL state
+	StoragePath string `yaml:"storage_path,omitempty"`
+
+	// AutoSaveInterval is the interval for automatic saves (e.g., "30s", "5m")
+	AutoSaveInterval string `yaml:"auto_save_interval,omitempty"`
+
+	// Router-R1 Reward Configuration
+
+	// UseRouterR1Rewards enables Router-R1 style reward computation
+	UseRouterR1Rewards bool `yaml:"use_router_r1_rewards,omitempty"`
+
+	// CostRewardAlpha controls performance-cost tradeoff in reward
+	// R = R_format + (1-α)*R_outcome + α*R_cost
+	CostRewardAlpha float64 `yaml:"cost_reward_alpha,omitempty"`
+
+	// FormatRewardPenalty is the penalty for incorrect response format
+	FormatRewardPenalty float64 `yaml:"format_reward_penalty,omitempty"`
 }
 
 // ConfidenceAlgorithmConfig configures the confidence algorithm
