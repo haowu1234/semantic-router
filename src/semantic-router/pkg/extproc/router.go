@@ -215,16 +215,27 @@ func NewOpenAIRouter(configPath string) (*OpenAIRouter, error) {
 	var eloFromDecision *config.EloSelectionConfig
 	var routerDCFromDecision *config.RouterDCSelectionConfig
 	var rlDrivenFromDecision *config.RLDrivenSelectionConfig
-	for _, decision := range cfg.IntelligentRouting.Decisions {
+	logging.Infof("[Router] Scanning %d decisions for algorithm configs...", len(cfg.IntelligentRouting.Decisions))
+	for i, decision := range cfg.IntelligentRouting.Decisions {
+		logging.Infof("[Router] Decision[%d] name=%s, Algorithm=%v", i, decision.Name, decision.Algorithm != nil)
 		if decision.Algorithm != nil {
+			logging.Infof("[Router] Decision[%d] Algorithm.Type=%s, RLDriven=%v",
+				i, decision.Algorithm.Type, decision.Algorithm.RLDriven != nil)
 			if decision.Algorithm.Type == "elo" && decision.Algorithm.Elo != nil && eloFromDecision == nil {
 				eloFromDecision = decision.Algorithm.Elo
+				logging.Infof("[Router] Found elo config from decision[%d]: %s", i, decision.Name)
 			}
 			if decision.Algorithm.Type == "router_dc" && decision.Algorithm.RouterDC != nil && routerDCFromDecision == nil {
 				routerDCFromDecision = decision.Algorithm.RouterDC
+				logging.Infof("[Router] Found router_dc config from decision[%d]: %s", i, decision.Name)
 			}
 			if decision.Algorithm.Type == "rl_driven" && decision.Algorithm.RLDriven != nil && rlDrivenFromDecision == nil {
 				rlDrivenFromDecision = decision.Algorithm.RLDriven
+				logging.Infof("[Router] Found rl_driven config from decision[%d]: %s, MultiRound=%v, MaxRounds=%d, Thompson=%v",
+					i, decision.Name,
+					rlDrivenFromDecision.EnableMultiRoundAggregation,
+					rlDrivenFromDecision.MaxAggregationRounds,
+					rlDrivenFromDecision.UseThompsonSampling)
 			}
 		}
 	}
@@ -302,6 +313,10 @@ func NewOpenAIRouter(configPath string) (*OpenAIRouter, error) {
 
 	// Build RLDriven config: per-decision takes precedence
 	modelSelectionCfg.RLDriven = selection.DefaultRLDrivenConfig()
+	logging.Infof("[Router] Default RLDriven config: MultiRound=%v, MaxRounds=%d, Thompson=%v",
+		modelSelectionCfg.RLDriven.EnableMultiRoundAggregation,
+		modelSelectionCfg.RLDriven.MaxAggregationRounds,
+		modelSelectionCfg.RLDriven.UseThompsonSampling)
 	if rlDrivenFromDecision != nil {
 		modelSelectionCfg.RLDriven = &selection.RLDrivenConfig{
 			UseThompsonSampling:         rlDrivenFromDecision.UseThompsonSampling,
@@ -322,10 +337,13 @@ func NewOpenAIRouter(configPath string) (*OpenAIRouter, error) {
 			CostRewardAlpha:             rlDrivenFromDecision.CostRewardAlpha,
 			FormatRewardPenalty:         rlDrivenFromDecision.FormatRewardPenalty,
 		}
-		logging.Infof("[Router] Using per-decision RLDriven config: Thompson=%v, MultiRound=%v, MaxRounds=%d",
+		logging.Infof("[Router] Applied per-decision RLDriven config: Thompson=%v, MultiRound=%v, MaxRounds=%d, Personalization=%v",
 			rlDrivenFromDecision.UseThompsonSampling,
 			rlDrivenFromDecision.EnableMultiRoundAggregation,
-			rlDrivenFromDecision.MaxAggregationRounds)
+			rlDrivenFromDecision.MaxAggregationRounds,
+			rlDrivenFromDecision.EnablePersonalization)
+	} else {
+		logging.Warnf("[Router] No per-decision RLDriven config found, using defaults (MultiRound=false)")
 	}
 
 	// Create selection factory and initialize all selectors

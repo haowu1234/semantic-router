@@ -46,10 +46,17 @@ type RLDrivenLooper struct {
 func NewRLDrivenLooper(cfg *config.LooperConfig) *RLDrivenLooper {
 	// Get the RL-driven selector from the global registry
 	var rlSelector *selection.RLDrivenSelector
-	if s, ok := selection.GlobalRegistry.Get(selection.MethodRLDriven); ok {
-		if typed, ok := s.(*selection.RLDrivenSelector); ok {
-			rlSelector = typed
+	logging.Infof("[RLDrivenLooper] Creating looper, checking GlobalRegistry...")
+	if selection.GlobalRegistry != nil {
+		if s, ok := selection.GlobalRegistry.Get(selection.MethodRLDriven); ok {
+			if typed, ok := s.(*selection.RLDrivenSelector); ok {
+				rlSelector = typed
+				logging.Infof("[RLDrivenLooper] Got RLDrivenSelector from GlobalRegistry: MultiRound=%v",
+					rlSelector.IsMultiRoundEnabled())
+			}
 		}
+	} else {
+		logging.Warnf("[RLDrivenLooper] GlobalRegistry is nil!")
 	}
 
 	// If not registered, create a new one with default config
@@ -57,7 +64,7 @@ func NewRLDrivenLooper(cfg *config.LooperConfig) *RLDrivenLooper {
 		rlCfg := selection.DefaultRLDrivenConfig()
 		rlCfg.EnableMultiRoundAggregation = true
 		rlSelector = selection.NewRLDrivenSelector(rlCfg)
-		logging.Infof("[RLDrivenLooper] Created new RLDrivenSelector with multi-round enabled")
+		logging.Warnf("[RLDrivenLooper] Created new RLDrivenSelector with multi-round enabled (fallback, not from config)")
 	}
 
 	return &RLDrivenLooper{

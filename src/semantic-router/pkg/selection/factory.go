@@ -232,12 +232,19 @@ func (f *Factory) CreateAll() *Registry {
 	rlDrivenCfg := f.cfg.RLDriven
 	if rlDrivenCfg == nil {
 		rlDrivenCfg = DefaultRLDrivenConfig()
+		logging.Warnf("[SelectionFactory] RLDriven config is nil, using defaults: MultiRound=%v, MaxRounds=%d",
+			rlDrivenCfg.EnableMultiRoundAggregation, rlDrivenCfg.MaxAggregationRounds)
+	} else {
+		logging.Infof("[SelectionFactory] Using provided RLDriven config: MultiRound=%v, MaxRounds=%d, Thompson=%v, Personalization=%v",
+			rlDrivenCfg.EnableMultiRoundAggregation, rlDrivenCfg.MaxAggregationRounds,
+			rlDrivenCfg.UseThompsonSampling, rlDrivenCfg.EnablePersonalization)
 	}
 	rlDrivenSelector := NewRLDrivenSelector(rlDrivenCfg)
 	if f.modelConfig != nil {
 		rlDrivenSelector.InitializeFromConfig(f.modelConfig, f.categories)
 	}
 	registry.Register(MethodRLDriven, rlDrivenSelector)
+	logging.Infof("[SelectionFactory] Registered RLDrivenSelector: MultiRound=%v", rlDrivenCfg.EnableMultiRoundAggregation)
 
 	// Create GMTRouter selector
 	gmtRouterCfg := f.cfg.GMTRouter

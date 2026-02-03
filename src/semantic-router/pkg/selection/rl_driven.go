@@ -403,6 +403,19 @@ func (r *RLDrivenSelector) Method() SelectionMethod {
 	return MethodRLDriven
 }
 
+// IsMultiRoundEnabled returns whether multi-round aggregation is enabled
+func (r *RLDrivenSelector) IsMultiRoundEnabled() bool {
+	if r.config == nil {
+		return false
+	}
+	return r.config.EnableMultiRoundAggregation
+}
+
+// GetConfig returns the current configuration (for debugging)
+func (r *RLDrivenSelector) GetConfig() *RLDrivenConfig {
+	return r.config
+}
+
 // SetModelCost sets the cost for a model (for cost-aware exploration)
 func (r *RLDrivenSelector) SetModelCost(model string, costPer1M float64) {
 	r.costMu.Lock()
