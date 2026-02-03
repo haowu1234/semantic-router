@@ -84,8 +84,20 @@ def generate_router_config(
     else:
         log.info(f"  Using embedded defaults")
 
+    # Log looper config from defaults
+    if "looper" in defaults:
+        log.info(f"  ✓ Looper from defaults: endpoint={defaults['looper'].get('endpoint', 'N/A')}")
+    else:
+        log.warning(f"  ⚠ Looper config NOT found in defaults")
+
     # Merge configs
     merged = merge_configs(user_config, defaults)
+
+    # Log final looper config
+    if "looper" in merged:
+        log.info(f"  ✓ Final looper: endpoint={merged['looper'].get('endpoint', 'N/A')}")
+    else:
+        log.warning(f"  ⚠ Looper config missing in final config!")
 
     # Validate merged config
     errors = validate_merged_config(merged)

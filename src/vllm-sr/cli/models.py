@@ -386,6 +386,19 @@ class Providers(BaseModel):
     external_models: Optional[List[ExternalModel]] = []
 
 
+class LooperConfig(BaseModel):
+    """Looper configuration for multi-model orchestration.
+
+    The looper handles multi-model decisions with algorithms like confidence routing.
+    It makes HTTP calls through Envoy to execute model calls sequentially or concurrently.
+    """
+
+    enabled: Optional[bool] = True  # Enable/disable looper
+    endpoint: Optional[str] = None  # OpenAI-compatible endpoint (e.g., "http://localhost:8888/v1/chat/completions")
+    timeout_seconds: Optional[int] = 120  # Timeout for each model call
+    headers: Optional[Dict[str, str]] = {}  # Optional headers (e.g., Authorization)
+
+
 class UserConfig(BaseModel):
     """Complete user configuration."""
 
@@ -394,6 +407,7 @@ class UserConfig(BaseModel):
     signals: Optional[Signals] = None
     decisions: List[Decision]
     providers: Providers
+    looper: Optional[LooperConfig] = None  # Optional looper configuration
 
     class Config:
         populate_by_name = True
