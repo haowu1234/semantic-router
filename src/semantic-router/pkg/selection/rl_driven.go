@@ -1474,3 +1474,33 @@ func (r *RLDrivenSelector) GetDebugState(userID string) map[string]interface{} {
 
 	return state
 }
+
+// IsMultiRoundEnabled returns whether multi-round aggregation is enabled
+// DEBUG helper method to inspect config state
+func (r *RLDrivenSelector) IsMultiRoundEnabled() bool {
+	return r.config.EnableMultiRoundAggregation
+}
+
+// GetMaxAggregationRounds returns the max aggregation rounds config
+// DEBUG helper method to inspect config state
+func (r *RLDrivenSelector) GetMaxAggregationRounds() int {
+	return r.config.MaxAggregationRounds
+}
+
+// IsThompsonSamplingEnabled returns whether Thompson Sampling is enabled
+// DEBUG helper method to inspect config state
+func (r *RLDrivenSelector) IsThompsonSamplingEnabled() bool {
+	return r.config.UseThompsonSampling
+}
+
+// IsPersonalizationEnabled returns whether personalization is enabled
+// DEBUG helper method to inspect config state
+func (r *RLDrivenSelector) IsPersonalizationEnabled() bool {
+	return r.config.EnablePersonalization
+}
+
+// GetConfig returns the config for debugging
+// DEBUG helper method to inspect config state
+func (r *RLDrivenSelector) GetConfig() *RLDrivenConfig {
+	return r.config
+}

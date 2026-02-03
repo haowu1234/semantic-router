@@ -46,9 +46,25 @@ type RLDrivenLooper struct {
 func NewRLDrivenLooper(cfg *config.LooperConfig) *RLDrivenLooper {
 	// Get the RL-driven selector from the global registry
 	var rlSelector *selection.RLDrivenSelector
-	if s, ok := selection.GlobalRegistry.Get(selection.MethodRLDriven); ok {
-		if typed, ok := s.(*selection.RLDrivenSelector); ok {
-			rlSelector = typed
+	
+	// DEBUG: Log GlobalRegistry access
+	logging.Infof("[RLDrivenLooper DEBUG] Attempting to get RLDrivenSelector from GlobalRegistry")
+	if selection.GlobalRegistry == nil {
+		logging.Warnf("[RLDrivenLooper DEBUG] GlobalRegistry is nil!")
+	} else {
+		if s, ok := selection.GlobalRegistry.Get(selection.MethodRLDriven); ok {
+			logging.Infof("[RLDrivenLooper DEBUG] Found selector in GlobalRegistry, type=%T", s)
+			if typed, ok := s.(*selection.RLDrivenSelector); ok {
+				rlSelector = typed
+				// DEBUG: Log the config from the selector obtained from registry
+				logging.Infof("[RLDrivenLooper DEBUG] Successfully cast to RLDrivenSelector")
+				logging.Infof("[RLDrivenLooper DEBUG] Selector from registry: EnableMultiRoundAggregation=%v, MaxAggregationRounds=%d, UseThompsonSampling=%v, EnablePersonalization=%v",
+					rlSelector.IsMultiRoundEnabled(), rlSelector.GetMaxAggregationRounds(), rlSelector.IsThompsonSamplingEnabled(), rlSelector.IsPersonalizationEnabled())
+			} else {
+				logging.Warnf("[RLDrivenLooper DEBUG] Failed to cast to RLDrivenSelector, actual type=%T", s)
+			}
+		} else {
+			logging.Warnf("[RLDrivenLooper DEBUG] MethodRLDriven not found in GlobalRegistry")
 		}
 	}
 

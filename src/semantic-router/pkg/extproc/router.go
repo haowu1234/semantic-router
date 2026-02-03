@@ -214,16 +214,34 @@ func NewOpenAIRouter(configPath string) (*OpenAIRouter, error) {
 	// Per-decision config takes precedence over global config
 	var eloFromDecision *config.EloSelectionConfig
 	var routerDCFromDecision *config.RouterDCSelectionConfig
-	for _, decision := range cfg.IntelligentRouting.Decisions {
+	
+	// DEBUG: Log all decisions and their algorithm configs
+	logging.Infof("[Router DEBUG] Starting to scan %d decisions for algorithm configs", len(cfg.IntelligentRouting.Decisions))
+	for i, decision := range cfg.IntelligentRouting.Decisions {
 		if decision.Algorithm != nil {
+			logging.Infof("[Router DEBUG] Decision[%d] name=%s, algorithm.type=%s", i, decision.Name, decision.Algorithm.Type)
+			// NOTE: AlgorithmConfig struct does NOT have RLDriven field - this is the root cause of the bug!
+			logging.Infof("[Router DEBUG] Decision[%d] Algorithm.Elo=%v, Algorithm.RouterDC=%v (Note: RLDriven field does NOT exist in AlgorithmConfig!)", 
+				i, decision.Algorithm.Elo != nil, decision.Algorithm.RouterDC != nil)
+			
 			if decision.Algorithm.Type == "elo" && decision.Algorithm.Elo != nil && eloFromDecision == nil {
 				eloFromDecision = decision.Algorithm.Elo
+				logging.Infof("[Router DEBUG] Found elo config from decision %s", decision.Name)
 			}
 			if decision.Algorithm.Type == "router_dc" && decision.Algorithm.RouterDC != nil && routerDCFromDecision == nil {
 				routerDCFromDecision = decision.Algorithm.RouterDC
+				logging.Infof("[Router DEBUG] Found router_dc config from decision %s", decision.Name)
 			}
+			// NOTE: rl_driven is NOT being scanned here - this is the BUG!
+			// The AlgorithmConfig struct has no RLDriven field, so even if YAML has rl_driven config, it cannot be loaded!
+			if decision.Algorithm.Type == "rl_driven" {
+				logging.Warnf("[Router DEBUG] Decision[%d] has type=rl_driven but AlgorithmConfig struct has NO RLDriven field! Per-decision config CANNOT be loaded! Will use DefaultRLDrivenConfig() only!", i)
+			}
+		} else {
+			logging.Infof("[Router DEBUG] Decision[%d] name=%s, algorithm=nil", i, decision.Name)
 		}
 	}
+	logging.Infof("[Router DEBUG] After scanning: eloFromDecision=%v, routerDCFromDecision=%v, rlDrivenFromDecision=IMPOSSIBLE (no field in struct!)", eloFromDecision != nil, routerDCFromDecision != nil)
 
 	// Build Elo config: per-decision takes precedence, then global, then defaults
 	eloCfg := cfg.IntelligentRouting.ModelSelection.Elo

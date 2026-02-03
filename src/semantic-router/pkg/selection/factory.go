@@ -230,9 +230,16 @@ func (f *Factory) CreateAll() *Registry {
 
 	// Create RL-Driven selector
 	rlDrivenCfg := f.cfg.RLDriven
+	// DEBUG: Log if RLDriven config is provided from router.go or using defaults
 	if rlDrivenCfg == nil {
+		logging.Warnf("[SelectionFactory DEBUG] f.cfg.RLDriven is nil! Will use DefaultRLDrivenConfig(). This means per-decision rl_driven config was NOT loaded!")
 		rlDrivenCfg = DefaultRLDrivenConfig()
+	} else {
+		logging.Infof("[SelectionFactory DEBUG] f.cfg.RLDriven is PROVIDED: UseThompsonSampling=%v, EnablePersonalization=%v, EnableMultiRoundAggregation=%v, MaxAggregationRounds=%d",
+			rlDrivenCfg.UseThompsonSampling, rlDrivenCfg.EnablePersonalization, rlDrivenCfg.EnableMultiRoundAggregation, rlDrivenCfg.MaxAggregationRounds)
 	}
+	logging.Infof("[SelectionFactory DEBUG] Creating RLDrivenSelector with config: UseThompsonSampling=%v, EnablePersonalization=%v, EnableMultiRoundAggregation=%v, MaxAggregationRounds=%d",
+		rlDrivenCfg.UseThompsonSampling, rlDrivenCfg.EnablePersonalization, rlDrivenCfg.EnableMultiRoundAggregation, rlDrivenCfg.MaxAggregationRounds)
 	rlDrivenSelector := NewRLDrivenSelector(rlDrivenCfg)
 	if f.modelConfig != nil {
 		rlDrivenSelector.InitializeFromConfig(f.modelConfig, f.categories)
