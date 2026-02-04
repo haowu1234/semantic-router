@@ -168,6 +168,10 @@ func (e *DecisionEngine) evaluateRuleCombinationWithSignals(
 		normalizedType := strings.ToLower(strings.TrimSpace(condition.Type))
 
 		switch normalizedType {
+		case "always":
+			// Always matches - useful for catch-all/fallback decisions or benchmark scenarios
+			// No signal evaluation needed, decision will always match this condition
+			conditionMatched = true
 		case "keyword":
 			conditionMatched = slices.Contains(signals.KeywordRules, condition.Name)
 		case "embedding":
