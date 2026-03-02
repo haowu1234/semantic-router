@@ -235,6 +235,18 @@ func Setup(cfg *config.Config) *http.ServeMux {
 	mux.HandleFunc("/api/topology/test-query", handlers.TopologyTestQueryHandler(cfg.AbsConfigPath, cfg.RouterAPIURL))
 	log.Printf("Topology Test Query API endpoint registered: /api/topology/test-query (Router API: %s)", cfg.RouterAPIURL)
 
+	// NL→DSL LLM proxy endpoints
+	nlCfg := handlers.LoadNLConfig()
+	mux.HandleFunc("/api/nl/generate", handlers.NLGenerateHandler(nlCfg))
+	mux.HandleFunc("/api/nl/explain", handlers.NLExplainHandler(nlCfg))
+	mux.HandleFunc("/api/nl/config", handlers.NLConfigHandler(nlCfg))
+	log.Printf("NL API endpoints registered: /api/nl/generate, /api/nl/explain, /api/nl/config")
+	if nlCfg.DefaultEndpoint != "" {
+		log.Printf("NL LLM endpoint configured: %s (server-key=%v)", nlCfg.DefaultEndpoint, nlCfg.DefaultAPIKey != "")
+	} else {
+		log.Printf("NL LLM endpoint not configured (frontend must provide endpoint)")
+	}
+
 	// Evaluation endpoints (if enabled)
 	if cfg.EvaluationEnabled {
 		// Register datasets endpoint first - it doesn't require DB and returns static data
