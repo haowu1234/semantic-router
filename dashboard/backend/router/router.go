@@ -185,7 +185,7 @@ func Setup(cfg *config.Config) *http.ServeMux {
 	// Config endpoints - MUST be registered BEFORE proxy to take precedence
 	// In Go's ServeMux, exact path matches registered first take precedence over prefix handlers
 	mux.HandleFunc("/api/router/config/all", handlers.ConfigHandler(cfg.AbsConfigPath))
-	mux.HandleFunc("/api/router/config/update", handlers.UpdateConfigHandler(cfg.AbsConfigPath, cfg.ReadonlyMode))
+	mux.HandleFunc("/api/router/config/update", handlers.UpdateConfigHandler(cfg.AbsConfigPath, cfg.ReadonlyMode, cfg.ConfigDir))
 	log.Printf("Config API endpoints registered: /api/router/config/all, /api/router/config/update")
 
 	// Router defaults endpoints (for .vllm-sr/router-defaults.yaml)

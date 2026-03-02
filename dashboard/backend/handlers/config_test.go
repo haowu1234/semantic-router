@@ -255,11 +255,11 @@ func TestUpdateConfigHandler(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
-			handler := UpdateConfigHandler(configPath, false)
-			handler(w, req)
+		handler := UpdateConfigHandler(configPath, false, "")
+		handler(w, req)
 
-			if w.Code != tt.expectedStatus {
-				t.Errorf("Expected status %d, got %d. Response body: %s", tt.expectedStatus, w.Code, w.Body.String())
+		if w.Code != tt.expectedStatus {
+			t.Errorf("Expected status %d, got %d. Response body: %s", tt.expectedStatus, w.Code, w.Body.String())
 			}
 
 			if tt.expectedError != "" {
@@ -310,7 +310,7 @@ func TestUpdateConfigHandler_FilePersistence(t *testing.T) {
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 
-		handler := UpdateConfigHandler(configPath, false)
+		handler := UpdateConfigHandler(configPath, false, "")
 		handler(w, req)
 
 		if w.Code != http.StatusOK {
@@ -362,7 +362,7 @@ func TestUpdateConfigHandler_FilePersistence(t *testing.T) {
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 
-		handler := UpdateConfigHandler(configPath, false)
+		handler := UpdateConfigHandler(configPath, false, "")
 		handler(w, req)
 
 		if w.Code != http.StatusOK {
@@ -425,7 +425,7 @@ func TestUpdateConfigHandler_FilePersistence(t *testing.T) {
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 
-		handler := UpdateConfigHandler(configPath, false)
+		handler := UpdateConfigHandler(configPath, false, "")
 		handler(w, req)
 
 		if w.Code != http.StatusOK {
@@ -464,7 +464,7 @@ func TestUpdateConfigHandler_ValidationIntegration(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	handler := UpdateConfigHandler(configPath, false)
+	handler := UpdateConfigHandler(configPath, false, "")
 	handler(w, req)
 
 	// Should return 400 Bad Request
@@ -500,7 +500,7 @@ func TestUpdateConfigHandler_ReadonlyMode(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	// Enable readonly mode
-	handler := UpdateConfigHandler(configPath, true)
+	handler := UpdateConfigHandler(configPath, true, "")
 	handler(w, req)
 
 	// Should return 403 Forbidden
