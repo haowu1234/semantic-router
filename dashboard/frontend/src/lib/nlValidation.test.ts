@@ -7,7 +7,6 @@ import {
   hasQuickFixes,
   formatDiagnostics,
 } from './nlValidation'
-import type { ValidationResult } from './nlValidation'
 import type { Diagnostic, WasmBridge, ValidateResult, CompileResult } from '@/types/dsl'
 
 // ─── Mock WASM Bridge ────────────────────────

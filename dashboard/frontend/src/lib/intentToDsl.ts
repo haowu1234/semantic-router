@@ -18,7 +18,6 @@
 
 import type {
   IntentIR,
-  Intent,
   SignalIntent,
   RouteIntent,
   PluginTemplateIntent,

@@ -23,7 +23,6 @@ import type {
   NLGenerateResult,
   NLGenerateRequest,
   NLSession,
-  NLTurn,
 } from './intentIR'
 
 describe('IntentIR type structures', () => {

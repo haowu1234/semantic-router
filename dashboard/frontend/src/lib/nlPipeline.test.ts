@@ -10,7 +10,7 @@ import {
   rejectLastTurn,
   MAX_RETRIES,
 } from './nlPipeline'
-import type { NLContext, NLProgressStep, NLSession, NLGenerateResult } from './nlPipeline'
+import type { NLContext, NLProgressStep } from './nlPipeline'
 import type { LLMClient } from './nlRepair'
 import type { WasmBridge, ValidateResult, CompileResult, SymbolTable } from '@/types/dsl'
 import type { IntentIR } from '@/types/intentIR'

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { repairDSL } from './nlRepair'
-import type { LLMClient, RepairResult } from './nlRepair'
+import type { LLMClient } from './nlRepair'
 import type { Diagnostic, WasmBridge, ValidateResult, CompileResult } from '@/types/dsl'
 import type { IntentIR } from '@/types/intentIR'
 

@@ -11,9 +11,9 @@
  */
 
 import type { Diagnostic, SymbolTable, WasmBridge } from '@/types/dsl'
-import type { IntentIR, Intent } from '@/types/intentIR'
+import type { IntentIR } from '@/types/intentIR'
 import { intentIRToDSL, resolveImplicitDependencies } from './intentToDsl'
-import { validateGeneratedDSL, filterErrors, formatDiagnostics } from './nlValidation'
+import { validateGeneratedDSL } from './nlValidation'
 import type { ValidationResult } from './nlValidation'
 import { repairDSL } from './nlRepair'
 import type { LLMClient } from './nlRepair'
