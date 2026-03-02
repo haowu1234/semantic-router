@@ -11,6 +11,7 @@ import styles from './BuilderPage.module.css'
 
 // Reuse the DSL Editor as a child component in DSL mode
 import DslEditorPage from './DslEditorPage'
+import NLMode from '@/components/builder/NLMode'
 
 // ---------- Types for sidebar selection ----------
 
@@ -533,9 +534,8 @@ const BuilderPage: React.FC = () => {
             DSL
           </button>
           <button
-            className={styles.modeBtn}
-            disabled
-            title="Natural Language mode — coming soon"
+            className={mode === 'nl' ? styles.modeBtnActive : styles.modeBtn}
+            onClick={() => handleModeSwitch('nl')}
           >
             <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
               <path d="M2 4h12M2 8h9M2 12h6" strokeLinecap="round" />
@@ -688,13 +688,8 @@ const BuilderPage: React.FC = () => {
             </div>
           )}
           {mode === 'nl' && (
-            <div className={styles.nlPlaceholder}>
-              <div className={styles.nlPlaceholderIcon}>🤖</div>
-              <div className={styles.nlPlaceholderTitle}>Natural Language Mode</div>
-              <div>Describe your routing configuration in plain English and let AI generate DSL for you.</div>
-              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
-                Coming soon — Phase 6
-              </div>
+            <div className={styles.nlModeContainer}>
+              <NLMode />
             </div>
           )}
         </div>

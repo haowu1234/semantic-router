@@ -1682,7 +1682,16 @@
   overflow: hidden;
 }
 
-/* ===== NL Mode Placeholder ===== */
+/* ===== NL Mode Container ===== */
+
+.nlModeContainer {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Legacy placeholder styles (kept for compatibility) */
 
 .nlPlaceholder {
   flex: 1;
