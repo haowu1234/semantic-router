@@ -262,7 +262,7 @@ describe('prompt quality', () => {
     const prompt = buildSystemPrompt()
     // The prompt should be comprehensive but not excessively long
     expect(prompt.length).toBeGreaterThan(1000) // Not trivially short
-    expect(prompt.length).toBeLessThan(10000)   // Not excessively long
+    expect(prompt.length).toBeLessThan(16000)   // Not excessively long
   })
 
   it('few-shot examples should cover generate, modify, multi-condition patterns', () => {

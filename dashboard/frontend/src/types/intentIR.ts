@@ -58,7 +58,7 @@ export interface RouteIntent {
   name: string
   /** Human-readable description */
   description?: string
-  /** Route priority (lower = higher priority, default 10) */
+  /** Route priority (higher number = matched first, default 10) */
   priority?: number
   /** Boolean expression tree over signal references */
   condition: ConditionNode

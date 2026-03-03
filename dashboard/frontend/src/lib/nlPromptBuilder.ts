@@ -57,6 +57,8 @@ export interface NLPromptContext {
   currentDSL?: string
   /** Diagnostics from current compilation (for fix/context) */
   diagnostics?: Array<{ level: string; message: string }>
+  /** Pre-extracted suggested types from NL Schema Registry trigger matching */
+  suggestedTypes?: Array<{ construct: string; type_name: string }>
 }
 
 /**
@@ -68,6 +70,20 @@ export function buildUserPrompt(context: NLPromptContext): string {
   // Few-shot examples
   parts.push(FEW_SHOT_EXAMPLES)
   parts.push('')
+
+  // Pre-extracted type hints (from trigger matching)
+  if (context.suggestedTypes && context.suggestedTypes.length > 0) {
+    const grouped: Record<string, string[]> = {}
+    for (const st of context.suggestedTypes) {
+      if (!grouped[st.construct]) grouped[st.construct] = []
+      grouped[st.construct].push(st.type_name)
+    }
+    parts.push('Detected relevant DSL types from user input (use these as hints):')
+    for (const [construct, types] of Object.entries(grouped)) {
+      parts.push(`- ${construct}: ${types.join(', ')}`)
+    }
+    parts.push('')
+  }
 
   // Current configuration context (for modify mode)
   if (context.mode === 'modify' && context.symbols) {
@@ -127,6 +143,8 @@ export interface RepairPromptContext {
   diagnostics: Array<{ level: string; message: string; line?: number }>
   /** Repair attempt number (2 = targeted, 3 = full regen) */
   attempt: number
+  /** Operation mode from the original request */
+  mode?: 'generate' | 'modify'
 }
 
 /**
@@ -175,7 +193,7 @@ ${errorSummary}
 Please regenerate the Intent IR from scratch, avoiding these mistakes.
 
 Original user request: "${ctx.originalNL}"
-Operation mode: generate
+Operation mode: ${ctx.mode ?? 'generate'}
 
 Generate the Intent IR JSON:`
 }
@@ -271,7 +289,9 @@ const RULES_SECTION = `1. EVERY signal referenced in a route condition MUST have
 5. Output ONLY valid JSON conforming to the Intent IR schema. No explanation or markdown.
 6. Route priority: higher numbers are matched first. Default to 10 if unspecified.
 7. Every route MUST have at least one model in the models array.
-8. Plugin references in routes should match plugin_template names if templates are defined.`
+8. Plugin references in routes should match plugin_template names if templates are defined.
+9. ONLY use type names listed in the "DSL Type System" section above. Do NOT invent new signal_type, plugin_type, backend_type, or algo_type values. For example, "jailbreak" and "pii" are signal types, NOT plugin types.
+10. When a field has enumerated options listed (e.g., method: "regex" | "bm25" | "ngram"), you MUST choose from those options only.`
 
 const FEW_SHOT_EXAMPLES = `## Examples
 
@@ -312,15 +332,16 @@ User: "Set up a 3-tier system: simple questions to qwen2.5:3b, complex ones to q
 }
 \`\`\`
 
-### Example 3: Modify existing config
-User: "Add PII protection to the math_route and increase priority to 50"
+### Example 3: Modify existing config (note: pii is a SIGNAL type, not a plugin type)
+User: "Add hallucination detection to the math_route and increase priority to 50"
 \`\`\`json
 {
   "version": "1.0",
   "operation": "modify",
   "intents": [
-    { "type": "plugin_template", "name": "safe_pii", "plugin_type": "pii", "fields": { "enabled": true, "threshold": 0.8, "pii_types_allowed": [] } },
-    { "type": "modify", "action": "update", "target_construct": "route", "target_name": "math_route", "changes": { "priority": 50, "plugins": [{ "name": "safe_pii" }] } }
+    { "type": "signal", "signal_type": "pii", "name": "pii_detect", "fields": { "method": "classifier", "threshold": 0.8 } },
+    { "type": "plugin_template", "name": "verify_output", "plugin_type": "hallucination", "fields": { "enabled": true, "method": "nli" } },
+    { "type": "modify", "action": "update", "target_construct": "route", "target_name": "math_route", "changes": { "priority": 50, "plugins": [{ "name": "verify_output" }] } }
   ]
 }
 \`\`\`
@@ -357,6 +378,23 @@ User: "Route urgent math questions to GPT-4o, but if it's either physics or chem
     { "type": "route", "name": "science_route", "description": "Physics or chemistry", "priority": 10, "condition": { "op": "OR", "operands": [{ "op": "SIGNAL_REF", "signal_type": "domain", "signal_name": "physics" }, { "op": "SIGNAL_REF", "signal_type": "domain", "signal_name": "chemistry" }] }, "models": [{ "model": "claude-3.5-sonnet" }] },
     { "type": "backend", "backend_type": "provider_profile", "name": "openai", "fields": { "provider": "openai" } },
     { "type": "backend", "backend_type": "provider_profile", "name": "anthropic", "fields": { "provider": "anthropic" } },
+    { "type": "global", "fields": { "default_model": "gpt-4o-mini", "strategy": "priority" } }
+  ]
+}
+\`\`\`
+
+### Example 6: NOT condition with algorithm and weighted models
+User: "For non-jailbreak queries, use confidence-based cascade with 70% weight on GPT-4o and 30% on GPT-4o-mini"
+\`\`\`json
+{
+  "version": "1.0",
+  "operation": "generate",
+  "intents": [
+    { "type": "signal", "signal_type": "jailbreak", "name": "jailbreak_detect", "fields": { "method": "classifier", "threshold": 0.9 } },
+    { "type": "plugin_template", "name": "block_unsafe", "plugin_type": "fast_response", "fields": { "message": "Request blocked for safety reasons.", "enabled": true } },
+    { "type": "route", "name": "safety_block", "description": "Block jailbreak attempts", "priority": 100, "condition": { "op": "SIGNAL_REF", "signal_type": "jailbreak", "signal_name": "jailbreak_detect" }, "models": [{ "model": "gpt-4o-mini" }], "plugins": [{ "name": "block_unsafe" }] },
+    { "type": "route", "name": "safe_route", "description": "Non-jailbreak queries with cascade", "priority": 10, "condition": { "op": "NOT", "operand": { "op": "SIGNAL_REF", "signal_type": "jailbreak", "signal_name": "jailbreak_detect" } }, "models": [{ "model": "gpt-4o", "weight": 70 }, { "model": "gpt-4o-mini", "weight": 30 }], "algorithm": { "algo_type": "confidence", "params": { "threshold": 0.8 } } },
+    { "type": "backend", "backend_type": "provider_profile", "name": "openai", "fields": { "provider": "openai" } },
     { "type": "global", "fields": { "default_model": "gpt-4o-mini", "strategy": "priority" } }
   ]
 }

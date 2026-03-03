@@ -257,7 +257,7 @@ describe('NLSchemaRegistry', () => {
       expect(prompt).toContain('Response caching plugin')
 
       // Should list required fields
-      expect(prompt).toContain('Required fields: patterns')
+      expect(prompt).toContain('Required: patterns')
 
       // Should list backend dependencies
       expect(prompt).toContain('Requires backend: semantic_cache')
@@ -489,7 +489,7 @@ describe('defaultRegistry', () => {
 
     it('should list required fields for keyword signal', () => {
       const prompt = defaultRegistry.buildSystemPromptSection()
-      expect(prompt).toContain('Required fields: operator, keywords')
+      expect(prompt).toContain('Required: operator')
     })
   })
 })

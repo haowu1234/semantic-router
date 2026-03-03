@@ -120,19 +120,34 @@ export class NLSchemaRegistry {
   buildSystemPromptSection(): string {
     const sections: string[] = []
 
+    // Helper: format field with enum values if available
+    const formatField = (f: { key: string; type: string; required?: boolean; options?: string[] }): string => {
+      let s = f.key
+      if (f.options && f.options.length > 0) {
+        s += ` (${f.options.map(o => `"${o}"`).join(' | ')})`
+      } else {
+        s += ` (${f.type})`
+      }
+      return s
+    }
+
     // Signal types
     const signals = this.getByConstruct('signal')
     if (signals.length > 0) {
-      sections.push('### Signal Types (for SIGNAL declarations and WHEN conditions)')
+      const validNames = signals.map(s => s.type_name).join(', ')
+      sections.push(`### Signal Types (for SIGNAL declarations and WHEN conditions)\nValid signal_type values: ${validNames}`)
       for (const s of signals) {
-        const requiredFields = s.fields.filter(f => f.required).map(f => f.key)
-        const optionalFields = s.fields.filter(f => !f.required).map(f => f.key)
+        const requiredFields = s.fields.filter(f => f.required).map(formatField)
+        const optionalFields = s.fields.filter(f => !f.required).map(formatField)
         let line = `- **${s.type_name}**: ${s.nl_description}`
         if (requiredFields.length > 0) {
-          line += `\n  Required fields: ${requiredFields.join(', ')}`
+          line += `\n  Required: ${requiredFields.join(', ')}`
         }
         if (optionalFields.length > 0) {
-          line += `\n  Optional fields: ${optionalFields.join(', ')}`
+          line += `\n  Optional: ${optionalFields.join(', ')}`
+        }
+        if (s.nl_examples.length > 0) {
+          line += `\n  Example: "${s.nl_examples[0]}"`
         }
         sections.push(line)
       }
@@ -141,15 +156,23 @@ export class NLSchemaRegistry {
     // Plugin types
     const plugins = this.getByConstruct('plugin')
     if (plugins.length > 0) {
-      sections.push('\n### Plugin Types (for PLUGIN template declarations)')
+      const validNames = plugins.map(p => p.type_name).join(', ')
+      sections.push(`\n### Plugin Types (for PLUGIN template declarations)\nValid plugin_type values: ${validNames}\nIMPORTANT: jailbreak and pii are SIGNAL types, NOT plugin types. Do NOT use them as plugin_type.`)
       for (const p of plugins) {
-        const requiredFields = p.fields.filter(f => f.required).map(f => f.key)
+        const requiredFields = p.fields.filter(f => f.required).map(formatField)
+        const optionalFields = p.fields.filter(f => !f.required).map(formatField)
         let line = `- **${p.type_name}**: ${p.nl_description}`
         if (requiredFields.length > 0) {
-          line += `\n  Required fields: ${requiredFields.join(', ')}`
+          line += `\n  Required: ${requiredFields.join(', ')}`
+        }
+        if (optionalFields.length > 0) {
+          line += `\n  Optional: ${optionalFields.join(', ')}`
         }
         if (p.requires_backend && p.requires_backend.length > 0) {
           line += `\n  Requires backend: ${p.requires_backend.join(', ')}`
+        }
+        if (p.nl_examples.length > 0) {
+          line += `\n  Example: "${p.nl_examples[0]}"`
         }
         sections.push(line)
       }
@@ -158,9 +181,10 @@ export class NLSchemaRegistry {
     // Algorithm types
     const algorithms = this.getByConstruct('algorithm')
     if (algorithms.length > 0) {
-      sections.push('\n### Algorithm Types (for ROUTE ALGORITHM selection)')
+      const validNames = algorithms.map(a => a.type_name).join(', ')
+      sections.push(`\n### Algorithm Types (for ROUTE ALGORITHM selection)\nValid algo_type values: ${validNames}`)
       for (const a of algorithms) {
-        const fields = a.fields.map(f => `${f.key}(${f.type})`).join(', ')
+        const fields = a.fields.map(formatField).join(', ')
         let line = `- **${a.type_name}**: ${a.nl_description}`
         if (fields) {
           line += `\n  Params: ${fields}`
@@ -175,9 +199,18 @@ export class NLSchemaRegistry {
     // Backend types
     const backends = this.getByConstruct('backend')
     if (backends.length > 0) {
-      sections.push('\n### Backend Types (for BACKEND declarations)')
+      const validNames = backends.map(b => b.type_name).join(', ')
+      sections.push(`\n### Backend Types (for BACKEND declarations)\nValid backend_type values: ${validNames}`)
       for (const b of backends) {
-        sections.push(`- **${b.type_name}**: ${b.nl_description}`)
+        const requiredFields = b.fields.filter(f => f.required).map(formatField)
+        let line = `- **${b.type_name}**: ${b.nl_description}`
+        if (requiredFields.length > 0) {
+          line += `\n  Required: ${requiredFields.join(', ')}`
+        }
+        if (b.nl_examples.length > 0) {
+          line += `\n  Example: "${b.nl_examples[0]}"`
+        }
+        sections.push(line)
       }
     }
 

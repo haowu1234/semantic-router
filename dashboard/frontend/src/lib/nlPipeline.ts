@@ -15,10 +15,12 @@ import type { IntentIR } from '@/types/intentIR'
 import { intentIRToDSL, resolveImplicitDependencies } from './intentToDsl'
 import { validateGeneratedDSL } from './nlValidation'
 import type { ValidationResult } from './nlValidation'
+import { hasQuickFixes as hasQuickFixesAvailable } from './nlValidation'
 import { repairDSL } from './nlRepair'
 import type { LLMClient } from './nlRepair'
 import { buildSystemPrompt, buildUserPrompt } from './nlPromptBuilder'
 import type { NLPromptContext } from './nlPromptBuilder'
+import { defaultRegistry } from './nlSchemaRegistry'
 
 // ─────────────────────────────────────────────
 // Configuration
@@ -152,6 +154,11 @@ export async function nlToDSL(
   while (!validation.isValid && attempt < MAX_RETRIES) {
     attempt++
 
+    // Skip QuickFix (attempt 1) if no fixes are available — go directly to LLM repair
+    if (attempt === 1 && !hasQuickFixesAvailable(validation.diagnostics)) {
+      attempt++
+    }
+
     const strategyName = attempt === 1 ? 'QuickFix' : attempt === 2 ? 'Targeted LLM' : 'Full regeneration'
     onProgress?.({
       stage: 'repairing',
@@ -259,6 +266,16 @@ function buildPromptContext(
   const promptCtx: NLPromptContext = {
     userInput: nlInput,
     mode,
+  }
+
+  // Pre-extract suggested types via trigger matching
+  const words = nlInput.toLowerCase().split(/[\s,;.!?]+/).filter(w => w.length > 1)
+  const matched = defaultRegistry.findByTriggers(words)
+  if (matched.length > 0) {
+    promptCtx.suggestedTypes = matched.slice(0, 10).map(e => ({
+      construct: e.construct,
+      type_name: e.type_name,
+    }))
   }
 
   if (context.symbols) {
