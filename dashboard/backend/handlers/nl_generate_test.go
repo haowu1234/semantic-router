@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -616,4 +617,155 @@ func TestBuildUpstreamRequest_MinimalFields(t *testing.T) {
 	if _, ok := result["response_format"]; ok {
 		t.Error("response_format should not be set when nil")
 	}
+}
+
+// ─────────────────────────────────────────────
+// Config Auto-Detection Tests
+// ─────────────────────────────────────────────
+
+func TestLoadNLConfigFromYAML_NestedProviders(t *testing.T) {
+	// Simulates the vllm-sr CLI nested config format
+	yaml := `
+providers:
+  models:
+    - name: "openai/gpt-oss-120b"
+      endpoints:
+        - name: "vllm_endpoint"
+          endpoint: "vllm-gpt-oss-120b:8000"
+          protocol: "http"
+          weight: 1
+      access_key: "mykey123"
+    - name: "gpt-5.2"
+      endpoints:
+        - name: "openai"
+          endpoint: "api.openai.com"
+          protocol: "https"
+      access_key: "sk-xxx"
+  default_model: "openai/gpt-oss-120b"
+`
+	tmpFile := t.TempDir() + "/config.yaml"
+	if err := writeTestFile(tmpFile, yaml); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &NLConfig{}
+	LoadNLConfigFromYAML(cfg, tmpFile)
+
+	// Should auto-detect endpoint from first model
+	if cfg.DefaultEndpoint != "http://vllm-gpt-oss-120b:8000/v1/chat/completions" {
+		t.Errorf("expected auto-detected endpoint, got %q", cfg.DefaultEndpoint)
+	}
+	if cfg.DefaultAPIKey != "mykey123" {
+		t.Errorf("expected auto-detected key, got %q", cfg.DefaultAPIKey)
+	}
+	if cfg.DefaultModel != "openai/gpt-oss-120b" {
+		t.Errorf("expected default_model, got %q", cfg.DefaultModel)
+	}
+	if len(cfg.AvailableModels) != 2 {
+		t.Errorf("expected 2 available models, got %d: %v", len(cfg.AvailableModels), cfg.AvailableModels)
+	}
+}
+
+func TestLoadNLConfigFromYAML_FlatFormat(t *testing.T) {
+	// Legacy flat format with vllm_endpoints
+	yaml := `
+default_model: "qwen3-32b"
+vllm_endpoints:
+  - name: "ep1"
+    address: "127.0.0.1"
+    port: 8000
+    model: "qwen3-32b"
+`
+	tmpFile := t.TempDir() + "/config.yaml"
+	if err := writeTestFile(tmpFile, yaml); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &NLConfig{}
+	LoadNLConfigFromYAML(cfg, tmpFile)
+
+	if cfg.DefaultEndpoint != "http://127.0.0.1:8000/v1/chat/completions" {
+		t.Errorf("expected auto-detected endpoint, got %q", cfg.DefaultEndpoint)
+	}
+	if cfg.DefaultModel != "qwen3-32b" {
+		t.Errorf("expected model qwen3-32b, got %q", cfg.DefaultModel)
+	}
+}
+
+func TestLoadNLConfigFromYAML_EnvTakesPrecedence(t *testing.T) {
+	yaml := `
+providers:
+  models:
+    - name: "openai/gpt-oss-120b"
+      endpoints:
+        - endpoint: "vllm-gpt:8000"
+      access_key: "yaml-key"
+  default_model: "openai/gpt-oss-120b"
+`
+	tmpFile := t.TempDir() + "/config.yaml"
+	if err := writeTestFile(tmpFile, yaml); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pre-set from env
+	cfg := &NLConfig{
+		DefaultEndpoint: "http://my-custom:9999/v1/chat/completions",
+		DefaultAPIKey:   "env-key",
+		DefaultModel:    "env-model",
+	}
+	LoadNLConfigFromYAML(cfg, tmpFile)
+
+	// Env values should NOT be overwritten
+	if cfg.DefaultEndpoint != "http://my-custom:9999/v1/chat/completions" {
+		t.Errorf("env endpoint should be preserved, got %q", cfg.DefaultEndpoint)
+	}
+	if cfg.DefaultAPIKey != "env-key" {
+		t.Errorf("env key should be preserved, got %q", cfg.DefaultAPIKey)
+	}
+	if cfg.DefaultModel != "env-model" {
+		t.Errorf("env model should be preserved, got %q", cfg.DefaultModel)
+	}
+	// But available models should still be populated
+	if len(cfg.AvailableModels) != 1 {
+		t.Errorf("expected 1 available model, got %d", len(cfg.AvailableModels))
+	}
+}
+
+func TestLoadNLConfigFromYAML_MissingFile(t *testing.T) {
+	cfg := &NLConfig{}
+	LoadNLConfigFromYAML(cfg, "/nonexistent/config.yaml")
+	// Should not panic, fields remain empty
+	if cfg.DefaultEndpoint != "" || cfg.DefaultModel != "" {
+		t.Error("expected empty config for missing file")
+	}
+}
+
+func TestBuildEndpointURL(t *testing.T) {
+	tests := []struct {
+		endpoint, protocol, expected string
+	}{
+		{"vllm-gpt:8000", "http", "http://vllm-gpt:8000/v1/chat/completions"},
+		{"vllm-gpt:8000", "", "http://vllm-gpt:8000/v1/chat/completions"},
+		{"api.openai.com", "https", "https://api.openai.com/v1/chat/completions"},
+		{"http://localhost:8000", "", "http://localhost:8000/v1/chat/completions"},
+		{"http://localhost:8000/v1/chat/completions", "", "http://localhost:8000/v1/chat/completions"},
+		{"", "", ""},
+	}
+	for _, tt := range tests {
+		result := buildEndpointURL(tt.endpoint, tt.protocol)
+		if result != tt.expected {
+			t.Errorf("buildEndpointURL(%q, %q) = %q, want %q", tt.endpoint, tt.protocol, result, tt.expected)
+		}
+	}
+}
+
+func TestDedup(t *testing.T) {
+	result := dedup([]string{"a", "b", "a", "c", "", "b"})
+	if len(result) != 3 || result[0] != "a" || result[1] != "b" || result[2] != "c" {
+		t.Errorf("unexpected dedup result: %v", result)
+	}
+}
+
+func writeTestFile(path, content string) error {
+	return os.WriteFile(path, []byte(content), 0o644)
 }

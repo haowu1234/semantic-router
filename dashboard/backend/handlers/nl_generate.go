@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/vllm-project/semantic-router/dashboard/backend/middleware"
 )
 
@@ -25,7 +27,8 @@ const (
 	nlMaxResponseSize = 2 * 1024 * 1024   // 2 MB max response body
 )
 
-// NLConfig holds NL proxy configuration resolved from environment variables.
+// NLConfig holds NL proxy configuration resolved from environment variables
+// and/or auto-detected from config.yaml.
 type NLConfig struct {
 	// DefaultEndpoint is the LLM API endpoint (e.g., "https://api.openai.com/v1/chat/completions").
 	// If empty, the frontend must provide its own endpoint.
@@ -35,15 +38,191 @@ type NLConfig struct {
 	DefaultAPIKey string
 	// DefaultModel is the default model name (e.g., "qwen3-32b").
 	DefaultModel string
+	// AvailableModels lists all model names from config.yaml (for frontend dropdown).
+	AvailableModels []string
 }
 
 // LoadNLConfig reads NL configuration from environment variables.
+// Call LoadNLConfigFromYAML after this to auto-detect from config.yaml as fallback.
 func LoadNLConfig() *NLConfig {
 	return &NLConfig{
 		DefaultEndpoint: os.Getenv("NL_LLM_ENDPOINT"),
 		DefaultAPIKey:   os.Getenv("NL_LLM_API_KEY"),
 		DefaultModel:    os.Getenv("NL_LLM_MODEL"),
 	}
+}
+
+// LoadNLConfigFromYAML enriches the NLConfig by reading the router config.yaml.
+// It auto-detects: endpoint (from first vllm_endpoint), default model, API key,
+// and available model list — only filling in fields not already set by env vars.
+func LoadNLConfigFromYAML(nlCfg *NLConfig, configPath string) {
+	if configPath == "" {
+		return
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		log.Printf("[NL] Cannot read config for auto-detect: %v", err)
+		return
+	}
+
+	// Light-weight YAML parse — we only need providers/models section.
+	// Using a minimal struct to avoid importing the full routerconfig package
+	// (which pulls in heavy dependencies).
+	var cfg nlYAMLConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		log.Printf("[NL] Cannot parse config for auto-detect: %v", err)
+		return
+	}
+
+	// Collect available models
+	for _, m := range cfg.Providers.Models {
+		if m.Name != "" {
+			nlCfg.AvailableModels = append(nlCfg.AvailableModels, m.Name)
+		}
+	}
+	// Also add served model aliases from vllm_endpoints
+	for _, ep := range cfg.VLLMEndpoints {
+		if ep.Model != "" {
+			nlCfg.AvailableModels = append(nlCfg.AvailableModels, ep.Model)
+		}
+	}
+	nlCfg.AvailableModels = dedup(nlCfg.AvailableModels)
+
+	// Auto-detect default model (if not set by env)
+	if nlCfg.DefaultModel == "" {
+		if cfg.Providers.DefaultModel != "" {
+			nlCfg.DefaultModel = cfg.Providers.DefaultModel
+		} else if cfg.DefaultModel != "" {
+			nlCfg.DefaultModel = cfg.DefaultModel
+		} else if len(cfg.Providers.Models) > 0 {
+			nlCfg.DefaultModel = cfg.Providers.Models[0].Name
+		}
+	}
+
+	// Auto-detect endpoint (if not set by env)
+	if nlCfg.DefaultEndpoint == "" {
+		endpoint, key := detectLLMEndpoint(cfg)
+		if endpoint != "" {
+			nlCfg.DefaultEndpoint = endpoint
+			log.Printf("[NL] Auto-detected LLM endpoint from config.yaml: %s", endpoint)
+		}
+		if nlCfg.DefaultAPIKey == "" && key != "" {
+			nlCfg.DefaultAPIKey = key
+			log.Printf("[NL] Auto-detected LLM API key from config.yaml")
+		}
+	}
+}
+
+// detectLLMEndpoint finds the best LLM endpoint from config.yaml.
+// Priority: first model's first endpoint → default_model's endpoint → first vllm_endpoint.
+func detectLLMEndpoint(cfg nlYAMLConfig) (endpoint, apiKey string) {
+	// Strategy 1: from providers.models (nested format, used by vllm-sr CLI)
+	targetModel := cfg.Providers.DefaultModel
+	if targetModel == "" && len(cfg.Providers.Models) > 0 {
+		targetModel = cfg.Providers.Models[0].Name
+	}
+	for _, m := range cfg.Providers.Models {
+		if m.Name == targetModel && len(m.Endpoints) > 0 {
+			ep := m.Endpoints[0]
+			u := buildEndpointURL(ep.Endpoint, ep.Protocol)
+			if u != "" {
+				return u, m.AccessKey
+			}
+		}
+	}
+	// Try any model with endpoints
+	for _, m := range cfg.Providers.Models {
+		if len(m.Endpoints) > 0 {
+			ep := m.Endpoints[0]
+			u := buildEndpointURL(ep.Endpoint, ep.Protocol)
+			if u != "" {
+				return u, m.AccessKey
+			}
+		}
+	}
+
+	// Strategy 2: from vllm_endpoints (flat format, legacy)
+	if len(cfg.VLLMEndpoints) > 0 {
+		ep := cfg.VLLMEndpoints[0]
+		if ep.Address != "" && ep.Port > 0 {
+			protocol := ep.Protocol
+			if protocol == "" {
+				protocol = "http"
+			}
+			return fmt.Sprintf("%s://%s:%d/v1/chat/completions", protocol, ep.Address, ep.Port), ""
+		}
+	}
+
+	return "", ""
+}
+
+// buildEndpointURL constructs a full chat completions URL from an endpoint string.
+// Supports: "host:port", "http://host:port", "host.docker.internal:8000"
+func buildEndpointURL(endpoint, protocol string) string {
+	if endpoint == "" {
+		return ""
+	}
+	// Already a full URL
+	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
+		u := strings.TrimRight(endpoint, "/")
+		if !strings.HasSuffix(u, "/v1/chat/completions") {
+			u += "/v1/chat/completions"
+		}
+		return u
+	}
+	// "host:port" format
+	if protocol == "" {
+		protocol = "http"
+	}
+	return fmt.Sprintf("%s://%s/v1/chat/completions", protocol, endpoint)
+}
+
+// ─────────────────────────────────────────────
+// Minimal YAML structs for config auto-detection
+// ─────────────────────────────────────────────
+
+type nlYAMLConfig struct {
+	Providers     nlProviders      `yaml:"providers"`
+	DefaultModel  string           `yaml:"default_model"`
+	VLLMEndpoints []nlVLLMEndpoint `yaml:"vllm_endpoints"`
+}
+
+type nlProviders struct {
+	Models       []nlModel `yaml:"models"`
+	DefaultModel string    `yaml:"default_model"`
+}
+
+type nlModel struct {
+	Name      string            `yaml:"name"`
+	Endpoints []nlModelEndpoint `yaml:"endpoints"`
+	AccessKey string            `yaml:"access_key"`
+}
+
+type nlModelEndpoint struct {
+	Name     string `yaml:"name"`
+	Endpoint string `yaml:"endpoint"`
+	Protocol string `yaml:"protocol"`
+	Weight   int    `yaml:"weight"`
+}
+
+type nlVLLMEndpoint struct {
+	Name     string `yaml:"name"`
+	Address  string `yaml:"address"`
+	Port     int    `yaml:"port"`
+	Protocol string `yaml:"protocol"`
+	Model    string `yaml:"model"`
+}
+
+func dedup(ss []string) []string {
+	seen := make(map[string]bool, len(ss))
+	out := make([]string, 0, len(ss))
+	for _, s := range ss {
+		if s != "" && !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // ─────────────────────────────────────────────
@@ -82,9 +261,11 @@ type NLProxyErrorResponse struct {
 
 // NLConfigResponse is returned by GET /api/nl/config.
 type NLConfigResponse struct {
-	HasServerKey    bool   `json:"has_server_key"`
-	DefaultModel    string `json:"default_model,omitempty"`
-	DefaultEndpoint string `json:"default_endpoint,omitempty"`
+	HasServerKey      bool     `json:"has_server_key"`
+	HasServerEndpoint bool     `json:"has_server_endpoint"`
+	DefaultModel      string   `json:"default_model,omitempty"`
+	DefaultEndpoint   string   `json:"default_endpoint,omitempty"`
+	AvailableModels   []string `json:"available_models,omitempty"`
 }
 
 // ─────────────────────────────────────────────
@@ -227,9 +408,11 @@ func NLConfigHandler(nlCfg *NLConfig) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(NLConfigResponse{
-			HasServerKey:    nlCfg.DefaultAPIKey != "",
-			DefaultModel:    nlCfg.DefaultModel,
-			DefaultEndpoint: maskEndpoint(nlCfg.DefaultEndpoint),
+			HasServerKey:      nlCfg.DefaultAPIKey != "",
+			HasServerEndpoint: nlCfg.DefaultEndpoint != "",
+			DefaultModel:      nlCfg.DefaultModel,
+			DefaultEndpoint:   maskEndpoint(nlCfg.DefaultEndpoint),
+			AvailableModels:   nlCfg.AvailableModels,
 		})
 	}
 }

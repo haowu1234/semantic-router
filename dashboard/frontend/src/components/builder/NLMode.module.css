@@ -111,6 +111,20 @@
   color: var(--color-text-muted);
   width: 80px;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.autoTag {
+  font-size: 9px;
+  font-weight: 500;
+  color: var(--color-success, #4caf50);
+  background: rgba(76, 175, 80, 0.12);
+  padding: 0 4px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .settingsInput {

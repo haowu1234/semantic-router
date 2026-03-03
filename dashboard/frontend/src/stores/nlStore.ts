@@ -65,6 +65,14 @@ interface NLState {
   modelName: string
   /** Whether LLM settings panel is open */
   showSettings: boolean
+  /** Available models from backend config (auto-detected from config.yaml) */
+  availableModels: string[]
+  /** Whether server-side endpoint is configured (no manual config needed) */
+  hasServerEndpoint: boolean
+  /** Whether server-side key is configured */
+  hasServerKey: boolean
+  /** Whether config has been fetched from backend */
+  configLoaded: boolean
 }
 
 // ─────────────────────────────────────────────
@@ -98,6 +106,9 @@ interface NLActions {
   setApiKey(key: string): void
   setModelName(model: string): void
   setShowSettings(show: boolean): void
+
+  /** Fetch NL config from backend (auto-detect endpoint/model from config.yaml) */
+  fetchConfig(): Promise<void>
 }
 
 export type NLStore = NLState & NLActions
@@ -198,8 +209,12 @@ const initialState: NLState = {
   pendingResult: null,
   apiEndpoint: '/api/nl/generate',
   apiKey: '',
-  modelName: 'qwen3-32b',
+  modelName: '',
   showSettings: false,
+  availableModels: [],
+  hasServerEndpoint: false,
+  hasServerKey: false,
+  configLoaded: false,
 }
 
 // ─────────────────────────────────────────────
@@ -364,5 +379,28 @@ export const useNLStore = create<NLStore>((set, get) => ({
 
   setShowSettings(show: boolean) {
     set({ showSettings: show })
+  },
+
+  async fetchConfig() {
+    try {
+      const resp = await fetch('/api/nl/config')
+      if (!resp.ok) return
+      const data = await resp.json()
+      const updates: Partial<NLState> = {
+        configLoaded: true,
+        hasServerEndpoint: !!data.has_server_endpoint,
+        hasServerKey: !!data.has_server_key,
+      }
+      if (data.available_models?.length > 0) {
+        updates.availableModels = data.available_models
+      }
+      // Only set model if user hasn't manually changed it
+      if (!get().modelName && data.default_model) {
+        updates.modelName = data.default_model
+      }
+      set(updates)
+    } catch {
+      // Silently fail — config fetch is best-effort
+    }
   },
 }))

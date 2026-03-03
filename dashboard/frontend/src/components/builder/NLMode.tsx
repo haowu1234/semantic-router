@@ -45,6 +45,10 @@ const NLMode: React.FC = () => {
     apiKey,
     modelName,
     showSettings,
+    availableModels,
+    hasServerEndpoint,
+    hasServerKey,
+    configLoaded,
     setInputText,
     generate,
     acceptResult,
@@ -54,6 +58,7 @@ const NLMode: React.FC = () => {
     setApiKey,
     setModelName,
     setShowSettings,
+    fetchConfig,
   } = useNLStore()
 
   const {
@@ -67,6 +72,13 @@ const NLMode: React.FC = () => {
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // Fetch NL config from backend on mount (auto-detect endpoint/model)
+  useEffect(() => {
+    if (!configLoaded) {
+      fetchConfig()
+    }
+  }, [configLoaded, fetchConfig])
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -165,7 +177,10 @@ const NLMode: React.FC = () => {
       {showSettings && (
         <div className={styles.settingsPanel}>
           <div className={styles.settingsField}>
-            <label>API Endpoint</label>
+            <label>
+              API Endpoint
+              {hasServerEndpoint && <span className={styles.autoTag}>auto</span>}
+            </label>
             <input
               type="text"
               value={apiEndpoint}
@@ -175,24 +190,41 @@ const NLMode: React.FC = () => {
             />
           </div>
           <div className={styles.settingsField}>
-            <label>API Key</label>
+            <label>
+              API Key
+              {hasServerKey && <span className={styles.autoTag}>server</span>}
+            </label>
             <input
               type="password"
               value={apiKey}
               onChange={e => setApiKey(e.target.value)}
-              placeholder="Optional — for direct LLM access"
+              placeholder={hasServerKey ? 'Using server-side key' : 'Optional — for direct LLM access'}
               className={styles.settingsInput}
+              disabled={hasServerKey}
             />
           </div>
           <div className={styles.settingsField}>
             <label>Model</label>
-            <input
-              type="text"
-              value={modelName}
-              onChange={e => setModelName(e.target.value)}
-              placeholder="qwen3-32b"
-              className={styles.settingsInput}
-            />
+            {availableModels.length > 0 ? (
+              <select
+                value={modelName}
+                onChange={e => setModelName(e.target.value)}
+                className={styles.settingsInput}
+              >
+                {!modelName && <option value="">Select a model...</option>}
+                {availableModels.map(m => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="text"
+                value={modelName}
+                onChange={e => setModelName(e.target.value)}
+                placeholder="Model name (e.g., qwen3-32b)"
+                className={styles.settingsInput}
+              />
+            )}
           </div>
         </div>
       )}

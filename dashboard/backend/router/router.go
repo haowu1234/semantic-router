@@ -237,12 +237,14 @@ func Setup(cfg *config.Config) *http.ServeMux {
 
 	// NL→DSL LLM proxy endpoints
 	nlCfg := handlers.LoadNLConfig()
+	handlers.LoadNLConfigFromYAML(nlCfg, cfg.AbsConfigPath)
 	mux.HandleFunc("/api/nl/generate", handlers.NLGenerateHandler(nlCfg))
 	mux.HandleFunc("/api/nl/explain", handlers.NLExplainHandler(nlCfg))
 	mux.HandleFunc("/api/nl/config", handlers.NLConfigHandler(nlCfg))
 	log.Printf("NL API endpoints registered: /api/nl/generate, /api/nl/explain, /api/nl/config")
 	if nlCfg.DefaultEndpoint != "" {
-		log.Printf("NL LLM endpoint configured: %s (server-key=%v)", nlCfg.DefaultEndpoint, nlCfg.DefaultAPIKey != "")
+		log.Printf("NL LLM endpoint: %s (model=%s, server-key=%v, models=%d)",
+			nlCfg.DefaultEndpoint, nlCfg.DefaultModel, nlCfg.DefaultAPIKey != "", len(nlCfg.AvailableModels))
 	} else {
 		log.Printf("NL LLM endpoint not configured (frontend must provide endpoint)")
 	}
