@@ -7,6 +7,7 @@ import { getSignalFieldSchema, getAlgorithmFieldSchema, getPluginFieldSchema, AL
 import type { FieldSchema, SignalType, RouteInput, RouteModelInput, RouteAlgoInput, RoutePluginInput } from '@/lib/dslMutations'
 import ExpressionBuilder from '@/components/ExpressionBuilder'
 import DslGuide from '@/components/DslGuide'
+import { useReadonly } from '@/contexts/ReadonlyContext'
 import styles from './BuilderPage.module.css'
 
 // Reuse the DSL Editor as a child component in DSL mode
@@ -67,6 +68,7 @@ const DeployStepItem: React.FC<{ step: DeployStep; current: DeployStep | null; l
 // ---------- Component ----------
 
 const BuilderPage: React.FC = () => {
+  const { isReadonly } = useReadonly()
   const {
     dslSource,
     diagnostics,
@@ -605,8 +607,8 @@ const BuilderPage: React.FC = () => {
           <button
             className={styles.toolbarBtnDeploy}
             onClick={requestDeploy}
-            disabled={!wasmReady || !dslSource.trim() || loading || deploying}
-            title="Deploy config to router"
+            disabled={isReadonly || !wasmReady || !dslSource.trim() || loading || deploying}
+            title={isReadonly ? "Deploy is disabled in read-only mode" : "Deploy config to router"}
           >
             <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
               <path d="M8 2v8M5 7l3 3 3-3" strokeLinecap="round" strokeLinejoin="round" />
@@ -1082,7 +1084,7 @@ const BuilderPage: React.FC = () => {
               <button
                 className={styles.toolbarBtnDeploy}
                 onClick={executeDeploy}
-                disabled={deployPreviewLoading || !!deployPreviewError}
+                disabled={isReadonly || deployPreviewLoading || !!deployPreviewError}
               >
                 <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
                   <path d="M8 2v8M5 7l3 3 3-3" strokeLinecap="round" strokeLinejoin="round" />

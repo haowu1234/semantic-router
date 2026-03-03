@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
+import { useReadonly } from '../contexts/ReadonlyContext'
 import styles from './OpenClawPage.module.css'
 
 // --- Types ---
@@ -910,6 +911,7 @@ const TeamTab: React.FC<{
   containers: OpenClawStatus[]
   onTeamsUpdated: () => void
 }> = ({ teams, teamsLoading, containers, onTeamsUpdated }) => {
+  const { isReadonly } = useReadonly()
   const [searchQuery, setSearchQuery] = useState('')
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingTeamId, setEditingTeamId] = useState<string | null>(null)
@@ -1064,7 +1066,7 @@ const TeamTab: React.FC<{
           />
         </div>
         <div className={styles.entityToolbarActions}>
-          <button className={styles.btnPrimary} onClick={openCreateModal}>
+          <button className={styles.btnPrimary} onClick={openCreateModal} disabled={isReadonly}>
             New Team
           </button>
         </div>
@@ -1094,8 +1096,8 @@ const TeamTab: React.FC<{
                     <div className={styles.teamEntityId}>{team.id}</div>
                   </div>
                   <div className={styles.teamEntityActions}>
-                    <button className={styles.btnSmall} onClick={() => handleEdit(team)}>Edit</button>
-                    <button className={`${styles.btnSmall} ${styles.btnSmallDanger}`} onClick={() => handleDelete(team)} disabled={saving}>Delete</button>
+                    <button className={styles.btnSmall} onClick={() => handleEdit(team)} disabled={isReadonly}>Edit</button>
+                    <button className={`${styles.btnSmall} ${styles.btnSmallDanger}`} onClick={() => handleDelete(team)} disabled={isReadonly || saving}>Delete</button>
                   </div>
                 </div>
                 <div className={styles.teamEntityMeta}>
@@ -1186,6 +1188,7 @@ const StatusTab: React.FC<{
   statusLoading: boolean
   onRefresh: () => void
 }> = ({ containers, statusLoading, onRefresh }) => {
+  const { isReadonly } = useReadonly()
   const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [actionError, setActionError] = useState('')
   const [selectedContainer, setSelectedContainer] = useState<string | null>(null)
@@ -1404,7 +1407,7 @@ const StatusTab: React.FC<{
                         <button
                           className={styles.btnSmall}
                           onClick={() => handleAction('stop', c.containerName)}
-                          disabled={actionLoading === c.containerName}
+                          disabled={isReadonly || actionLoading === c.containerName}
                         >
                           Stop
                         </button>
@@ -1412,7 +1415,7 @@ const StatusTab: React.FC<{
                         <button
                           className={styles.btnSmall}
                           onClick={() => handleAction('start', c.containerName)}
-                          disabled={actionLoading === c.containerName}
+                          disabled={isReadonly || actionLoading === c.containerName}
                         >
                           Start
                         </button>
@@ -1420,7 +1423,7 @@ const StatusTab: React.FC<{
                       <button
                         className={`${styles.btnSmall} ${styles.btnSmallDanger}`}
                         onClick={() => handleDelete(c.containerName)}
-                        disabled={actionLoading === c.containerName}
+                        disabled={isReadonly || actionLoading === c.containerName}
                       >
                         Remove
                       </button>
@@ -1452,6 +1455,7 @@ const WorkerTab: React.FC<{
   onSwitchToTeam: () => void
   onSwitchToStatus: () => void
 }> = ({ containers, teams, onProvisioned, onSwitchToTeam, onSwitchToStatus }) => {
+  const { isReadonly } = useReadonly()
   const [searchQuery, setSearchQuery] = useState('')
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
   const [isEditModalOpen, setIsEditModalOpen] = useState(false)
@@ -1575,7 +1579,7 @@ const WorkerTab: React.FC<{
           />
         </div>
         <div className={styles.entityToolbarActions}>
-          <button className={styles.btnPrimary} onClick={() => setIsCreateModalOpen(true)}>
+          <button className={styles.btnPrimary} onClick={() => setIsCreateModalOpen(true)} disabled={isReadonly}>
             New Worker
           </button>
         </div>
@@ -1638,9 +1642,9 @@ const WorkerTab: React.FC<{
 
                 <div className={styles.agentFooter}>
                   <div className={styles.entityRowActions}>
-                    <button className={styles.btnSmall} onClick={() => openEditModal(worker)}>Edit</button>
+                    <button className={styles.btnSmall} onClick={() => openEditModal(worker)} disabled={isReadonly}>Edit</button>
                     <button className={styles.btnSmall} onClick={onSwitchToStatus}>Status</button>
-                    <button className={`${styles.btnSmall} ${styles.btnSmallDanger}`} onClick={() => handleDeleteWorker(worker)} disabled={saving}>
+                    <button className={`${styles.btnSmall} ${styles.btnSmallDanger}`} onClick={() => handleDeleteWorker(worker)} disabled={isReadonly || saving}>
                       Delete
                     </button>
                   </div>
