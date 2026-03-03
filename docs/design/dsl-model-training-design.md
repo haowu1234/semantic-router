@@ -27,7 +27,7 @@ NL → [System Prompt ~1500 tokens] → LLM 7B+ → Intent IR → intentIRToDSL(
 | **语法正确率** | ≥ 98% 通过 `parser.go` | 现约 85% |
 | **语义正确率** | ≥ 95% 通过 `validator.go` 三级验证 | 现约 80% |
 | **端到端延迟** | P95 < 500ms | 现 P95 ~3s |
-| **模型体积** | ≤ 2B 参数 (Q4 ~1GB) | 现依赖 7B+ |
+| **模型体积** | ≤ 7B 参数 (bf16 ~14GB, Q4 ~4GB) | 现依赖 7B+ 通用模型 |
 | **离线运行** | 支持 Edge / WebAssembly | 现必须联网 |
 | **去掉 Intent IR** | 直接 NL → DSL Text | 现需中间层 |
 
@@ -35,7 +35,7 @@ NL → [System Prompt ~1500 tokens] → LLM 7B+ → Intent IR → intentIRToDSL(
 
 ```
 现有: NL → System Prompt → LLM 7B+ → Intent IR → intentIRToDSL() → DSL → Validate → Repair (×3)  [~3s]
-目标: NL → DSL-Model ≤ 2B → DSL Text → WASM Validate  [< 500ms, 通常无需修复]
+目标: NL → DSL-Model 7B (专用微调) → DSL Text → WASM Validate  [< 300ms, 通常无需修复]
 ```
 
 ---
@@ -362,7 +362,7 @@ DSL_SPECIAL_TOKENS = (
 
 # 构建方法
 from transformers import AutoTokenizer
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-Coder-1.5B")
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-Coder-7B")
 tokenizer.add_tokens(DSL_SPECIAL_TOKENS, special_tokens=False)
 # 验证: "SIGNAL" 现在是 1 token (之前是 2)
 ```
@@ -379,49 +379,136 @@ tokenizer.add_tokens(DSL_SPECIAL_TOKENS, special_tokens=False)
 
 ## 5. 基座模型选择
 
-### 5.1 候选评估
+### 5.1 训练硬件
 
-| 模型 | 参数量 | 上下文 | 代码特化 | Q4 体积 | 推荐 |
-|:---|:---|:---|:---|:---|:---|
-| **Qwen2.5-Coder-1.5B** | 1.5B | 128K | ✅ 强 | ~900MB | ⭐⭐⭐⭐⭐ |
-| StarCoder2-3B | 3B | 16K | ✅ | ~1.8GB | ⭐⭐⭐⭐ |
-| CodeGemma-2B | 2B | 8K | ✅ FIM | ~1.2GB | ⭐⭐⭐⭐ |
-| DeepSeek-Coder-1.3B | 1.3B | 16K | ✅ | ~800MB | ⭐⭐⭐⭐ |
+```
+GPU:  AMD Instinct MI300X (192GB HBM3, 1307 TFLOPS FP16)
+CPU:  Intel Xeon Platinum 8568Y+
+ROCm: gfx942 (官方一等公民支持)
+```
 
-### 5.2 推荐: Qwen2.5-Coder-1.5B
+192GB VRAM 意味着无需 QLoRA 量化，可直接**全参数微调 7B 级模型**。
 
+### 5.2 候选评估
+
+| 模型 | 参数量 | 上下文 | 代码特化 | 全参数微调 VRAM | MI300X 可行 | 推荐 |
+|:---|:---|:---|:---|:---|:---|:---|
+| **Qwen2.5-Coder-7B** | 7B | 128K | ✅ 代码专用 | ~100GB | ✅ 轻松 | ⭐⭐⭐⭐⭐ |
+| Qwen3-8B | 8B | 128K | ⚠️ 通用 + 混合推理 | ~110GB | ✅ 可行 | ⭐⭐⭐⭐ |
+| Qwen2.5-Coder-1.5B | 1.5B | 128K | ✅ 代码专用 | ~20GB | ✅ 轻松 | ⭐⭐⭐⭐ |
+| Qwen3-30B-A3B (MoE) | 30B/3B激活 | 128K | ⚠️ 通用 | ~180GB | ⚠️ 刚好 | ⭐⭐⭐ |
+
+### 5.3 推荐策略：梯度验证
+
+```
+第一优先级: Qwen2.5-Coder-7B (全参数微调)
+  → 代码专用训练 + 128K 上下文 + 成熟微调生态 = 最快出结果
+  → MI300X 全参数微调 VRAM ~100GB，富余 ~90GB
+
+第二优先级: Qwen3-8B (全参数微调)
+  → 如果 Qwen2.5-Coder-7B 在 L4/L5 准确率不够，换此模型
+  → 架构改进 (QK-Norm)，基础能力更强，但非代码专用
+  → 需处理混合推理的 thinking token
+
+第三优先级: Qwen3-30B-A3B (MoE, 实验性)
+  → 30B 知识容量 + 3B 推理速度，MI300X 可装下
+  → MoE 微调有专家坍缩风险，等前两个跑通后再探索
+```
+
+### 5.4 Qwen2.5-Coder-7B 核心优势
+
+- **代码专用训练**：在代码语料上深度预训练，DSL 生成天然对口
 - **128K 上下文**：支持 L5 级长配置
 - **中英双语**：匹配 `nlSchemaRegistry.ts` 中的中文触发词
-- **Q4 ~900MB**：可在 Apple M 系列 / 消费级 GPU 运行
-- **HumanEval 表现**：1.5B 参数接近某些 7B 通用模型
+- **HumanEval 63.9 pass@1**：7B 参数级别顶尖
+- **微调生态最成熟**：LLaMA-Factory / Axolotl / trl 完美支持，社区经验丰富
+
+### 5.5 Qwen3-8B 与 Qwen2.5-Coder-7B 对比
+
+| 维度 | Qwen2.5-Coder-7B | Qwen3-8B |
+|:---|:---|:---|
+| 代码特化 | ✅ 专门针对代码训练 | ⚠️ 通用模型 |
+| 混合推理 | ❌ | ✅ 思考/非思考双模式 |
+| 架构 | GQA + SwiGLU + RoPE | +QK-Norm, 去掉 QKV-bias |
+| 上下文 | 128K | 128K |
+| 微调工具链 | 极度成熟 | 较新，仍在适配中 |
+| DSL 场景适配 | ⭐⭐⭐⭐⭐ (直接对口) | ⭐⭐⭐⭐ (需更多 DSL 数据弥补) |
+
+> **注意**: Qwen3 小模型 (0.6B/1.7B/4B) 上下文仅 32K，不适合本场景。
+> Qwen3-Coder 系列 (30B-A3B/480B) 为 MoE 架构，微调复杂度高，不推荐首次尝试。
 
 ---
 
 ## 6. 微调策略
 
-### 6.1 QLoRA 架构
+### 6.1 训练架构：全参数微调 (Full Fine-Tuning)
+
+MI300X 192GB VRAM 可直接全参数微调，**无需 QLoRA 量化**，效果更优：
 
 ```
-Base Model: Qwen2.5-Coder-1.5B (frozen, 4-bit NF4)
+Base Model: Qwen2.5-Coder-7B (full precision, bf16)
+├── Embedding Layer ← resize for +120 DSL tokens (全部可训)
+├── Attention (Q,K,V,O) ← 全部可训
+├── MLP (gate,up,down) ← 全部可训
+└── LM Head ← 全部可训
+
+Trainable: 7B params (100%), ~100GB VRAM
+```
+
+> **降级方案**: 如果需要在消费级 GPU 上复现，仍可使用 QLoRA (见 6.1.1)。
+
+#### 6.1.1 QLoRA 降级配置 (消费级 GPU / Apple M 系列)
+
+```
+Base Model: Qwen2.5-Coder-7B (frozen, 4-bit NF4)
 ├── Embedding Layer ← resize for +120 DSL tokens
 ├── Attention (Q,K,V,O) ← LoRA rank=64, alpha=128
 ├── MLP (gate,up,down) ← LoRA rank=32, alpha=64
 └── LM Head ← unfrozen (for new tokens)
 
-Trainable: ~20M params (1.3% of total), ~6GB VRAM
+Trainable: ~40M params (0.6% of total), ~12GB VRAM
+最低硬件: RTX 3090 24GB / Apple M2 Pro 16GB
 ```
 
 ### 6.2 超参数
 
+#### 6.2.1 全参数微调 (MI300X 推荐)
+
 ```python
-# LoRA Config
+from transformers import TrainingArguments
+
+args = TrainingArguments(
+    num_train_epochs=5,
+    per_device_train_batch_size=32,       # MI300X 192GB，大 batch
+    gradient_accumulation_steps=1,        # 不需要梯度累积
+    learning_rate=5e-5,                   # 全参数微调 LR 需低于 LoRA
+    lr_scheduler_type="cosine",
+    warmup_ratio=0.05,
+    weight_decay=0.01,
+    bf16=True,                            # MI300X 完美支持 bf16
+    gradient_checkpointing=False,         # VRAM 充足，关掉换速度
+    optim="adamw_torch",                  # 不需要 8-bit 优化器
+    eval_steps=200,
+    save_steps=500,
+    metric_for_best_model="eval_syntax_accuracy",
+    dataloader_num_workers=8,             # Xeon 多核，多开 worker
+    save_total_limit=3,                   # 保留最近 3 个 checkpoint
+    logging_steps=50,
+    report_to="tensorboard",
+)
+```
+
+#### 6.2.2 QLoRA 降级超参数
+
+```python
+from peft import LoraConfig
+
 lora_config = LoraConfig(
     r=64, lora_alpha=128, lora_dropout=0.05,
     target_modules=["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"],
     rank_pattern={"gate_proj":32, "up_proj":32, "down_proj":32},
 )
 
-# Training Args
 args = TrainingArguments(
     num_train_epochs=5, per_device_train_batch_size=4, gradient_accumulation_steps=8,
     learning_rate=2e-4, lr_scheduler_type="cosine", warmup_ratio=0.05,
@@ -432,44 +519,341 @@ args = TrainingArguments(
 
 ### 6.3 四阶段训练策略
 
+#### Stage 1: DSL Syntax Pretraining
+
+**目标**：让模型内化 DSL 语法结构，学会 DSL 的"语感"。
+
+**类比**：教外国人写中文诗——先学汉字和语法，再学写诗。
+
 ```
-Stage 1: DSL Syntax Pretraining (Epoch 1-2)
-├── Data: 全部合成 DSL (Source B) — 纯 DSL 文本，无 NL
-├── Task: Causal LM (next token prediction)
-├── Goal: 内化 DSL 语法结构、关键字分布、嵌套模式
-└── LR: 2e-4 → cosine decay
-
-Stage 2: NL → DSL Supervised Fine-Tuning (Epoch 3-4)
-├── Data: NL→DSL 对 (Source A+C) — chat format
-├── Task: Instruction-following (仅 DSL 输出部分计算 loss)
-├── Goal: 建立 NL→DSL 映射
-├── LR: 1e-4 (降低，防遗忘)
-└── 采样: L1:L2:L3:L4:L5 = 10:25:35:20:10
-
-Stage 3: DPO Preference Alignment (Epoch 5)
-├── Data: (NL, DSL_chosen, DSL_rejected) triples
-│   chosen = 通过验证的 DSL, rejected = 负样本 (Source D)
-├── Goal: 强化语法正确性和引用完整性偏好
-└── β = 0.1
-
-Stage 4: RLHF with Compiler Feedback (Optional, Research)
-├── Reward: WASM 编译器 → 1.0 (pass) / 0.5 (warning) / 0.0 (error)
-├── Method: PPO or GRPO
-└── Risk: 需 KL 散度约束防过拟合
+阶段:       Stage 1 (Epoch 1-2)
+数据:       全部合成 DSL (Source B) — 纯 DSL 文本，无 NL (~10,000 样本)
+任务:       Causal LM (next token prediction)
+输入示例:   "ROUTE my-api {\n  host: api.example.com\n  path: /v1/*"
+预测目标:   下一个 token (如 "\n  methods:" 或 "\n  BACKEND {")
+LR:         5e-5 → cosine decay
+MI300X 耗时: ~2 小时
 ```
 
-### 6.4 训练数据格式
+**学到什么**：
+- DSL 关键字出现顺序（`ROUTE` 后跟名字和 `{`）
+- 嵌套结构（`BACKEND` 只在 `ROUTE` 内部）
+- 字段值域（`methods:` 后只能是 `[GET, POST, PUT, DELETE, PATCH]`）
+- token 共现分布（有 `rate-limiting` 就大概率有 `requests-per-second:`）
+
+**为什么不跳过**：如果直接训 NL→DSL，模型同时要学两件事——理解 NL 和生成正确 DSL。分开后 Stage 1 先吃透语法，Stage 2 只需建立映射，**收敛更快、语法准确率显著更高**。
+
+**实操代码**：
 
 ```python
-# Qwen2.5 Chat Template
-TEMPLATE = """<|im_start|>system
-You are a Signal DSL expert. Convert natural language into valid Signal DSL.<|im_end|>
-<|im_start|>user
-{nl_input}<|im_end|>
-<|im_start|>assistant
-{dsl_output}<|im_end|>"""
+from transformers import AutoModelForCausalLM, AutoTokenizer, Trainer, TrainingArguments
+from datasets import load_dataset
 
-# Loss masking: 仅在 <|im_start|>assistant 之后的 token 上计算 loss
+# 1. 加载模型
+model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-Coder-7B", torch_dtype=torch.bfloat16)
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-Coder-7B")
+
+# 2. 添加 DSL 专用 token
+tokenizer.add_tokens(DSL_SPECIAL_TOKENS, special_tokens=False)
+model.resize_token_embeddings(len(tokenizer))
+
+# 3. 加载纯 DSL 数据
+dataset = load_dataset("json", data_files="data/stage1_dsl_only.jsonl")
+
+def tokenize(example):
+    return tokenizer(example["dsl"], truncation=True, max_length=4096, padding="max_length")
+
+tokenized = dataset.map(tokenize, batched=True)
+
+# 4. 训练 (标准 Causal LM)
+trainer = Trainer(model=model, args=stage1_args, train_dataset=tokenized["train"])
+trainer.train()
+trainer.save_model("checkpoints/stage1-syntax-pt")
+```
+
+#### Stage 2: NL → DSL Supervised Fine-Tuning (SFT)
+
+**目标**：建立自然语言到 DSL 的映射关系。
+
+```
+阶段:       Stage 2 (Epoch 3-4)
+数据:       NL→DSL 对 (Source A+C) — chat format (~60,000 样本)
+任务:       Instruction-following (仅 DSL 输出部分计算 loss)
+LR:         2e-5 (降低，防止遗忘 Stage 1 学到的语法)
+采样比例:   L1:L2:L3:L4:L5 = 10:25:35:20:10
+MI300X 耗时: ~3 小时
+```
+
+**核心机制 — Loss Masking**：
+
+```
+<|im_start|>system
+You are a Signal DSL expert...<|im_end|>      ← 不计算 loss
+<|im_start|>user
+创建一个路由，域名是 api.example.com<|im_end|>  ← 不计算 loss
+<|im_start|>assistant
+ROUTE my-route {                               ← ✅ 仅这部分计算 loss
+  host: api.example.com                        ← ✅
+  BACKEND {                                    ← ✅
+    target: upstream-1                         ← ✅
+  }                                            ← ✅
+}<|im_end|>                                    ← ✅
+```
+
+不 mask 的话，模型会花大量精力去"学会生成 system prompt"——浪费算力。
+
+**采样比例设计原因**：
+- L1 (10%): 太简单，多了模型"偷懒"（总是生成最简配置）
+- L3 (35%): 最重要，覆盖 70%+ 的真实使用场景
+- L5 (10%): 太少学不会，太多其他能力退化
+
+**实操代码**：
+
+```python
+from trl import SFTTrainer, SFTConfig, DataCollatorForCompletionOnlyLM
+
+# 1. 从 Stage 1 checkpoint 继续
+model = AutoModelForCausalLM.from_pretrained("checkpoints/stage1-syntax-pt", torch_dtype=torch.bfloat16)
+
+# 2. 构建 chat 数据
+def format_chat(example):
+    return tokenizer.apply_chat_template([
+        {"role": "system", "content": "You are a Signal DSL expert. Convert natural language into valid Signal DSL."},
+        {"role": "user", "content": example["nl_input"]},
+        {"role": "assistant", "content": example["dsl_output"]},
+    ], tokenize=False)
+
+# 3. 设置 completion-only loss (只对 assistant 输出计算 loss)
+collator = DataCollatorForCompletionOnlyLM(
+    response_template="<|im_start|>assistant\n",
+    tokenizer=tokenizer,
+)
+
+# 4. SFT 训练
+sft_config = SFTConfig(
+    learning_rate=2e-5,         # 比 Stage 1 低，防遗忘
+    num_train_epochs=2,
+    per_device_train_batch_size=16,
+    max_seq_length=4096,
+    bf16=True,
+    output_dir="checkpoints/stage2-sft",
+)
+trainer = SFTTrainer(model=model, args=sft_config, train_dataset=sft_dataset,
+                     data_collator=collator, formatting_func=format_chat)
+trainer.train()
+```
+
+#### Stage 3: DPO Preference Alignment
+
+**目标**：让模型区分"好 DSL"和"差 DSL"，强化语法正确性偏好。
+
+```
+阶段:       Stage 3 (Epoch 5)
+数据:       (NL, DSL_chosen, DSL_rejected) 三元组 (~5,000-10,000 组)
+方法:       Direct Preference Optimization (DPO)
+β:          0.1
+LR:         5e-6 (极低，微调阶段)
+MI300X 耗时: ~1.5 小时
+```
+
+**DPO 的数学本质**：
+
+```
+L_DPO = -log σ( β · [ log π(y_chosen|x)/π_ref(y_chosen|x)
+                      - log π(y_rejected|x)/π_ref(y_rejected|x) ] )
+
+人话翻译:
+  "在不偏离原始模型太远的前提下 (π_ref)，
+   增大生成 chosen 的概率，减小生成 rejected 的概率"
+
+β = 0.1 控制偏离度:
+  β 太大 → 太保守，几乎不学习
+  β 太小 → 太激进，过拟合到 preference 数据
+```
+
+**为什么比 RLHF 简单**：
+- RLHF 需同时加载 4 个模型（policy, reference, reward, critic） → ~400GB
+- DPO 只需 2 个模型（当前模型 π, 冻结参考模型 π_ref） → ~200GB
+- DPO 隐式包含 reward model，无需单独训练
+- MI300X 192GB 跑 DPO 完全可行
+
+**负样本自动获取（无需人工标注）**：
+
+```python
+# 用 Stage 2 训好的模型采样 + DSL 验证器自动标注
+def generate_dpo_pairs(model, tokenizer, nl_inputs, parser_bin):
+    pairs = []
+    for nl in nl_inputs:
+        outputs = model.generate(
+            tokenizer(nl, return_tensors="pt").input_ids,
+            num_return_sequences=8,  # 每个 NL 采样 8 个候选
+            temperature=0.8,         # 增加多样性
+            do_sample=True,
+            max_new_tokens=2048,
+        )
+        chosen, rejected = [], []
+        for out in outputs:
+            dsl = tokenizer.decode(out, skip_special_tokens=True)
+            result = subprocess.run([parser_bin, '--validate', '--json'],
+                                   input=dsl, capture_output=True, text=True, timeout=5)
+            if json.loads(result.stdout).get('valid', False):
+                chosen.append(dsl)
+            else:
+                rejected.append(dsl)
+        if chosen and rejected:
+            pairs.append({"prompt": nl, "chosen": chosen[0], "rejected": rejected[0]})
+    return pairs
+```
+
+**实操代码**：
+
+```python
+from trl import DPOTrainer, DPOConfig
+
+# 1. 加载 Stage 2 模型作为 policy 和 reference
+model = AutoModelForCausalLM.from_pretrained("checkpoints/stage2-sft", torch_dtype=torch.bfloat16)
+ref_model = AutoModelForCausalLM.from_pretrained("checkpoints/stage2-sft", torch_dtype=torch.bfloat16)
+
+# 2. DPO 配置
+dpo_config = DPOConfig(
+    beta=0.1,
+    learning_rate=5e-6,
+    num_train_epochs=1,
+    per_device_train_batch_size=8,
+    bf16=True,
+    max_length=4096,
+    max_prompt_length=512,
+    output_dir="checkpoints/stage3-dpo",
+)
+
+# 3. 训练
+trainer = DPOTrainer(model=model, ref_model=ref_model, args=dpo_config,
+                     train_dataset=dpo_dataset, tokenizer=tokenizer)
+trainer.train()
+```
+
+#### Stage 4: RLHF with Compiler Feedback (可选，研究方向)
+
+**目标**：利用 DSL 编译器作为 reward signal 进一步优化。
+
+```
+阶段:       Stage 4 (Optional)
+方法:       PPO 或 GRPO
+Reward:     WASM 编译器 → 1.0 (pass) / 0.5 (warning) / 0.0 (error)
+KL 约束:    防止 reward hacking
+MI300X 耗时: ~3 小时
+```
+
+**不推荐初期实施的原因**：
+- PPO 需同时加载 4 个模型 (actor + critic + ref + reward)，即使 MI300X 也需精细管理显存
+- PPO 有 4 个互相影响的超参数 (clip ratio, KL coeff, entropy bonus, GAE lambda)
+- 存在 reward hacking 风险：模型可能学到"生成空配置通过语法检查得 1.0 分"
+- DPO + Constrained Decoding 已覆盖 90%+ 的需求
+
+**如果要做的实操建议**：使用 GRPO（Group Relative Policy Optimization）替代 PPO，更稳定：
+
+```python
+from trl import GRPOTrainer, GRPOConfig
+
+def dsl_reward_fn(completions, **kwargs):
+    """编译器驱动的 reward function"""
+    rewards = []
+    for dsl in completions:
+        result = subprocess.run([PARSER_BIN, '--validate', '--json'],
+                               input=dsl, capture_output=True, text=True, timeout=5)
+        info = json.loads(result.stdout)
+        if info.get('valid'):
+            rewards.append(1.0)
+        elif info.get('warnings') and not info.get('errors'):
+            rewards.append(0.5)
+        else:
+            rewards.append(0.0)
+    return rewards
+
+grpo_config = GRPOConfig(
+    num_generations=8,           # 每个 prompt 采样 8 次
+    learning_rate=1e-6,          # 极低 LR
+    kl_coef=0.05,                # KL 散度约束
+    num_train_epochs=1,
+    bf16=True,
+)
+trainer = GRPOTrainer(model=model, args=grpo_config, reward_funcs=[dsl_reward_fn],
+                      train_dataset=rl_dataset, tokenizer=tokenizer)
+trainer.train()
+```
+
+### 6.4 四阶段概念总结
+
+```
+Stage 1 (语法预训练)  → 模型学会 DSL 的"语感"
+    ↓ 已知: 什么样的 DSL 是合法的
+Stage 2 (SFT)        → 模型学会 NL→DSL 的映射
+    ↓ 已知: 给定 NL，应该生成什么 DSL
+Stage 3 (DPO)        → 模型学会区分好坏 DSL
+    ↓ 已知: 哪个 DSL 更好
+Stage 4 (RLHF)       → 模型从编译器反馈中持续改进
+    ↓ 已知: 如何生成编译器一定通过的 DSL
+
+每一步建立在前一步基础上，跳步训练效果大幅下降。
+Stage 1→2→3 为实际推荐路线，Stage 4 边际收益递减。
+```
+
+### 6.5 训练数据格式
+
+```python
+# Stage 1: 纯 DSL 文本 (data/stage1_dsl_only.jsonl)
+{"dsl": "SIGNAL domain math {\n  description: \"Math\"\n}\n\nROUTE math_route ..."}
+
+# Stage 2: NL→DSL Chat Format (data/stage2_nl_dsl_pairs.jsonl)
+{"nl_input": "Route math questions to deepseek-r1", "dsl_output": "SIGNAL domain math {...}", "complexity": "L2"}
+
+# Stage 3: DPO Preference Pairs (data/stage3_dpo_pairs.jsonl)
+{"prompt": "创建限流插件", "chosen": "PLUGIN rate-limit {...}", "rejected": "PLUGIN rate-limit {requests-per-second: 50 ...}"}
+```
+
+### 6.6 MI300X 训练时间与资源预估
+
+| 阶段 | 数据量 | batch_size | 预估时间 | VRAM 峰值 |
+|:---|:---|:---|:---|:---|
+| Stage 1 (Syntax PT, 2 epoch) | ~10K DSL | 32 | ~2h | ~100GB |
+| Stage 2 (SFT, 2 epoch) | ~60K NL-DSL | 16 | ~3h | ~100GB |
+| Stage 3 (DPO, 1 epoch) | ~8K triples | 8 | ~1.5h | ~200GB (双模型) |
+| Stage 4 (GRPO, 1 epoch, 可选) | ~5K prompts | 4 | ~3h | ~150GB |
+| **总计 (Stage 1-3)** | | | **~6.5h** | |
+
+> Stage 3 DPO 需要同时加载 policy model 和 reference model，VRAM 约 200GB，MI300X 192GB 略紧。
+> 解决方案：reference model 使用 float16 → 4-bit 量化，或使用 `ref_model=None` (隐式 reference)。
+
+### 6.7 ROCm 环境配置
+
+```bash
+# 1. 确认 GPU 和 ROCm
+rocm-smi                    # 确认 MI300X 识别
+rocminfo | grep "gfx942"    # 确认 compute capability
+
+# 2. 安装 PyTorch ROCm 版
+pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm6.2
+
+# 3. 安装训练依赖
+pip install transformers datasets accelerate peft trl tensorboard
+pip install flash-attn --no-build-isolation  # ROCm Flash Attention
+
+# 4. 验证环境
+python -c "
+import torch
+print(f'PyTorch: {torch.__version__}')
+print(f'HIP: {torch.version.hip}')
+print(f'GPU: {torch.cuda.get_device_name(0)}')
+print(f'VRAM: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.0f} GB')
+"
+
+# 5. 快速验证模型加载
+python -c "
+from transformers import AutoModelForCausalLM
+import torch
+model = AutoModelForCausalLM.from_pretrained('Qwen/Qwen2.5-Coder-7B', torch_dtype=torch.bfloat16, device_map='auto')
+print(f'Model loaded. VRAM used: {torch.cuda.memory_allocated()/1024**3:.1f} GB')
+"
 ```
 
 ---
@@ -602,29 +986,32 @@ class DSLEvaluator:
 │                                                                      │
 │  Option A: vLLM Server (推荐生产环境)                                  │
 │  ┌────────────────────────────────────────────────────────────────┐  │
-│  │  vLLM + QLoRA merged model (Q4_K_M GGUF)                      │  │
-│  │  • GPU: Single A10 (24GB) or L4 (24GB)                        │  │
-│  │  • Throughput: ~200 tok/s                                      │  │
-│  │  • Latency: P95 ~300ms (L3 config)                            │  │
-│  │  • Concurrent: ~50 QPS with continuous batching                │  │
+│  │  vLLM + Qwen2.5-Coder-7B fine-tuned (bf16 或 AWQ/GPTQ INT4)   │  │
+│  │  • GPU: MI300X 192GB / A100 40GB+ / A10 24GB (量化后)          │  │
+│  │  • Throughput: ~300+ tok/s (MI300X) / ~200 tok/s (A10 Q4)     │  │
+│  │  • Latency: P95 ~200ms (MI300X) / ~400ms (A10 Q4)            │  │
+│  │  • Concurrent: ~100 QPS (MI300X) / ~50 QPS (A10)              │  │
 │  │  • Constrained decoding via Outlines LogitsProcessor           │  │
+│  │  • ROCm: vLLM 原生支持 gfx942 (MI300X)                        │  │
 │  └────────────────────────────────────────────────────────────────┘  │
 │                                                                      │
 │  Option B: llama.cpp / Ollama (轻量部署)                              │
 │  ┌────────────────────────────────────────────────────────────────┐  │
-│  │  GGUF Q4_K_M (~900MB)                                          │  │
-│  │  • Hardware: Apple M2+ (8GB RAM) / Consumer GPU                │  │
-│  │  • Throughput: ~50-80 tok/s                                    │  │
-│  │  • Latency: P95 ~500ms                                        │  │
+│  │  GGUF Q4_K_M (~4GB, 7B 模型量化后)                              │  │
+│  │  • Hardware: Apple M2+ (16GB RAM) / RTX 3060+ (12GB)          │  │
+│  │  • Throughput: ~30-50 tok/s                                    │  │
+│  │  • Latency: P95 ~800ms                                        │  │
 │  │  • Use: Dev/staging, 本地离线                                    │  │
 │  └────────────────────────────────────────────────────────────────┘  │
 │                                                                      │
-│  Option C: WebAssembly (浏览器端, 研究方向)                            │
+│  Option C: 轻量模型 Fallback (边缘/离线场景)                          │
 │  ┌────────────────────────────────────────────────────────────────┐  │
-│  │  ONNX quantized (INT8) via WebNN / WASM                        │  │
-│  │  • Model size: ~500MB (INT4)                                   │  │
-│  │  • Throughput: ~10-20 tok/s                                    │  │
-│  │  • Use: 完全离线, 无服务器, 与现有 WASM 验证器同运行时              │  │
+│  │  Qwen2.5-Coder-1.5B Q4 GGUF (~900MB)                          │  │
+│  │  • Hardware: Apple M2 (8GB) / 任何 8GB+ RAM 设备               │  │
+│  │  • Throughput: ~50-80 tok/s                                    │  │
+│  │  • Latency: P95 ~500ms                                        │  │
+│  │  • Use: 完全离线, L1-L3 场景                                    │  │
+│  │  • 训练方式: QLoRA 微调 (同一份数据, 降级配置)                    │  │
 │  └────────────────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────────────┘
 ```
@@ -686,14 +1073,16 @@ class DSLEvaluator:
 DSL 具有高度可预测的结构模式，特别适合 speculative decoding：
 
 ```
-Draft model: 更小的 DSL 模型 (350M) 或 n-gram 模型
-Target model: DSL-Coder 1.5B
+Draft model: Qwen2.5-Coder-1.5B (DSL 微调版) 或 n-gram 模型
+Target model: Qwen2.5-Coder-7B (DSL 微调版)
 
 可预测的模式:
 - "SIGNAL" 后必跟类型名 → draft 准确率 ~95%
 - "{" 后必跟 "\n  " → draft 准确率 ~99%
 - "WHEN" 后必跟信号引用 → draft 准确率 ~90%
 - "GLOBAL {\n  default_model:" → 固定前缀 draft ~100%
+
+MI300X 192GB 可同时加载 7B target + 1.5B draft，VRAM 完全够用。
 ```
 
 ---
@@ -710,20 +1099,26 @@ Target model: DSL-Coder 1.5B
                     └──────────┬───────────┘
                                │
                     ┌──────────▼───────────┐
-                    │   DSL-Model (≤2B)    │ ← 快速路径 (< 500ms)
-                    └──────────┬───────────┘
-                               │
-                    ┌──────────▼───────────┐
-                    │   WASM Validate      │
+                    │  Complexity Estimator │ ← 判断 L1-L5
                     └──────────┬───────────┘
                           ┌────┴────┐
-                     Pass │         │ Fail
+                     L1-L4│         │L5 / 低置信度
                           ▼         ▼
-                     ┌────────┐ ┌────────────────────┐
-                     │ Output │ │ Fallback: LLM 7B+  │ ← 现有管线
-                     └────────┘ │ Intent IR → DSL     │
-                                │ Repair Loop (×3)    │
-                                └────────────────────┘
+               ┌──────────────┐ ┌────────────────────┐
+               │ DSL-Model 7B │ │ Fallback: LLM 70B+ │
+               │ (< 200ms)    │ │ Intent IR → DSL     │
+               └──────┬───────┘ │ Repair Loop (×3)    │
+                      │         └──────────┬─────────┘
+                      ▼                    ▼
+               ┌──────────────┐     ┌────────────┐
+               │ WASM Validate│     │   Output    │
+               └──────┬───────┘     └────────────┘
+                 ┌────┴────┐
+            Pass │         │ Fail
+                 ▼         ▼
+            ┌────────┐ ┌──────────────────────┐
+            │ Output │ │ Retry with Fallback   │
+            └────────┘ └──────────────────────┘
 ```
 
 ### 10.2 Dashboard 集成点
@@ -777,35 +1172,40 @@ func (h *NLHandler) GenerateDSL(w http.ResponseWriter, r *http.Request) {
 | 实现 `generate_negative_samples.py` | ~5,000 负样本 | 1d |
 | 数据验证 + 质量抽检 | 清洗后数据集 | 1d |
 
-### Phase 2: 模型训练 (Week 2-3)
+### Phase 2: 环境搭建 + 模型训练 (Week 2-3)
 
 | 任务 | 输出 | 工时 |
 |:---|:---|:---|
+| MI300X ROCm 环境搭建 (§6.7) | 验证通过的训练环境 | 0.5d |
 | Tokenizer 扩展 + 验证 | DSL-enhanced tokenizer | 0.5d |
-| Stage 1: DSL 语法预训练 | 语法准确率 baseline | 1d (A100 ~8h) |
-| Stage 2: NL→DSL SFT | 端到端模型 v0.1 | 1d (A100 ~12h) |
-| Stage 3: DPO 对齐 | 模型 v0.2 | 0.5d (A100 ~4h) |
-| 评估基准建立 + 测试 | DSL-Bench v1 报告 | 1d |
+| Stage 1: DSL 语法预训练 (7B 全参数) | 语法准确率 baseline | 0.5d (MI300X ~2h) |
+| Stage 2: NL→DSL SFT (7B 全参数) | 端到端模型 v0.1 | 0.5d (MI300X ~3h) |
+| Stage 3: DPO 对齐 | 模型 v0.2 | 0.5d (MI300X ~1.5h) |
+| 评估基准建立 + DSL-Bench 测试 | DSL-Bench v1 报告 | 1d |
+| (可选) Qwen3-8B 对比实验 | A/B 对比报告 | 0.5d |
 
 ### Phase 3: 推理部署 (Week 3-4)
 
 | 任务 | 输出 | 工时 |
 |:---|:---|:---|
-| 模型量化 (GGUF Q4_K_M) | ~900MB 模型文件 | 0.5d |
-| vLLM 部署 + Constrained Decoding | 生产级 API | 1d |
-| Ollama 集成 (本地开发) | Ollama Modelfile | 0.5d |
+| 模型量化 (GGUF Q4_K_M + AWQ) | ~4GB (Q4) / ~14GB (bf16) 模型文件 | 0.5d |
+| MI300X vLLM 部署 + Constrained Decoding | 生产级 API (ROCm) | 1d |
+| Ollama 集成 (本地开发, GGUF 量化版) | Ollama Modelfile | 0.5d |
 | Dashboard 集成 (快速路径 + fallback) | 前后端联调 | 1.5d |
+| (可选) 1.5B 轻量模型 QLoRA 训练 | 边缘部署模型 | 1d |
 
 ### Phase 4: 迭代优化 (Week 4+)
 
 | 任务 | 输出 | 工时 |
 |:---|:---|:---|
 | 收集真实用户 NL→DSL 对 | 增量训练数据 | 持续 |
-| 模型 A/B 测试 | 性能报告 | 1d |
-| Speculative decoding 实验 | 延迟优化 | 1d |
-| Stage 4: RLHF 实验 (可选) | 模型 v1.0 | 2d |
+| 模型 A/B 测试 (7B vs 1.5B, Qwen2.5 vs Qwen3) | 性能报告 | 1d |
+| Speculative decoding 实验 (7B target + 1.5B draft) | 延迟优化 | 1d |
+| Stage 4: GRPO 实验 (可选) | 模型 v1.0 | 2d |
+| Qwen3-30B-A3B MoE 实验 (可选) | 上限探索 | 2d |
 
-**总计：约 4-5 周，单人可完成 Phase 1-3，Phase 4 为持续迭代。**
+**总计：约 4 周，单人可完成 Phase 1-3，Phase 4 为持续迭代。**
+**MI300X 训练时间极短 (Stage 1-3 总计 ~6.5h)，瓶颈在数据工程和评估。**
 
 ---
 
@@ -813,8 +1213,10 @@ func (h *NLHandler) GenerateDSL(w http.ResponseWriter, r *http.Request) {
 
 | 风险 | 概率 | 影响 | 缓解 |
 |:---|:---|:---|:---|
-| 1.5B 模型容量不足，复杂配置 (L4/L5) 准确率低 | 中 | 高 | Fallback 到 7B+ LLM; 控制复杂度上限 |
-| 合成数据分布偏移，真实用户 NL 表述与训练分布不同 | 高 | 中 | 持续收集真实数据; 在线学习 |
+| 合成数据分布偏移，真实用户 NL 表述与训练分布不同 | 高 | 高 | 持续收集真实数据; 在线学习; 多风格 NL 生成 |
+| 7B 模型在 L4/L5 复杂配置仍不够准确 | 中 | 中 | Fallback 到大模型 API; 升级到 Qwen3-8B 或 MoE 30B |
+| ROCm/vLLM 兼容性问题 | 低 | 中 | MI300X 为官方支持; 及时更新 ROCm/vLLM 版本 |
 | Constrained decoding 增加推理延迟 | 低 | 中 | 仅约束关键状态; 使用 Outlines 高效实现 |
 | DSL 语法演进 (新增 Signal/Plugin 类型) | 中 | 中 | 保持 Tokenizer 和生成器与 nlSchemaRegistry.ts 同步 |
-| 过拟合编译器 reward (Stage 4 RLHF) | 中 | 中 | KL 散度约束; 人工评估兜底 |
+| DPO Stage 3 双模型超出 192GB | 低 | 低 | ref_model 量化为 4-bit 或使用隐式 reference |
+| 过拟合编译器 reward (Stage 4 GRPO) | 中 | 中 | KL 散度约束; 人工评估兜底 |
