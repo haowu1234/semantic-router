@@ -234,10 +234,10 @@ export function classifyOperation(
   // References to existing entities (e.g., "the math route", "my signal")
   if (context.symbols) {
     const entityNames = [
-      ...context.symbols.routes,
-      ...context.symbols.signals.map(s => s.name),
-      ...context.symbols.plugins,
-      ...context.symbols.backends.map(b => b.name),
+      ...(context.symbols.routes ?? []),
+      ...(context.symbols.signals ?? []).map(s => s.name),
+      ...(context.symbols.plugins ?? []),
+      ...(context.symbols.backends ?? []).map(b => b.name),
     ]
     for (const name of entityNames) {
       if (lower.includes(name.toLowerCase())) return 'modify'
@@ -263,11 +263,11 @@ function buildPromptContext(
 
   if (context.symbols) {
     promptCtx.symbols = {
-      signals: context.symbols.signals.map(s => ({ name: s.name, type: s.type })),
-      routes: context.symbols.routes,
-      plugins: context.symbols.plugins,
-      backends: context.symbols.backends.map(b => ({ name: b.name, type: b.type })),
-      models: context.symbols.models,
+      signals: (context.symbols.signals ?? []).map(s => ({ name: s.name, type: s.type })),
+      routes: context.symbols.routes ?? [],
+      plugins: context.symbols.plugins ?? [],
+      backends: (context.symbols.backends ?? []).map(b => ({ name: b.name, type: b.type })),
+      models: context.symbols.models ?? [],
     }
   }
 

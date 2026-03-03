@@ -72,25 +72,25 @@ export function buildUserPrompt(context: NLPromptContext): string {
   // Current configuration context (for modify mode)
   if (context.mode === 'modify' && context.symbols) {
     parts.push('Current configuration context:')
-    if (context.symbols.signals.length > 0) {
+    if ((context.symbols.signals ?? []).length > 0) {
       const sigList = context.symbols.signals
         .map(s => `${s.type}("${s.name}")`)
         .join(', ')
       parts.push(`- Defined signals: ${sigList}`)
     }
-    if (context.symbols.routes.length > 0) {
+    if ((context.symbols.routes ?? []).length > 0) {
       parts.push(`- Defined routes: ${context.symbols.routes.join(', ')}`)
     }
-    if (context.symbols.plugins.length > 0) {
+    if ((context.symbols.plugins ?? []).length > 0) {
       parts.push(`- Defined plugins: ${context.symbols.plugins.join(', ')}`)
     }
-    if (context.symbols.backends.length > 0) {
+    if ((context.symbols.backends ?? []).length > 0) {
       const beList = context.symbols.backends
         .map(b => `${b.type}("${b.name}")`)
         .join(', ')
       parts.push(`- Defined backends: ${beList}`)
     }
-    if (context.symbols.models.length > 0) {
+    if ((context.symbols.models ?? []).length > 0) {
       parts.push(`- Available models: ${context.symbols.models.join(', ')}`)
     }
     parts.push('')
