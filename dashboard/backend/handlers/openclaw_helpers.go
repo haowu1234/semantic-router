@@ -276,10 +276,19 @@ func writeOpenClawConfig(path string, req ProvisionRequest) error {
 
 func generateDockerRunCmd(runtime string, req ProvisionRequest, dataDir string) string {
 	volumeName := "openclaw-state-" + req.Container.ContainerName
+	healthCmd := fmt.Sprintf(
+		`node -e "fetch('http://127.0.0.1:%d/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"`,
+		req.Container.GatewayPort,
+	)
 	return fmt.Sprintf(`%s run -d \
   --name %s \
   --user 0:0 \
   --network %s \
+  --health-cmd '%s' \
+  --health-interval 30s \
+  --health-timeout 5s \
+  --health-start-period 15s \
+  --health-retries 3 \
   -v %s/workspace:/workspace \
   -v %s/openclaw.json:/config/openclaw.json:ro \
   -v %s:/state \
@@ -287,7 +296,7 @@ func generateDockerRunCmd(runtime string, req ProvisionRequest, dataDir string) 
   -e OPENCLAW_STATE_DIR=/state \
   %s \
   node openclaw.mjs gateway --allow-unconfigured --bind lan`,
-		runtime, req.Container.ContainerName, req.Container.NetworkMode,
+		runtime, req.Container.ContainerName, req.Container.NetworkMode, healthCmd,
 		dataDir, dataDir, volumeName, req.Container.BaseImage)
 }
 
@@ -311,6 +320,12 @@ func generateComposeYAML(req ProvisionRequest, dataDir string) string {
     environment:
       OPENCLAW_CONFIG_PATH: /config/openclaw.json
       OPENCLAW_STATE_DIR: /state
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:%d/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
     command: ["node", "openclaw.mjs", "gateway", "--allow-unconfigured", "--bind", "lan"]
     restart: unless-stopped
 
@@ -321,7 +336,9 @@ networks:
 volumes:
   %s:
 `, req.Container.BaseImage, req.Container.ContainerName, networkMode,
-			dataDir, dataDir, volumeName, networkMode, volumeName)
+			dataDir, dataDir, volumeName,
+			req.Container.GatewayPort,
+			networkMode, volumeName)
 	}
 
 	return fmt.Sprintf(`services:
@@ -337,13 +354,21 @@ volumes:
     environment:
       OPENCLAW_CONFIG_PATH: /config/openclaw.json
       OPENCLAW_STATE_DIR: /state
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:%d/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
     command: ["node", "openclaw.mjs", "gateway", "--allow-unconfigured", "--bind", "lan"]
     restart: unless-stopped
 
 volumes:
   %s:
 `, req.Container.BaseImage, req.Container.ContainerName, networkMode,
-		dataDir, dataDir, volumeName, volumeName)
+		dataDir, dataDir, volumeName,
+		req.Container.GatewayPort,
+		volumeName)
 }
 
 func agentsMdContent() string {

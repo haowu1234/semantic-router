@@ -186,14 +186,28 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 			"--name", req.Container.ContainerName,
 			"--user", "0:0",
 			"--network", req.Container.NetworkMode,
-			"-v", absCDir + "/workspace:/workspace",
-			"-v", absCDir + "/openclaw.json:/config/openclaw.json:ro",
-			"-v", volumeName + ":/state",
+		}
+		// Override the image's built-in healthcheck to point at the actual gateway port.
+		healthCmd := fmt.Sprintf(
+			"node -e \"fetch('http://127.0.0.1:%d/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"",
+			req.Container.GatewayPort,
+		)
+		args = append(args,
+			"--health-cmd", healthCmd,
+			"--health-interval", "30s",
+			"--health-timeout", "5s",
+			"--health-start-period", "15s",
+			"--health-retries", "3",
+		)
+		args = append(args,
+			"-v", absCDir+"/workspace:/workspace",
+			"-v", absCDir+"/openclaw.json:/config/openclaw.json:ro",
+			"-v", volumeName+":/state",
 			"-e", "OPENCLAW_CONFIG_PATH=/config/openclaw.json",
 			"-e", "OPENCLAW_STATE_DIR=/state",
 			req.Container.BaseImage,
 			"node", "openclaw.mjs", "gateway", "--allow-unconfigured", "--bind", "lan",
-		}
+		)
 		out, err := h.containerCombinedOutput(args...)
 		if err != nil {
 			trimmed := strings.TrimSpace(string(out))
