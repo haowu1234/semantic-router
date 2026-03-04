@@ -50,12 +50,31 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 			// In vllm-sr serve deployment, dashboard often runs in a container while OpenClaw
 			// is launched via host docker.sock. Using container:<dashboard-container> keeps
 			// gateway traffic in the same network namespace and avoids host routing issues.
-			if req.Container.NetworkMode == "" || strings.EqualFold(req.Container.NetworkMode, "host") {
+			// Override generic values ("", "host", "bridge") with the preferred network so
+			// that the container is placed on the same user-defined bridge network as the
+			// dashboard (Docker's default "bridge" network does not support container-name
+			// DNS resolution).
+			nm := strings.ToLower(strings.TrimSpace(req.Container.NetworkMode))
+			if nm == "" || nm == "host" || nm == "bridge" {
 				req.Container.NetworkMode = preferredNetwork
 			}
 		}
 		if req.Container.NetworkMode == "" {
 			req.Container.NetworkMode = "host"
+		}
+		// When using a user-defined bridge network, the OpenClaw container
+		// reaches the SR router via container-name DNS, not localhost.
+		// Automatically rewrite loopback addresses in modelBaseUrl to the
+		// dashboard container name so users don't have to do it manually.
+		if nm := req.Container.NetworkMode; nm != "host" && !strings.HasPrefix(nm, "container:") {
+			dashboardContainer := strings.TrimSpace(os.Getenv("OPENCLAW_DASHBOARD_CONTAINER_NAME"))
+			if dashboardContainer == "" {
+				dashboardContainer = vllmSrContainerName
+			}
+			req.Container.ModelBaseURL = rewriteLoopbackHost(req.Container.ModelBaseURL, dashboardContainer)
+			if req.Container.MemoryBaseURL != "" {
+				req.Container.MemoryBaseURL = rewriteLoopbackHost(req.Container.MemoryBaseURL, dashboardContainer)
+			}
 		}
 		if req.Container.ModelAPIKey == "" {
 			req.Container.ModelAPIKey = "not-needed"
@@ -179,21 +198,48 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 
 		_ = h.containerRun("rm", "-f", req.Container.ContainerName)
 
+		// For bridge network names, ensure the network exists before starting
+		// the container. This is idempotent: if the network already exists the
+		// command exits silently.
+		networkMode := req.Container.NetworkMode
+		if networkMode != "" && networkMode != "host" && !strings.HasPrefix(networkMode, "container:") {
+			if _, err := h.containerCombinedOutput("network", "create", "--driver", "bridge", networkMode); err != nil {
+				// "already exists" is expected and harmless.
+				if out, _ := h.containerCombinedOutput("network", "inspect", networkMode); len(out) == 0 {
+					log.Printf("openclaw: warning: could not ensure network %s exists: %v", networkMode, err)
+				}
+			}
+		}
+
 		absCDir, _ := filepath.Abs(cDir)
 		volumeName := "openclaw-state-" + req.Container.ContainerName
 		args := []string{
 			"run", "-d",
 			"--name", req.Container.ContainerName,
 			"--user", "0:0",
-			"--network", req.Container.NetworkMode,
-			"-v", absCDir + "/workspace:/workspace",
-			"-v", absCDir + "/openclaw.json:/config/openclaw.json:ro",
-			"-v", volumeName + ":/state",
+			"--network", networkMode,
+		}
+		// Override the image's built-in healthcheck to point at the actual gateway port.
+		healthCmd := fmt.Sprintf(
+			"node -e \"fetch('http://127.0.0.1:%d/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"",
+			req.Container.GatewayPort,
+		)
+		args = append(args,
+			"--health-cmd", healthCmd,
+			"--health-interval", "30s",
+			"--health-timeout", "5s",
+			"--health-start-period", "15s",
+			"--health-retries", "3",
+		)
+		args = append(args,
+			"-v", absCDir+"/workspace:/workspace",
+			"-v", absCDir+"/openclaw.json:/config/openclaw.json:ro",
+			"-v", volumeName+":/state",
 			"-e", "OPENCLAW_CONFIG_PATH=/config/openclaw.json",
 			"-e", "OPENCLAW_STATE_DIR=/state",
 			req.Container.BaseImage,
 			"node", "openclaw.mjs", "gateway", "--allow-unconfigured", "--bind", "lan",
-		}
+		)
 		out, err := h.containerCombinedOutput(args...)
 		if err != nil {
 			trimmed := strings.TrimSpace(string(out))
@@ -261,7 +307,7 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 		healthy := false
 		for i := 0; i < 10; i++ {
 			time.Sleep(2 * time.Second)
-			if h.gatewayReachable(req.Container.GatewayPort) {
+			if h.gatewayReachable(req.Container.ContainerName, req.Container.GatewayPort) {
 				healthy = true
 				break
 			}
