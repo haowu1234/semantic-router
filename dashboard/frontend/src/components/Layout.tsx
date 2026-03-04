@@ -1,6 +1,7 @@
 import React, { useState, useEffect, ReactNode } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import styles from './Layout.module.css'
+import ReadonlyBanner from './ReadonlyBanner'
 
 interface LayoutProps {
   children: ReactNode
@@ -469,6 +470,9 @@ const Layout: React.FC<LayoutProps> = ({ children, configSection, onConfigSectio
           </div>
         )}
       </header>
+
+      {/* Readonly Mode Banner */}
+      <ReadonlyBanner />
 
       {/* Main Content */}
       <main className={styles.main}>
