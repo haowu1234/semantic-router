@@ -11,6 +11,12 @@
   gap: 8px;
 }
 
+.banner.unlocked {
+  background-color: #d4edda;
+  border-color: #28a745;
+  color: #155724;
+}
+
 .icon {
   font-size: 16px;
 }
@@ -19,10 +25,76 @@
   line-height: 1.4;
 }
 
+.inviteButton,
+.logoutButton {
+  margin-left: 12px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border: none;
+}
+
+.inviteButton {
+  background-color: #856404;
+  color: #fff;
+}
+
+.inviteButton:hover {
+  background-color: #6c5303;
+  transform: translateY(-1px);
+}
+
+.logoutButton {
+  background-color: transparent;
+  color: #155724;
+  border: 1px solid #155724;
+}
+
+.logoutButton:hover:not(:disabled) {
+  background-color: rgba(21, 87, 36, 0.1);
+}
+
+.logoutButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 /* Dark mode support */
 :global(.dark) .banner,
 :global([data-theme="dark"]) .banner {
   background-color: rgba(255, 193, 7, 0.15);
   border-color: rgba(255, 193, 7, 0.3);
   color: #ffc107;
+}
+
+:global(.dark) .banner.unlocked,
+:global([data-theme="dark"]) .banner.unlocked {
+  background-color: rgba(40, 167, 69, 0.15);
+  border-color: rgba(40, 167, 69, 0.3);
+  color: #28a745;
+}
+
+:global(.dark) .inviteButton,
+:global([data-theme="dark"]) .inviteButton {
+  background-color: #ffc107;
+  color: #000;
+}
+
+:global(.dark) .inviteButton:hover,
+:global([data-theme="dark"]) .inviteButton:hover {
+  background-color: #e0a800;
+}
+
+:global(.dark) .logoutButton,
+:global([data-theme="dark"]) .logoutButton {
+  color: #28a745;
+  border-color: #28a745;
+}
+
+:global(.dark) .logoutButton:hover:not(:disabled),
+:global([data-theme="dark"]) .logoutButton:hover:not(:disabled) {
+  background-color: rgba(40, 167, 69, 0.1);
 }

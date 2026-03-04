@@ -20,8 +20,9 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if h.readOnly {
-			http.Error(w, `{"error":"Read-only mode enabled"}`, http.StatusForbidden)
+		// Readonly check with invite bypass
+		if h.readOnly && !HasValidInvite(r, h.inviteSecret) {
+			WriteReadonlyError(w, h.inviteSecret)
 			return
 		}
 

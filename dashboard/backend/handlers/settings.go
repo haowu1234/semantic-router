@@ -9,9 +9,11 @@ import (
 
 // SettingsResponse represents the dashboard settings returned to frontend
 type SettingsResponse struct {
-	ReadonlyMode bool   `json:"readonlyMode"`
-	Platform     string `json:"platform"`
-	EnvoyURL     string `json:"envoyUrl"` // Envoy proxy URL for evaluation endpoint
+	ReadonlyMode  bool   `json:"readonlyMode"`  // Effective readonly status (base readonly AND no valid invite)
+	Platform      string `json:"platform"`
+	EnvoyURL      string `json:"envoyUrl"`      // Envoy proxy URL for evaluation endpoint
+	HasInvite     bool   `json:"hasInvite"`     // Whether user has valid invite
+	InviteEnabled bool   `json:"inviteEnabled"` // Whether invite feature is available
 }
 
 // SettingsHandler returns dashboard settings for frontend consumption
@@ -22,10 +24,18 @@ func SettingsHandler(cfg *config.Config) http.HandlerFunc {
 			return
 		}
 
+		// Check if user has valid invite
+		hasInvite := cfg.InviteSecret != "" && HasValidInvite(r, cfg.InviteSecret)
+
+		// Effective readonly: base readonly AND no valid invite
+		effectiveReadonly := cfg.ReadonlyMode && !hasInvite
+
 		response := SettingsResponse{
-			ReadonlyMode: cfg.ReadonlyMode,
-			Platform:     cfg.Platform,
-			EnvoyURL:     cfg.EnvoyURL,
+			ReadonlyMode:  effectiveReadonly,
+			Platform:      cfg.Platform,
+			EnvoyURL:      cfg.EnvoyURL,
+			HasInvite:     hasInvite,
+			InviteEnabled: cfg.ReadonlyMode && cfg.InviteSecret != "",
 		}
 
 		w.Header().Set("Content-Type", "application/json")

@@ -279,7 +279,7 @@ func TestDeployHandler_MethodValidation(t *testing.T) {
 			req := httptest.NewRequest(method, "/api/router/config/deploy", nil)
 			w := httptest.NewRecorder()
 
-			handler := DeployHandler(configPath, false, tempDir)
+			handler := DeployHandler(configPath, false, "", tempDir)
 			handler(w, req)
 
 			if w.Code != http.StatusMethodNotAllowed {
@@ -300,7 +300,7 @@ func TestDeployHandler_ReadonlyMode(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	handler := DeployHandler(configPath, true, tempDir)
+	handler := DeployHandler(configPath, true, "", tempDir)
 	handler(w, req)
 
 	if w.Code != http.StatusForbidden {
@@ -323,7 +323,7 @@ func TestDeployHandler_EmptyYAML(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	handler := DeployHandler(configPath, false, tempDir)
+	handler := DeployHandler(configPath, false, "", tempDir)
 	handler(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -339,7 +339,7 @@ func TestDeployHandler_InvalidJSON(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	handler := DeployHandler(configPath, false, tempDir)
+	handler := DeployHandler(configPath, false, "", tempDir)
 	handler(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -358,7 +358,7 @@ func TestDeployHandler_InvalidYAMLSyntax(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	handler := DeployHandler(configPath, false, tempDir)
+	handler := DeployHandler(configPath, false, "", tempDir)
 	handler(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -390,7 +390,7 @@ func TestDeployHandler_SuccessfulDeploy(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	handler := DeployHandler(configPath, false, tempDir)
+	handler := DeployHandler(configPath, false, "", tempDir)
 	handler(w, req)
 
 	if w.Code != http.StatusOK {
@@ -463,7 +463,7 @@ func TestDeployHandler_DeepMergePreservesExistingFields(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	handler := DeployHandler(configPath, false, tempDir)
+	handler := DeployHandler(configPath, false, "", tempDir)
 	handler(w, req)
 
 	if w.Code != http.StatusOK {
@@ -500,7 +500,7 @@ func TestDeployHandler_NoDSLSource(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	handler := DeployHandler(configPath, false, tempDir)
+	handler := DeployHandler(configPath, false, "", tempDir)
 	handler(w, req)
 
 	if w.Code != http.StatusOK {
@@ -528,7 +528,7 @@ func TestRollbackHandler_MethodValidation(t *testing.T) {
 			req := httptest.NewRequest(method, "/api/router/config/rollback", nil)
 			w := httptest.NewRecorder()
 
-			handler := RollbackHandler(configPath, false, tempDir)
+			handler := RollbackHandler(configPath, false, "", tempDir)
 			handler(w, req)
 
 			if w.Code != http.StatusMethodNotAllowed {
@@ -547,7 +547,7 @@ func TestRollbackHandler_ReadonlyMode(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	handler := RollbackHandler(configPath, true, tempDir)
+	handler := RollbackHandler(configPath, true, "", tempDir)
 	handler(w, req)
 
 	if w.Code != http.StatusForbidden {
@@ -564,7 +564,7 @@ func TestRollbackHandler_MissingVersion(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	handler := RollbackHandler(configPath, false, tempDir)
+	handler := RollbackHandler(configPath, false, "", tempDir)
 	handler(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -581,7 +581,7 @@ func TestRollbackHandler_VersionNotFound(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	handler := RollbackHandler(configPath, false, tempDir)
+	handler := RollbackHandler(configPath, false, "", tempDir)
 	handler(w, req)
 
 	if w.Code != http.StatusNotFound {
@@ -626,7 +626,7 @@ func TestRollbackHandler_SuccessfulRollback(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	handler := RollbackHandler(configPath, false, tempDir)
+	handler := RollbackHandler(configPath, false, "", tempDir)
 	handler(w, req)
 
 	if w.Code != http.StatusOK {
@@ -853,7 +853,7 @@ func TestDeployAndRollback_Integration(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	DeployHandler(configPath, false, tempDir)(w, req)
+	DeployHandler(configPath, false, "", tempDir)(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("Deploy failed: %d - %s", w.Code, w.Body.String())
@@ -891,7 +891,7 @@ func TestDeployAndRollback_Integration(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
 
-	RollbackHandler(configPath, false, tempDir)(w, req)
+	RollbackHandler(configPath, false, "", tempDir)(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("Rollback failed: %d - %s", w.Code, w.Body.String())
@@ -927,7 +927,7 @@ func TestUpdateConfigHandler_DeepMergeNested(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	handler := UpdateConfigHandler(configPath, false, tempDir)
+	handler := UpdateConfigHandler(configPath, false, "", tempDir)
 	handler(w, req)
 
 	if w.Code != http.StatusOK {

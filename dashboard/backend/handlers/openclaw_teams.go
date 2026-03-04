@@ -38,8 +38,9 @@ func (h *OpenClawHandler) TeamsHandler() http.HandlerFunc {
 				log.Printf("openclaw: teams encode error: %v", err)
 			}
 		case http.MethodPost:
-			if h.readOnly {
-				http.Error(w, `{"error":"Read-only mode enabled"}`, http.StatusForbidden)
+			// Readonly check with invite bypass
+			if h.readOnly && !HasValidInvite(r, h.inviteSecret) {
+				WriteReadonlyError(w, h.inviteSecret)
 				return
 			}
 
@@ -138,8 +139,9 @@ func (h *OpenClawHandler) TeamByIDHandler() http.HandlerFunc {
 				log.Printf("openclaw: team encode error: %v", err)
 			}
 		case http.MethodPut, http.MethodPatch:
-			if h.readOnly {
-				http.Error(w, `{"error":"Read-only mode enabled"}`, http.StatusForbidden)
+			// Readonly check with invite bypass
+			if h.readOnly && !HasValidInvite(r, h.inviteSecret) {
+				WriteReadonlyError(w, h.inviteSecret)
 				return
 			}
 
@@ -215,8 +217,9 @@ func (h *OpenClawHandler) TeamByIDHandler() http.HandlerFunc {
 				log.Printf("openclaw: update team encode error: %v", err)
 			}
 		case http.MethodDelete:
-			if h.readOnly {
-				http.Error(w, `{"error":"Read-only mode enabled"}`, http.StatusForbidden)
+			// Readonly check with invite bypass
+			if h.readOnly && !HasValidInvite(r, h.inviteSecret) {
+				WriteReadonlyError(w, h.inviteSecret)
 				return
 			}
 

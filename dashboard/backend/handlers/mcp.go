@@ -18,13 +18,15 @@ import (
 type MCPHandler struct {
 	manager      *mcp.Manager
 	readonlyMode bool
+	inviteSecret string
 }
 
 // NewMCPHandler creates an MCP Handler
-func NewMCPHandler(manager *mcp.Manager, readonlyMode bool) *MCPHandler {
+func NewMCPHandler(manager *mcp.Manager, readonlyMode bool, inviteSecret string) *MCPHandler {
 	return &MCPHandler{
 		manager:      manager,
 		readonlyMode: readonlyMode,
+		inviteSecret: inviteSecret,
 	}
 }
 
@@ -63,8 +65,8 @@ func (h *MCPHandler) CreateServerHandler() http.HandlerFunc {
 			return
 		}
 
-		if h.readonlyMode {
-			http.Error(w, "Operation not allowed in readonly mode", http.StatusForbidden)
+		if h.readonlyMode && !HasValidInvite(r, h.inviteSecret) {
+			WriteReadonlyError(w, h.inviteSecret)
 			return
 		}
 
@@ -133,8 +135,8 @@ func (h *MCPHandler) UpdateServerHandler() http.HandlerFunc {
 			return
 		}
 
-		if h.readonlyMode {
-			http.Error(w, "Operation not allowed in readonly mode", http.StatusForbidden)
+		if h.readonlyMode && !HasValidInvite(r, h.inviteSecret) {
+			WriteReadonlyError(w, h.inviteSecret)
 			return
 		}
 
@@ -175,8 +177,8 @@ func (h *MCPHandler) DeleteServerHandler() http.HandlerFunc {
 			return
 		}
 
-		if h.readonlyMode {
-			http.Error(w, "Operation not allowed in readonly mode", http.StatusForbidden)
+		if h.readonlyMode && !HasValidInvite(r, h.inviteSecret) {
+			WriteReadonlyError(w, h.inviteSecret)
 			return
 		}
 
@@ -207,6 +209,12 @@ func (h *MCPHandler) ConnectServerHandler() http.HandlerFunc {
 
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Readonly check: connecting starts MCP server process
+		if h.readonlyMode && !HasValidInvite(r, h.inviteSecret) {
+			WriteReadonlyError(w, h.inviteSecret)
 			return
 		}
 
@@ -243,6 +251,12 @@ func (h *MCPHandler) DisconnectServerHandler() http.HandlerFunc {
 
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Readonly check: disconnecting stops MCP server process
+		if h.readonlyMode && !HasValidInvite(r, h.inviteSecret) {
+			WriteReadonlyError(w, h.inviteSecret)
 			return
 		}
 
@@ -297,6 +311,8 @@ func (h *MCPHandler) GetServerStatusHandler() http.HandlerFunc {
 }
 
 // TestConnectionHandler POST /api/mcp/servers/:id/test - Test connection
+// SECURITY: This handler can execute arbitrary user-provided commands via ServerConfig.
+// Readonly mode must block this to prevent malicious command execution.
 func (h *MCPHandler) TestConnectionHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if middleware.HandleCORSPreflight(w, r) {
@@ -305,6 +321,13 @@ func (h *MCPHandler) TestConnectionHandler() http.HandlerFunc {
 
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// CRITICAL: Readonly check - TestConnection can execute arbitrary user-provided commands
+		// A malicious user could POST: {"transport":"stdio","connection":{"command":"rm","args":["-rf","/"]}}
+		if h.readonlyMode && !HasValidInvite(r, h.inviteSecret) {
+			WriteReadonlyError(w, h.inviteSecret)
 			return
 		}
 
@@ -370,6 +393,12 @@ func (h *MCPHandler) ExecuteToolHandler() http.HandlerFunc {
 			return
 		}
 
+		// Readonly check: executing tools can have side effects
+		if h.readonlyMode && !HasValidInvite(r, h.inviteSecret) {
+			WriteReadonlyError(w, h.inviteSecret)
+			return
+		}
+
 		var req mcp.ToolExecuteRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			log.Printf("[MCP-Handler] ExecuteTool: failed to decode request: %v", err)
@@ -412,6 +441,12 @@ func (h *MCPHandler) ExecuteToolStreamHandler() http.HandlerFunc {
 
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Readonly check: executing tools can have side effects
+		if h.readonlyMode && !HasValidInvite(r, h.inviteSecret) {
+			WriteReadonlyError(w, h.inviteSecret)
 			return
 		}
 

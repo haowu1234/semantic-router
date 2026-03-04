@@ -35,8 +35,9 @@ func (h *OpenClawHandler) StartHandler() http.HandlerFunc {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if h.readOnly {
-			http.Error(w, `{"error":"Read-only mode enabled"}`, http.StatusForbidden)
+		// Readonly check with invite bypass
+		if h.readOnly && !HasValidInvite(r, h.inviteSecret) {
+			WriteReadonlyError(w, h.inviteSecret)
 			return
 		}
 		var req struct {
@@ -71,8 +72,9 @@ func (h *OpenClawHandler) StopHandler() http.HandlerFunc {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if h.readOnly {
-			http.Error(w, `{"error":"Read-only mode enabled"}`, http.StatusForbidden)
+		// Readonly check with invite bypass
+		if h.readOnly && !HasValidInvite(r, h.inviteSecret) {
+			WriteReadonlyError(w, h.inviteSecret)
 			return
 		}
 		var req struct {
@@ -107,8 +109,9 @@ func (h *OpenClawHandler) DeleteHandler() http.HandlerFunc {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if h.readOnly {
-			http.Error(w, `{"error":"Read-only mode enabled"}`, http.StatusForbidden)
+		// Readonly check with invite bypass
+		if h.readOnly && !HasValidInvite(r, h.inviteSecret) {
+			WriteReadonlyError(w, h.inviteSecret)
 			return
 		}
 		name := strings.TrimPrefix(r.URL.Path, "/api/openclaw/containers/")

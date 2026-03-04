@@ -20,6 +20,7 @@ type EvaluationHandler struct {
 	db           *evaluation.DB
 	runner       *evaluation.Runner
 	readonlyMode bool
+	inviteSecret string   // HMAC signing secret for invite codes
 	routerAPIURL string   // Router API URL for signal evaluation
 	envoyURL     string   // Envoy URL for model evaluation
 	sseClients   sync.Map // map[taskID]map[clientID]chan models.ProgressUpdate
@@ -27,11 +28,12 @@ type EvaluationHandler struct {
 }
 
 // NewEvaluationHandler creates a new evaluation handler.
-func NewEvaluationHandler(db *evaluation.DB, runner *evaluation.Runner, readonlyMode bool, routerAPIURL, envoyURL string) *EvaluationHandler {
+func NewEvaluationHandler(db *evaluation.DB, runner *evaluation.Runner, readonlyMode bool, inviteSecret, routerAPIURL, envoyURL string) *EvaluationHandler {
 	h := &EvaluationHandler{
 		db:           db,
 		runner:       runner,
 		readonlyMode: readonlyMode,
+		inviteSecret: inviteSecret,
 		routerAPIURL: routerAPIURL,
 		envoyURL:     envoyURL,
 	}
@@ -147,6 +149,12 @@ func (h *EvaluationHandler) CreateTaskHandler() http.HandlerFunc {
 			return
 		}
 
+		// Readonly check: creating tasks modifies state
+		if h.readonlyMode && !HasValidInvite(r, h.inviteSecret) {
+			WriteReadonlyError(w, h.inviteSecret)
+			return
+		}
+
 		var req models.CreateTaskRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
@@ -251,6 +259,12 @@ func (h *EvaluationHandler) DeleteTaskHandler() http.HandlerFunc {
 			return
 		}
 
+		// Readonly check: deleting tasks modifies state
+		if h.readonlyMode && !HasValidInvite(r, h.inviteSecret) {
+			WriteReadonlyError(w, h.inviteSecret)
+			return
+		}
+
 		// Extract task ID from URL path
 		pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/evaluation/tasks/"), "/")
 		if len(pathParts) == 0 || pathParts[0] == "" {
@@ -283,6 +297,12 @@ func (h *EvaluationHandler) RunTaskHandler() http.HandlerFunc {
 
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Readonly check: running tasks has side effects (API calls, resource usage)
+		if h.readonlyMode && !HasValidInvite(r, h.inviteSecret) {
+			WriteReadonlyError(w, h.inviteSecret)
 			return
 		}
 
@@ -342,6 +362,12 @@ func (h *EvaluationHandler) CancelTaskHandler() http.HandlerFunc {
 
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Readonly check: cancelling tasks modifies state
+		if h.readonlyMode && !HasValidInvite(r, h.inviteSecret) {
+			WriteReadonlyError(w, h.inviteSecret)
 			return
 		}
 

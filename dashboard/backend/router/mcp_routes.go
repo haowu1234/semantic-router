@@ -24,7 +24,7 @@ func SetupMCP(mux *http.ServeMux, cfg *config.Config) *mcp.Manager {
 	mcpManager := mcp.NewManager()
 
 	// Create MCP handler
-	mcpHandler := handlers.NewMCPHandler(mcpManager, cfg.ReadonlyMode)
+	mcpHandler := handlers.NewMCPHandler(mcpManager, cfg.ReadonlyMode, cfg.InviteSecret)
 
 	// Register MCP endpoints
 	// Server configuration - GET list, POST create

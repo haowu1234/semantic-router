@@ -138,7 +138,7 @@ func TestLoadSkills_UsesEnvOverridePath(t *testing.T) {
 	}
 
 	t.Setenv("OPENCLAW_SKILLS_PATH", skillsPath)
-	h := NewOpenClawHandler(filepath.Join(tempDir, "openclaw-data"), false)
+	h := NewOpenClawHandler(filepath.Join(tempDir, "openclaw-data"), false, "")
 	skills, err := h.loadSkills()
 	if err != nil {
 		t.Fatalf("loadSkills failed: %v", err)
@@ -228,7 +228,7 @@ func TestAgentsMdContent_IncludesIdentityReadStep(t *testing.T) {
 
 func TestTeamsHandler_CreateAndList(t *testing.T) {
 	tempDir := t.TempDir()
-	h := NewOpenClawHandler(tempDir, false)
+	h := NewOpenClawHandler(tempDir, false, "")
 
 	createReq := httptest.NewRequest(http.MethodPost, "/api/openclaw/teams", strings.NewReader(`{
 		"name":"Research",
@@ -271,7 +271,7 @@ func TestTeamsHandler_CreateAndList(t *testing.T) {
 
 func TestTeamByIDHandler_UpdatePropagatesRegistryTeamName(t *testing.T) {
 	tempDir := t.TempDir()
-	h := NewOpenClawHandler(tempDir, false)
+	h := NewOpenClawHandler(tempDir, false, "")
 
 	if err := h.saveTeams([]TeamEntry{{
 		ID:        "routing-core",
@@ -319,7 +319,7 @@ func TestTeamByIDHandler_UpdatePropagatesRegistryTeamName(t *testing.T) {
 
 func TestTeamByIDHandler_DeleteRejectsAssignedTeam(t *testing.T) {
 	tempDir := t.TempDir()
-	h := NewOpenClawHandler(tempDir, false)
+	h := NewOpenClawHandler(tempDir, false, "")
 
 	if err := h.saveTeams([]TeamEntry{{
 		ID:        "alpha",
@@ -351,7 +351,7 @@ func TestTeamByIDHandler_DeleteRejectsAssignedTeam(t *testing.T) {
 
 func TestWorkersHandler_List(t *testing.T) {
 	tempDir := t.TempDir()
-	h := NewOpenClawHandler(tempDir, false)
+	h := NewOpenClawHandler(tempDir, false, "")
 
 	if err := h.saveRegistry([]ContainerEntry{
 		{
@@ -399,7 +399,7 @@ func TestWorkersHandler_List(t *testing.T) {
 
 func TestWorkerByIDHandler_Update(t *testing.T) {
 	tempDir := t.TempDir()
-	h := NewOpenClawHandler(tempDir, false)
+	h := NewOpenClawHandler(tempDir, false, "")
 
 	if err := h.saveTeams([]TeamEntry{
 		{ID: "research", Name: "Research", CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
@@ -459,7 +459,7 @@ func TestWorkerByIDHandler_Update(t *testing.T) {
 
 func TestWorkerByIDHandler_Delete(t *testing.T) {
 	tempDir := t.TempDir()
-	h := NewOpenClawHandler(tempDir, false)
+	h := NewOpenClawHandler(tempDir, false, "")
 
 	if err := h.saveRegistry([]ContainerEntry{
 		{

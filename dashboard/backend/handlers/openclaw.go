@@ -46,13 +46,14 @@ type TeamEntry struct {
 }
 
 type OpenClawHandler struct {
-	dataDir  string
-	readOnly bool
-	mu       sync.RWMutex
+	dataDir      string
+	readOnly     bool
+	inviteSecret string
+	mu           sync.RWMutex
 }
 
-func NewOpenClawHandler(dataDir string, readOnly bool) *OpenClawHandler {
-	return &OpenClawHandler{dataDir: dataDir, readOnly: readOnly}
+func NewOpenClawHandler(dataDir string, readOnly bool, inviteSecret string) *OpenClawHandler {
+	return &OpenClawHandler{dataDir: dataDir, readOnly: readOnly, inviteSecret: inviteSecret}
 }
 
 func (h *OpenClawHandler) registryPath() string {

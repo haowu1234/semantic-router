@@ -73,20 +73,24 @@ func ConfigYAMLHandler(configPath string) http.HandlerFunc {
 // UpdateConfigHandler updates the config.yaml file with validation.
 // After writing, it triggers regeneration of the Router's flattened config
 // (router-config.yaml) so the Router picks up changes via fsnotify.
-func UpdateConfigHandler(configPath string, readonlyMode bool, configDir string) http.HandlerFunc {
+func UpdateConfigHandler(configPath string, readonlyMode bool, inviteSecret string, configDir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost && r.Method != http.MethodPut {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
-		// Check read-only mode
-		if readonlyMode {
+		// Check read-only mode with invite bypass
+		if readonlyMode && !HasValidInvite(r, inviteSecret) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
+			msg := "Dashboard is in read-only mode. Configuration editing is disabled."
+			if inviteSecret != "" {
+				msg += " Use an invite code to unlock editing."
+			}
 			if err := json.NewEncoder(w).Encode(map[string]string{
 				"error":   "readonly_mode",
-				"message": "Dashboard is in read-only mode. Configuration editing is disabled.",
+				"message": msg,
 			}); err != nil {
 				log.Printf("Error encoding readonly response: %v", err)
 			}
@@ -219,20 +223,24 @@ func RouterDefaultsHandler(configDir string) http.HandlerFunc {
 }
 
 // UpdateRouterDefaultsHandler updates the router-defaults.yaml file
-func UpdateRouterDefaultsHandler(configDir string, readonlyMode bool) http.HandlerFunc {
+func UpdateRouterDefaultsHandler(configDir string, readonlyMode bool, inviteSecret string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost && r.Method != http.MethodPut {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
-		// Check read-only mode
-		if readonlyMode {
+		// Check read-only mode with invite bypass
+		if readonlyMode && !HasValidInvite(r, inviteSecret) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
+			msg := "Dashboard is in read-only mode. Configuration editing is disabled."
+			if inviteSecret != "" {
+				msg += " Use an invite code to unlock editing."
+			}
 			if err := json.NewEncoder(w).Encode(map[string]string{
 				"error":   "readonly_mode",
-				"message": "Dashboard is in read-only mode. Configuration editing is disabled.",
+				"message": msg,
 			}); err != nil {
 				log.Printf("Error encoding readonly response: %v", err)
 			}

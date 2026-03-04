@@ -120,19 +120,24 @@ func DeployPreviewHandler(configPath string) http.HandlerFunc {
 //  3. Router's fsnotify watcher detects the change and hot-reloads
 //
 // POST /api/router/config/deploy
-func DeployHandler(configPath string, readonlyMode bool, configDir string) http.HandlerFunc {
+func DeployHandler(configPath string, readonlyMode bool, inviteSecret string, configDir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
-		if readonlyMode {
+		// Check readonly mode with invite bypass
+		if readonlyMode && !HasValidInvite(r, inviteSecret) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
+			msg := "Dashboard is in read-only mode. Deploy is disabled."
+			if inviteSecret != "" {
+				msg += " Use an invite code to unlock editing."
+			}
 			_ = json.NewEncoder(w).Encode(map[string]string{
 				"error":   "readonly_mode",
-				"message": "Dashboard is in read-only mode. Deploy is disabled.",
+				"message": msg,
 			})
 			return
 		}
@@ -157,19 +162,24 @@ func DeployHandler(configPath string, readonlyMode bool, configDir string) http.
 // RollbackHandler rolls back to a specific backup version.
 // After writing, it calls regenerateRouterConfig to regenerate .vllm-sr/router-config.yaml.
 // POST /api/router/config/rollback
-func RollbackHandler(configPath string, readonlyMode bool, configDir string) http.HandlerFunc {
+func RollbackHandler(configPath string, readonlyMode bool, inviteSecret string, configDir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
-		if readonlyMode {
+		// Check readonly mode with invite bypass
+		if readonlyMode && !HasValidInvite(r, inviteSecret) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
+			msg := "Dashboard is in read-only mode. Rollback is disabled."
+			if inviteSecret != "" {
+				msg += " Use an invite code to unlock editing."
+			}
 			_ = json.NewEncoder(w).Encode(map[string]string{
 				"error":   "readonly_mode",
-				"message": "Dashboard is in read-only mode. Rollback is disabled.",
+				"message": msg,
 			})
 			return
 		}

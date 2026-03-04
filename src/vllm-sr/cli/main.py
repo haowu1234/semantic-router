@@ -39,6 +39,7 @@ from cli.consts import (
 from cli.commands.init import init_command
 from cli.commands.config import config_command
 from cli.commands.validate import validate_command
+from cli.commands.invite import invite
 from cli.docker_cli import docker_container_status
 
 log = getLogger(__name__)
@@ -490,6 +491,7 @@ main.add_command(status)
 main.add_command(logs)
 main.add_command(stop)
 main.add_command(dashboard)
+main.add_command(invite)
 
 
 if __name__ == "__main__":
