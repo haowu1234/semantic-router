@@ -46,14 +46,19 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 			req.Container.AuthToken = generateToken(24)
 		}
 		req.Container.BaseImage = h.resolveBaseImage(req.Container.BaseImage)
-		if preferredNetwork := strings.TrimSpace(os.Getenv("OPENCLAW_DEFAULT_NETWORK_MODE")); preferredNetwork != "" {
-			// In vllm-sr serve deployment, dashboard often runs in a container while OpenClaw
-			// is launched via host docker.sock. Using container:<dashboard-container> keeps
-			// gateway traffic in the same network namespace and avoids host routing issues.
-			if req.Container.NetworkMode == "" || strings.EqualFold(req.Container.NetworkMode, "host") {
-				req.Container.NetworkMode = preferredNetwork
-			}
+	if preferredNetwork := strings.TrimSpace(os.Getenv("OPENCLAW_DEFAULT_NETWORK_MODE")); preferredNetwork != "" {
+		// In vllm-sr serve deployment, dashboard often runs in a container while OpenClaw
+		// is launched via host docker.sock. Using container:<dashboard-container> keeps
+		// gateway traffic in the same network namespace and avoids host routing issues.
+		// Override generic values ("", "host", "bridge") with the preferred network so
+		// that the container is placed on the same user-defined bridge network as the
+		// dashboard (Docker's default "bridge" network does not support container-name
+		// DNS resolution).
+		nm := strings.ToLower(strings.TrimSpace(req.Container.NetworkMode))
+		if nm == "" || nm == "host" || nm == "bridge" {
+			req.Container.NetworkMode = preferredNetwork
 		}
+	}
 		if req.Container.NetworkMode == "" {
 			req.Container.NetworkMode = "host"
 		}
@@ -179,13 +184,26 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 
 		_ = h.containerRun("rm", "-f", req.Container.ContainerName)
 
+		// For bridge network names, ensure the network exists before starting
+		// the container. This is idempotent: if the network already exists the
+		// command exits silently.
+		networkMode := req.Container.NetworkMode
+		if networkMode != "" && networkMode != "host" && !strings.HasPrefix(networkMode, "container:") {
+			if _, err := h.containerCombinedOutput("network", "create", "--driver", "bridge", networkMode); err != nil {
+				// "already exists" is expected and harmless.
+				if out, _ := h.containerCombinedOutput("network", "inspect", networkMode); len(out) == 0 {
+					log.Printf("openclaw: warning: could not ensure network %s exists: %v", networkMode, err)
+				}
+			}
+		}
+
 		absCDir, _ := filepath.Abs(cDir)
 		volumeName := "openclaw-state-" + req.Container.ContainerName
 		args := []string{
 			"run", "-d",
 			"--name", req.Container.ContainerName,
 			"--user", "0:0",
-			"--network", req.Container.NetworkMode,
+			"--network", networkMode,
 		}
 		// Override the image's built-in healthcheck to point at the actual gateway port.
 		healthCmd := fmt.Sprintf(

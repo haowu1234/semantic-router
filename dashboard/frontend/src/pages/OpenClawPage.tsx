@@ -2145,8 +2145,9 @@ const ConfigStep: React.FC<{
           <label className={styles.formLabel}>Network Mode</label>
           <select className={styles.selectInput} value={container.networkMode} onChange={e => update('networkMode', e.target.value)}>
             <option value="host">host (recommended)</option>
-            <option value="bridge">bridge</option>
+            <option value="bridge">bridge (auto – backend picks best network)</option>
           </select>
+          <div className={styles.formHint}>In containerized deployments the backend overrides "bridge" with the shared network for DNS resolution</div>
         </div>
       </div>
 
