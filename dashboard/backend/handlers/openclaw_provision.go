@@ -59,10 +59,24 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 			req.Container.NetworkMode = preferredNetwork
 		}
 	}
-		if req.Container.NetworkMode == "" {
-			req.Container.NetworkMode = "host"
+	if req.Container.NetworkMode == "" {
+		req.Container.NetworkMode = "host"
+	}
+	// When using a user-defined bridge network, the OpenClaw container
+	// reaches the SR router via container-name DNS, not localhost.
+	// Automatically rewrite loopback addresses in modelBaseUrl to the
+	// dashboard container name so users don't have to do it manually.
+	if nm := req.Container.NetworkMode; nm != "host" && !strings.HasPrefix(nm, "container:") {
+		dashboardContainer := strings.TrimSpace(os.Getenv("OPENCLAW_DASHBOARD_CONTAINER_NAME"))
+		if dashboardContainer == "" {
+			dashboardContainer = vllmSrContainerName
 		}
-		if req.Container.ModelAPIKey == "" {
+		req.Container.ModelBaseURL = rewriteLoopbackHost(req.Container.ModelBaseURL, dashboardContainer)
+		if req.Container.MemoryBaseURL != "" {
+			req.Container.MemoryBaseURL = rewriteLoopbackHost(req.Container.MemoryBaseURL, dashboardContainer)
+		}
+	}
+	if req.Container.ModelAPIKey == "" {
 			req.Container.ModelAPIKey = "not-needed"
 		}
 		if req.Container.ModelName == "" {

@@ -7,11 +7,36 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 )
+
+// rewriteLoopbackHost replaces 127.0.0.1 / localhost in a URL with the given
+// container name so that inter-container traffic uses Docker DNS instead of
+// loopback (which is unreachable across containers in bridge networks).
+func rewriteLoopbackHost(rawURL, containerName string) string {
+	if rawURL == "" || containerName == "" {
+		return rawURL
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	host := u.Hostname()
+	if host != "127.0.0.1" && host != "localhost" && host != "0.0.0.0" {
+		return rawURL
+	}
+	port := u.Port()
+	if port != "" {
+		u.Host = containerName + ":" + port
+	} else {
+		u.Host = containerName
+	}
+	return u.String()
+}
 
 // --- Helpers ---
 
