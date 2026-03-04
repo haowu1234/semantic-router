@@ -261,7 +261,7 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 		healthy := false
 		for i := 0; i < 10; i++ {
 			time.Sleep(2 * time.Second)
-			if h.gatewayReachable(req.Container.GatewayPort) {
+			if h.gatewayReachable(req.Container.ContainerName, req.Container.GatewayPort) {
 				healthy = true
 				break
 			}

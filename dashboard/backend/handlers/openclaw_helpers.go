@@ -293,6 +293,37 @@ func generateDockerRunCmd(runtime string, req ProvisionRequest, dataDir string) 
 
 func generateComposeYAML(req ProvisionRequest, dataDir string) string {
 	volumeName := "openclaw-state-" + req.Container.ContainerName
+	networkMode := req.Container.NetworkMode
+
+	// For bridge network names (not "host" or "container:xxx"), use the networks syntax.
+	if networkMode != "" && networkMode != "host" && !strings.HasPrefix(networkMode, "container:") {
+		return fmt.Sprintf(`services:
+  openclaw:
+    image: %s
+    container_name: %s
+    user: "0:0"
+    networks:
+      - %s
+    volumes:
+      - %s/workspace:/workspace
+      - %s/openclaw.json:/config/openclaw.json:ro
+      - %s:/state
+    environment:
+      OPENCLAW_CONFIG_PATH: /config/openclaw.json
+      OPENCLAW_STATE_DIR: /state
+    command: ["node", "openclaw.mjs", "gateway", "--allow-unconfigured", "--bind", "lan"]
+    restart: unless-stopped
+
+networks:
+  %s:
+    external: true
+
+volumes:
+  %s:
+`, req.Container.BaseImage, req.Container.ContainerName, networkMode,
+			dataDir, dataDir, volumeName, networkMode, volumeName)
+	}
+
 	return fmt.Sprintf(`services:
   openclaw:
     image: %s
@@ -311,7 +342,7 @@ func generateComposeYAML(req ProvisionRequest, dataDir string) string {
 
 volumes:
   %s:
-`, req.Container.BaseImage, req.Container.ContainerName, req.Container.NetworkMode,
+`, req.Container.BaseImage, req.Container.ContainerName, networkMode,
 		dataDir, dataDir, volumeName, volumeName)
 }
 
