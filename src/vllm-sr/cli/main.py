@@ -181,6 +181,12 @@ ALGORITHM_TYPES = [
     help="Run dashboard in read-only mode (disable config editing, allow playground only)",
 )
 @click.option(
+    "--invite-secret",
+    default=None,
+    envvar="INVITE_SECRET",
+    help="HMAC secret for invite codes (enables invite feature with --readonly)",
+)
+@click.option(
     "--minimal",
     is_flag=True,
     default=False,
@@ -199,7 +205,7 @@ ALGORITHM_TYPES = [
     "router_dc (embedding similarity), automix (cost-quality optimization), "
     "hybrid (combined methods). Overrides config file setting.",
 )
-def serve(config, image, image_pull_policy, readonly, minimal, platform, algorithm):
+def serve(config, image, image_pull_policy, readonly, invite_secret, minimal, platform, algorithm):
     """
     Start vLLM Semantic Router.
 
@@ -238,6 +244,9 @@ def serve(config, image, image_pull_policy, readonly, minimal, platform, algorit
 
         # Read-only dashboard (for public beta)
         vllm-sr serve --readonly
+
+        # Read-only with invite code support
+        vllm-sr serve --readonly --invite-secret "my-secret-key"
 
         # Minimal mode (no dashboard, no observability)
         vllm-sr serve --minimal
@@ -296,6 +305,13 @@ def serve(config, image, image_pull_policy, readonly, minimal, platform, algorit
         if readonly and not minimal:
             env_vars["DASHBOARD_READONLY"] = "true"
             log.info("Dashboard read-only mode: ENABLED")
+            
+            # Invite secret for unlock feature
+            if invite_secret:
+                env_vars["INVITE_SECRET"] = invite_secret
+                log.info("Invite code feature: ENABLED")
+            else:
+                log.info("Invite code feature: DISABLED (no --invite-secret provided)")
 
         # Platform branding
         if platform:
