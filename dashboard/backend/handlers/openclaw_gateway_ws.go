@@ -2,6 +2,11 @@ package handlers
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -87,6 +92,55 @@ func (s GatewayClientState) String() string {
 	default:
 		return "unknown"
 	}
+}
+
+// --- Device Key Pair for Gateway Authentication ---
+
+// DeviceKeyPair holds the Ed25519 key pair for device authentication
+type DeviceKeyPair struct {
+	PrivateKey ed25519.PrivateKey
+	PublicKey  ed25519.PublicKey
+	DeviceID   string // SHA256 fingerprint of public key
+}
+
+var (
+	globalDeviceKeyPair *DeviceKeyPair
+	deviceKeyPairOnce   sync.Once
+)
+
+// getOrCreateDeviceKeyPair returns the global device key pair, creating it if needed
+func getOrCreateDeviceKeyPair() *DeviceKeyPair {
+	deviceKeyPairOnce.Do(func() {
+		publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			log.Printf("openclaw-gw: failed to generate device key pair: %v", err)
+			return
+		}
+
+		// Generate device ID as SHA256 fingerprint of public key
+		hash := sha256.Sum256(publicKey)
+		deviceID := hex.EncodeToString(hash[:])
+
+		globalDeviceKeyPair = &DeviceKeyPair{
+			PrivateKey: privateKey,
+			PublicKey:  publicKey,
+			DeviceID:   deviceID,
+		}
+
+		log.Printf("openclaw-gw: generated device key pair, deviceID=%s", deviceID[:16]+"...")
+	})
+	return globalDeviceKeyPair
+}
+
+// signNonce signs a nonce with the device's private key
+func (kp *DeviceKeyPair) signNonce(nonce string) string {
+	signature := ed25519.Sign(kp.PrivateKey, []byte(nonce))
+	return base64.StdEncoding.EncodeToString(signature)
+}
+
+// publicKeyBase64 returns the public key as base64 string
+func (kp *DeviceKeyPair) publicKeyBase64() string {
+	return base64.StdEncoding.EncodeToString(kp.PublicKey)
 }
 
 // GatewayClientConfig holds configuration for a Gateway WebSocket client
@@ -304,6 +358,12 @@ func (c *GatewayClient) buildWebSocketURL() string {
 }
 
 func (c *GatewayClient) performHandshake() error {
+	// Get or create device key pair for authentication
+	keyPair := getOrCreateDeviceKeyPair()
+	if keyPair == nil {
+		return fmt.Errorf("failed to get device key pair")
+	}
+
 	// First, wait for connect.challenge event from Gateway
 	_ = c.conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	_, challengeData, err := c.conn.ReadMessage()
@@ -323,34 +383,46 @@ func (c *GatewayClient) performHandshake() error {
 		if json.Unmarshal(challengeData, &challengeMsg) == nil {
 			if challengeMsg.Event == "connect.challenge" {
 				challengeNonce = challengeMsg.Payload.Nonce
-				log.Printf("openclaw-gw: received connect.challenge for container %s", c.config.ContainerName)
+				log.Printf("openclaw-gw: received connect.challenge for container %s, nonce=%s...",
+					c.config.ContainerName, challengeNonce[:min(16, len(challengeNonce))])
 			}
 		}
 	}
 
-	// Send connect request per OpenClaw Gateway protocol
+	// Build device authentication object per protocol spec
 	// See: https://docs.openclaw.ai/zh-CN/gateway/protocol
+	deviceAuth := map[string]interface{}{
+		"id":        keyPair.DeviceID,
+		"publicKey": keyPair.publicKeyBase64(),
+	}
+
+	// If we received a challenge, sign the nonce
+	if challengeNonce != "" {
+		signedAt := time.Now().UnixMilli()
+		signature := keyPair.signNonce(challengeNonce)
+
+		deviceAuth["nonce"] = challengeNonce
+		deviceAuth["signature"] = signature
+		deviceAuth["signedAt"] = signedAt
+
+		log.Printf("openclaw-gw: signed nonce for container %s, signedAt=%d", c.config.ContainerName, signedAt)
+	}
+
+	// Send connect request per OpenClaw Gateway protocol
 	params := map[string]interface{}{
 		"minProtocol": 3,
 		"maxProtocol": 3,
 		"client": map[string]interface{}{
-			"id":       "dashboard",
+			"id":       "semantic-router-dashboard",
 			"version":  "1.0.0",
 			"platform": "linux",
 			"mode":     "operator",
 		},
-		"role":   "operator",
-		"scopes": []string{"operator.read", "operator.write"},
-		"device": map[string]interface{}{
-			"id": "dashboard-" + c.config.ContainerName,
-		},
+		"role":      "operator",
+		"scopes":    []string{"operator.read", "operator.write"},
+		"device":    deviceAuth,
 		"locale":    "en-US",
-		"userAgent": "semantic-router-dashboard/1.0.0",
-	}
-
-	// Add nonce if we received a challenge
-	if challengeNonce != "" {
-		params["nonce"] = challengeNonce
+		"userAgent": "semantic-router-dashboard/1.0.0 (Go-http-client)",
 	}
 
 	if c.config.AuthToken != "" {
@@ -371,6 +443,8 @@ func (c *GatewayClient) performHandshake() error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal handshake: %w", err)
 	}
+
+	log.Printf("openclaw-gw: sending connect request for container %s", c.config.ContainerName)
 
 	if err := c.conn.WriteMessage(websocket.TextMessage, data); err != nil {
 		return fmt.Errorf("failed to send handshake: %w", err)
