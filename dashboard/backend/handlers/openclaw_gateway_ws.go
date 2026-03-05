@@ -43,8 +43,8 @@ type GatewayWSMessage struct {
 
 // GatewayWSError represents an error in Gateway WebSocket protocol
 type GatewayWSError struct {
-	Code    int    `json:"code,omitempty"`
-	Message string `json:"message"`
+	Code    interface{} `json:"code,omitempty"` // Can be int or string
+	Message string      `json:"message"`
 }
 
 // GatewayAgentEvent represents an agent event from the Gateway
@@ -301,14 +301,45 @@ func (c *GatewayClient) buildWebSocketURL() string {
 }
 
 func (c *GatewayClient) performHandshake() error {
-	// Send connect request
+	// First, wait for connect.challenge event from Gateway
+	_ = c.conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_, challengeData, err := c.conn.ReadMessage()
+	_ = c.conn.SetReadDeadline(time.Time{})
+
+	var challengeNonce string
+	if err == nil {
+		// Try to parse challenge
+		var challengeMsg struct {
+			Type    string `json:"type"`
+			Event   string `json:"event"`
+			Payload struct {
+				Nonce string `json:"nonce"`
+				Ts    int64  `json:"ts"`
+			} `json:"payload"`
+		}
+		if json.Unmarshal(challengeData, &challengeMsg) == nil {
+			if challengeMsg.Event == "connect.challenge" {
+				challengeNonce = challengeMsg.Payload.Nonce
+				log.Printf("openclaw-gw: received connect.challenge for container %s", c.config.ContainerName)
+			}
+		}
+	}
+
+	// Send connect request per OpenClaw Gateway protocol
+	// See: https://docs.openclaw.ai/zh-CN/gateway/protocol
 	params := map[string]interface{}{
-		"version": 1,
-		"client": map[string]interface{}{
-			"id":       "dashboard-" + c.config.ContainerName,
-			"platform": "dashboard",
-			"version":  "1.0.0",
+		"minProtocol": 3,
+		"maxProtocol": 3,
+		"role":        "operator",
+		"scopes":      []string{"operator.read", "operator.write"},
+		"device": map[string]interface{}{
+			"id": "dashboard-" + c.config.ContainerName,
 		},
+	}
+
+	// Add nonce if we received a challenge
+	if challengeNonce != "" {
+		params["nonce"] = challengeNonce
 	}
 
 	if c.config.AuthToken != "" {
