@@ -32,13 +32,16 @@ const (
 
 // GatewayWSMessage represents a message in the Gateway WebSocket protocol
 type GatewayWSMessage struct {
-	Type   GatewayWSMessageType   `json:"type"`
-	ID     string                 `json:"id,omitempty"`
-	Method string                 `json:"method,omitempty"`
-	Params map[string]interface{} `json:"params,omitempty"`
-	Result interface{}            `json:"result,omitempty"`
-	Event  string                 `json:"event,omitempty"`
-	Error  *GatewayWSError        `json:"error,omitempty"`
+	Type    GatewayWSMessageType   `json:"type"`
+	ID      string                 `json:"id,omitempty"`
+	Method  string                 `json:"method,omitempty"`
+	Params  map[string]interface{} `json:"params,omitempty"`
+	OK      *bool                  `json:"ok,omitempty"`      // Response success flag per protocol
+	Payload interface{}            `json:"payload,omitempty"` // Response/Event payload per protocol
+	Event   string                 `json:"event,omitempty"`
+	Error   *GatewayWSError        `json:"error,omitempty"`
+	Seq     *int64                 `json:"seq,omitempty"`          // Event sequence number
+	StateV  *int64                 `json:"stateVersion,omitempty"` // Event state version
 }
 
 // GatewayWSError represents an error in Gateway WebSocket protocol
@@ -96,7 +99,7 @@ type GatewayClientConfig struct {
 	RoomID          string
 	ReconnectDelay  time.Duration
 	MaxReconnects   int
-	PingInterval    time.Duration
+	PingInterval    time.Duration // Will be updated from server's tickIntervalMs
 	ResponseTimeout time.Duration
 }
 
@@ -330,11 +333,19 @@ func (c *GatewayClient) performHandshake() error {
 	params := map[string]interface{}{
 		"minProtocol": 3,
 		"maxProtocol": 3,
-		"role":        "operator",
-		"scopes":      []string{"operator.read", "operator.write"},
+		"client": map[string]interface{}{
+			"id":       "dashboard",
+			"version":  "1.0.0",
+			"platform": "linux",
+			"mode":     "operator",
+		},
+		"role":   "operator",
+		"scopes": []string{"operator.read", "operator.write"},
 		"device": map[string]interface{}{
 			"id": "dashboard-" + c.config.ContainerName,
 		},
+		"locale":    "en-US",
+		"userAgent": "semantic-router-dashboard/1.0.0",
 	}
 
 	// Add nonce if we received a challenge
@@ -373,13 +384,42 @@ func (c *GatewayClient) performHandshake() error {
 	}
 	_ = c.conn.SetReadDeadline(time.Time{})
 
-	var resp GatewayWSMessage
+	var resp struct {
+		Type    string          `json:"type"`
+		ID      string          `json:"id"`
+		OK      bool            `json:"ok"`
+		Payload json.RawMessage `json:"payload"`
+		Error   *GatewayWSError `json:"error"`
+	}
 	if err := json.Unmarshal(respData, &resp); err != nil {
 		return fmt.Errorf("invalid handshake response: %w", err)
 	}
 
 	if resp.Error != nil {
 		return fmt.Errorf("handshake rejected: %s", resp.Error.Message)
+	}
+
+	if !resp.OK {
+		return fmt.Errorf("handshake failed: ok=false")
+	}
+
+	// Parse hello-ok payload to extract policy.tickIntervalMs
+	if resp.Payload != nil {
+		var helloOK struct {
+			Type     string `json:"type"`
+			Protocol int    `json:"protocol"`
+			Policy   struct {
+				TickIntervalMs int `json:"tickIntervalMs"`
+			} `json:"policy"`
+		}
+		if json.Unmarshal(resp.Payload, &helloOK) == nil {
+			if helloOK.Policy.TickIntervalMs > 0 {
+				// Update ping interval based on server policy
+				c.config.PingInterval = time.Duration(helloOK.Policy.TickIntervalMs) * time.Millisecond
+				log.Printf("openclaw-gw: using server tickInterval %dms for container %s",
+					helloOK.Policy.TickIntervalMs, c.config.ContainerName)
+			}
+		}
 	}
 
 	log.Printf("openclaw-gw: handshake successful for container %s", c.config.ContainerName)
@@ -503,11 +543,11 @@ func (c *GatewayClient) handleEvent(msg GatewayWSMessage) {
 }
 
 func (c *GatewayClient) handleAgentEvent(msg GatewayWSMessage) {
-	if msg.Result == nil {
+	if msg.Payload == nil {
 		return
 	}
 
-	data, err := json.Marshal(msg.Result)
+	data, err := json.Marshal(msg.Payload)
 	if err != nil {
 		return
 	}
@@ -523,11 +563,11 @@ func (c *GatewayClient) handleAgentEvent(msg GatewayWSMessage) {
 }
 
 func (c *GatewayClient) handleAgentMessageEvent(msg GatewayWSMessage) {
-	if msg.Result == nil {
+	if msg.Payload == nil {
 		return
 	}
 
-	data, err := json.Marshal(msg.Result)
+	data, err := json.Marshal(msg.Payload)
 	if err != nil {
 		return
 	}
@@ -555,11 +595,11 @@ func (c *GatewayClient) handleAgentMessageEvent(msg GatewayWSMessage) {
 }
 
 func (c *GatewayClient) handleAgentToolEvent(msg GatewayWSMessage) {
-	if msg.Result == nil {
+	if msg.Payload == nil {
 		return
 	}
 
-	data, err := json.Marshal(msg.Result)
+	data, err := json.Marshal(msg.Payload)
 	if err != nil {
 		return
 	}
