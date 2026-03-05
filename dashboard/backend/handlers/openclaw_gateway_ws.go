@@ -666,6 +666,9 @@ func (c *GatewayClient) performHandshake() error {
 		params["auth"] = map[string]interface{}{
 			"token": c.config.AuthToken,
 		}
+		log.Printf("openclaw-gw: auth token included in connect request for container %s", c.config.ContainerName)
+	} else {
+		log.Printf("openclaw-gw: WARNING: no auth token for container %s, pairing may be required", c.config.ContainerName)
 	}
 
 	reqID := fmt.Sprintf("%d", atomic.AddInt64(&c.reqID, 1))
@@ -1039,6 +1042,13 @@ func (m *GatewayClientManager) ConnectContainer(containerName string) error {
 
 	// Resolve gateway host
 	gatewayHost := m.resolveGatewayHost(containerName, entry.Port)
+
+	// Debug: log token presence
+	tokenStatus := "empty"
+	if entry.Token != "" {
+		tokenStatus = fmt.Sprintf("present (%d chars)", len(entry.Token))
+	}
+	log.Printf("openclaw-gw: connecting to container %s with token=%s", containerName, tokenStatus)
 
 	config := GatewayClientConfig{
 		ContainerName: containerName,
