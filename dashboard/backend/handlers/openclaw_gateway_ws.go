@@ -1325,40 +1325,28 @@ func (m *GatewayClientManager) forwardEventToRoom(containerName string, event Ga
 		return
 	}
 
-	// Check if this is a complete message (data.text) or a delta (data.delta)
-	isComplete := false
-	content := ""
-	if event.Data != nil {
-		if text, ok := event.Data["text"].(string); ok && text != "" {
-			// Complete message - send directly
-			isComplete = true
-			content = text
-		} else if delta, ok := event.Data["delta"].(string); ok {
-			// Delta - accumulate in buffer
-			content = delta
-		}
-	}
-
-	if content == "" {
+	// OpenClaw sends both "delta" (incremental) and "text" (cumulative) in each event.
+	// We should ONLY accumulate delta, and send the final message when lifecycle.end arrives.
+	// Do NOT use "text" directly as it would cause duplicate sends.
+	if event.Data == nil {
 		return
 	}
 
-	if isComplete {
-		// Complete message - delete any existing buffer and send directly
-		m.streamBuffers.Delete(event.RunID)
-		m.sendRoomMessage(containerName, event.RunID, event.SessionKey, content)
-	} else {
-		// Delta - accumulate in buffer
-		buf, _ := m.streamBuffers.LoadOrStore(event.RunID, &streamBuffer{
-			containerName: containerName,
-			runID:         event.RunID,
-			sessionKey:    event.SessionKey,
-			lastUpdate:    time.Now(),
-		})
-		streamBuf := buf.(*streamBuffer)
-		streamBuf.content.WriteString(content)
-		streamBuf.lastUpdate = time.Now()
+	delta, hasDelta := event.Data["delta"].(string)
+	if !hasDelta || delta == "" {
+		return
 	}
+
+	// Accumulate delta in buffer
+	buf, _ := m.streamBuffers.LoadOrStore(event.RunID, &streamBuffer{
+		containerName: containerName,
+		runID:         event.RunID,
+		sessionKey:    event.SessionKey,
+		lastUpdate:    time.Now(),
+	})
+	streamBuf := buf.(*streamBuffer)
+	streamBuf.content.WriteString(delta)
+	streamBuf.lastUpdate = time.Now()
 }
 
 // flushStreamBuffer sends accumulated content to room
