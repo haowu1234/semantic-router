@@ -435,6 +435,9 @@ func (c *GatewayClient) Connect() error {
 	// This allows the Gateway to treat this connection as a local client for backend self-pairing bypass
 	headers.Set("X-Forwarded-For", "127.0.0.1")
 	headers.Set("X-Real-IP", "127.0.0.1")
+	// Override Host header to make OpenClaw's isLocalishHost() check pass
+	// OpenClaw requires Host to be localhost/127.0.0.1/::1 for local client detection
+	headers.Set("Host", fmt.Sprintf("127.0.0.1:%d", c.config.GatewayPort))
 
 	conn, _, err := dialer.DialContext(c.ctx, wsURL, headers)
 	if err != nil {
