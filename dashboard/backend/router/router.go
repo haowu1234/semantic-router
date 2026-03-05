@@ -399,8 +399,12 @@ func Setup(cfg *config.Config) *http.ServeMux {
 		mux.HandleFunc("/api/openclaw/gateway-ws/auto-connect", ocHandler.GatewayAutoConnectHandler())
 		mux.HandleFunc("/api/openclaw/gateway-ws/room-bindings", ocHandler.RoomAgentBindingsHandler())
 
+		// Start Gateway auto-connect on startup
+		ocHandler.StartGatewayAutoConnect(nil)
+
 		log.Printf("OpenClaw API endpoints registered: /api/openclaw/*")
 		log.Printf("OpenClaw Gateway WebSocket endpoints registered: /api/openclaw/gateway-ws/*")
+		log.Printf("OpenClaw Gateway auto-connect: ENABLED (scanning every 30s)")
 		log.Printf("OpenClaw Agent proactive messaging endpoints registered: /api/openclaw/agent/*")
 
 		// Dynamic reverse proxy: /embedded/openclaw/{containerName}/...
