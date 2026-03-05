@@ -384,7 +384,24 @@ func Setup(cfg *config.Config) *http.ServeMux {
 		mux.HandleFunc("/api/openclaw/token", ocHandler.TokenHandler())
 		mux.HandleFunc("/api/openclaw/next-port", ocHandler.NextPortHandler())
 		mux.HandleFunc("/api/openclaw/containers/", ocHandler.DeleteHandler())
+
+		// Gateway WebSocket endpoints for bidirectional Agent communication
+		mux.HandleFunc("/api/openclaw/gateway-ws/status", ocHandler.GatewayWSStatusHandler())
+		mux.HandleFunc("/api/openclaw/gateway-ws/connect", ocHandler.GatewayWSConnectHandler())
+		mux.HandleFunc("/api/openclaw/gateway-ws/connect-all", ocHandler.GatewayWSConnectAllHandler())
+		mux.HandleFunc("/api/openclaw/gateway-ws/events", ocHandler.GatewayWSEventsHandler())
+
+		// Agent proactive messaging endpoints
+		mux.HandleFunc("/api/openclaw/agent/message", ocHandler.AgentMessageHandler())
+		mux.HandleFunc("/api/openclaw/agent/sessions", ocHandler.ActiveSessionsHandler())
+
+		// Gateway auto-connect management
+		mux.HandleFunc("/api/openclaw/gateway-ws/auto-connect", ocHandler.GatewayAutoConnectHandler())
+		mux.HandleFunc("/api/openclaw/gateway-ws/room-bindings", ocHandler.RoomAgentBindingsHandler())
+
 		log.Printf("OpenClaw API endpoints registered: /api/openclaw/*")
+		log.Printf("OpenClaw Gateway WebSocket endpoints registered: /api/openclaw/gateway-ws/*")
+		log.Printf("OpenClaw Agent proactive messaging endpoints registered: /api/openclaw/agent/*")
 
 		// Dynamic reverse proxy: /embedded/openclaw/{containerName}/...
 		// Lazily creates and caches a WebSocket-aware proxy per container.

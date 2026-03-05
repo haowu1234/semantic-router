@@ -51,13 +51,15 @@ type TeamEntry struct {
 }
 
 type OpenClawHandler struct {
-	dataDir          string
-	readOnly         bool
-	routerConfigPath string
-	mu               sync.RWMutex
-	roomSSEClients   sync.Map
-	roomSSELastEvent sync.Map
-	roomAutomationMu sync.Map
+	dataDir              string
+	readOnly             bool
+	routerConfigPath     string
+	mu                   sync.RWMutex
+	roomSSEClients       sync.Map
+	roomSSELastEvent     sync.Map
+	roomAutomationMu     sync.Map
+	gatewayWSManager     *GatewayClientManager
+	gatewayAutoConnector *GatewayAutoConnector
 }
 
 func NewOpenClawHandler(dataDir string, readOnly bool) *OpenClawHandler {
