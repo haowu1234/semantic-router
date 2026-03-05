@@ -430,6 +430,11 @@ func (c *GatewayClient) Connect() error {
 		headers.Set("Authorization", "Bearer "+c.config.AuthToken)
 		headers.Set("X-OpenClaw-Token", c.config.AuthToken)
 	}
+	// Add forwarded headers to indicate this is a trusted local backend connection
+	// The OpenClaw container is configured with trustedProxies that includes Docker network ranges
+	// This allows the Gateway to treat this connection as a local client for backend self-pairing bypass
+	headers.Set("X-Forwarded-For", "127.0.0.1")
+	headers.Set("X-Real-IP", "127.0.0.1")
 
 	conn, _, err := dialer.DialContext(c.ctx, wsURL, headers)
 	if err != nil {

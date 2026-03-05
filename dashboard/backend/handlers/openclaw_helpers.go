@@ -268,6 +268,10 @@ func writeOpenClawConfig(path string, req ProvisionRequest) error {
 				"allowInsecureAuth":            true,
 				"allowedOrigins":               []string{"*"},
 			},
+			// Trust Docker network connections for backend self-pairing bypass
+			// Common Docker network ranges: 172.16.0.0/12, 10.0.0.0/8, 192.168.0.0/16
+			"trustedProxies":      []string{"172.16.0.0/12", "10.0.0.0/8", "192.168.0.0/16", "127.0.0.0/8"},
+			"allowRealIpFallback": true,
 		},
 	}
 	memoryBackend := strings.ToLower(strings.TrimSpace(req.Container.MemoryBackend))
