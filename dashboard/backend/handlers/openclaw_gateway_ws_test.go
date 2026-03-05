@@ -323,18 +323,18 @@ func TestDeviceKeyPairSignNonce(t *testing.T) {
 		t.Fatal("expected non-nil key pair")
 	}
 
-	// Sign a test nonce
-	nonce := "test-challenge-nonce-12345"
-	signature := kp.signNonce(nonce)
+	// Sign a test payload (v3 format)
+	testPayload := "v3|device-id|gateway-client|backend|operator|scopes|123456|token|nonce|linux|"
+	signature := kp.signPayload(testPayload)
 
 	if signature == "" {
 		t.Error("expected non-empty signature")
 	}
 
-	// Verify signature is valid base64
-	sigBytes, err := base64.StdEncoding.DecodeString(signature)
+	// Verify signature is valid base64url
+	sigBytes, err := base64.RawURLEncoding.DecodeString(signature)
 	if err != nil {
-		t.Errorf("signature is not valid base64: %v", err)
+		t.Errorf("signature is not valid base64url: %v", err)
 	}
 
 	// Ed25519 signatures are 64 bytes
@@ -343,7 +343,7 @@ func TestDeviceKeyPairSignNonce(t *testing.T) {
 	}
 
 	// Verify the signature is actually valid
-	if !ed25519.Verify(kp.PublicKey, []byte(nonce), sigBytes) {
+	if !ed25519.Verify(kp.PublicKey, []byte(testPayload), sigBytes) {
 		t.Error("signature verification failed")
 	}
 }
@@ -361,17 +361,128 @@ func TestDeviceKeyPairPublicKeyBase64(t *testing.T) {
 		t.Fatal("expected non-nil key pair")
 	}
 
-	pubKeyB64 := kp.publicKeyBase64()
+	pubKeyB64 := kp.publicKeyBase64Url()
 	if pubKeyB64 == "" {
-		t.Error("expected non-empty public key base64")
+		t.Error("expected non-empty public key base64url")
 	}
 
-	// Verify it's valid base64 and decodes to 32 bytes
-	decoded, err := base64.StdEncoding.DecodeString(pubKeyB64)
+	// Verify it's valid base64url and decodes to 32 bytes
+	decoded, err := base64.RawURLEncoding.DecodeString(pubKeyB64)
 	if err != nil {
-		t.Errorf("public key base64 is invalid: %v", err)
+		t.Errorf("public key base64url is invalid: %v", err)
 	}
 	if len(decoded) != 32 {
 		t.Errorf("expected 32-byte public key, got %d", len(decoded))
+	}
+}
+
+// TestBuildDeviceAuthPayloadV3 verifies the payload format matches Gateway's buildDeviceAuthPayloadV3
+func TestBuildDeviceAuthPayloadV3(t *testing.T) {
+	tests := []struct {
+		name     string
+		params   DeviceAuthPayloadParams
+		expected string
+	}{
+		{
+			name: "basic payload",
+			params: DeviceAuthPayloadParams{
+				DeviceID:     "abc123",
+				ClientID:     "gateway-client",
+				ClientMode:   "backend",
+				Role:         "operator",
+				Scopes:       []string{"operator.read", "operator.write"},
+				SignedAtMs:   1234567890000,
+				Token:        "",
+				Nonce:        "test-nonce-xyz",
+				Platform:     "linux",
+				DeviceFamily: "",
+			},
+			expected: "v3|abc123|gateway-client|backend|operator|operator.read,operator.write|1234567890000||test-nonce-xyz|linux|",
+		},
+		{
+			name: "with token",
+			params: DeviceAuthPayloadParams{
+				DeviceID:     "device-456",
+				ClientID:     "gateway-client",
+				ClientMode:   "backend",
+				Role:         "operator",
+				Scopes:       []string{"operator.read"},
+				SignedAtMs:   9876543210000,
+				Token:        "auth-token-abc",
+				Nonce:        "nonce-123",
+				Platform:     "darwin",
+				DeviceFamily: "macbook",
+			},
+			expected: "v3|device-456|gateway-client|backend|operator|operator.read|9876543210000|auth-token-abc|nonce-123|darwin|macbook",
+		},
+		{
+			name: "platform normalization - uppercase",
+			params: DeviceAuthPayloadParams{
+				DeviceID:     "dev-1",
+				ClientID:     "cli",
+				ClientMode:   "cli",
+				Role:         "operator",
+				Scopes:       []string{},
+				SignedAtMs:   1000000000000,
+				Token:        "",
+				Nonce:        "n",
+				Platform:     "LINUX",
+				DeviceFamily: "  MacBook Pro  ",
+			},
+			// Gateway's toLowerAscii only converts A-Z to lowercase
+			expected: "v3|dev-1|cli|cli|operator||1000000000000||n|linux|macbook pro",
+		},
+		{
+			name: "empty scopes",
+			params: DeviceAuthPayloadParams{
+				DeviceID:     "d",
+				ClientID:     "c",
+				ClientMode:   "m",
+				Role:         "r",
+				Scopes:       []string{},
+				SignedAtMs:   0,
+				Token:        "",
+				Nonce:        "n",
+				Platform:     "",
+				DeviceFamily: "",
+			},
+			expected: "v3|d|c|m|r||0||n||",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := buildDeviceAuthPayloadV3(tt.params)
+			if result != tt.expected {
+				t.Errorf("buildDeviceAuthPayloadV3() =\n  got:  %q\n  want: %q", result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestNormalizeDeviceMetadata verifies normalization matches Gateway's normalizeDeviceMetadataForAuth
+func TestNormalizeDeviceMetadata(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"linux", "linux"},
+		{"Linux", "linux"},
+		{"LINUX", "linux"},
+		{"  darwin  ", "darwin"},
+		{"MacOS", "macos"},
+		{"", ""},
+		{"  ", ""},
+		{"Windows 10", "windows 10"},
+		{"iOS", "ios"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := normalizeDeviceMetadata(tt.input)
+			if result != tt.expected {
+				t.Errorf("normalizeDeviceMetadata(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
 	}
 }

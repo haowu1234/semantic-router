@@ -258,15 +258,87 @@ func getOrCreateDeviceKeyPair() *DeviceKeyPair {
 	return globalDeviceKeyPair
 }
 
-// signNonce signs a nonce with the device's private key
-func (kp *DeviceKeyPair) signNonce(nonce string) string {
-	signature := ed25519.Sign(kp.PrivateKey, []byte(nonce))
-	return base64.StdEncoding.EncodeToString(signature)
+// buildDeviceAuthPayloadV3 builds the canonical payload string for device authentication
+// Format: v3|deviceId|clientId|clientMode|role|scopes|signedAtMs|token|nonce|platform|deviceFamily
+// This must match the server-side payload construction in OpenClaw Gateway
+func buildDeviceAuthPayloadV3(params DeviceAuthPayloadParams) string {
+	scopes := strings.Join(params.Scopes, ",")
+	token := params.Token
+	if token == "" {
+		token = ""
+	}
+	platform := normalizeDeviceMetadata(params.Platform)
+	deviceFamily := normalizeDeviceMetadata(params.DeviceFamily)
+	return strings.Join([]string{
+		"v3",
+		params.DeviceID,
+		params.ClientID,
+		params.ClientMode,
+		params.Role,
+		scopes,
+		fmt.Sprintf("%d", params.SignedAtMs),
+		token,
+		params.Nonce,
+		platform,
+		deviceFamily,
+	}, "|")
 }
 
-// publicKeyBase64 returns the public key as base64 string
-func (kp *DeviceKeyPair) publicKeyBase64() string {
-	return base64.StdEncoding.EncodeToString(kp.PublicKey)
+// DeviceAuthPayloadParams holds parameters for building device auth payload
+type DeviceAuthPayloadParams struct {
+	DeviceID     string
+	ClientID     string
+	ClientMode   string
+	Role         string
+	Scopes       []string
+	SignedAtMs   int64
+	Token        string
+	Nonce        string
+	Platform     string
+	DeviceFamily string
+}
+
+// normalizeDeviceMetadata normalizes device metadata strings for signature
+// This must match Gateway's normalizeDeviceMetadataForAuth:
+// - trim whitespace
+// - convert ASCII A-Z to lowercase (NOT unicode lowercase)
+func normalizeDeviceMetadata(s string) string {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return ""
+	}
+	// Only convert ASCII uppercase A-Z to lowercase a-z
+	// This matches Gateway's toLowerAscii function
+	result := make([]byte, len(trimmed))
+	for i := 0; i < len(trimmed); i++ {
+		c := trimmed[i]
+		if c >= 'A' && c <= 'Z' {
+			result[i] = c + 32 // Convert to lowercase
+		} else {
+			result[i] = c
+		}
+	}
+	return string(result)
+}
+
+// publicKeyBase64Url returns the raw 32-byte public key as base64url string
+// Gateway expects raw Ed25519 public key bytes (32 bytes), not SPKI format
+func (kp *DeviceKeyPair) publicKeyBase64Url() string {
+	// Ed25519 public keys in Go are already 32 bytes raw format
+	return base64URLEncode(kp.PublicKey)
+}
+
+// base64URLEncode encodes bytes to base64url format (no padding)
+func base64URLEncode(data []byte) string {
+	encoded := base64.RawURLEncoding.EncodeToString(data)
+	return encoded
+}
+
+// signPayload signs a payload string with the device's private key
+// Returns signature in base64url format
+func (kp *DeviceKeyPair) signPayload(payload string) string {
+	signature := ed25519.Sign(kp.PrivateKey, []byte(payload))
+	return base64URLEncode(signature)
 }
 
 // GatewayClientConfig holds configuration for a Gateway WebSocket client
@@ -515,43 +587,76 @@ func (c *GatewayClient) performHandshake() error {
 		}
 	}
 
-	// Build device authentication object per protocol spec
-	// See: https://docs.openclaw.ai/zh-CN/gateway/protocol
-	deviceAuth := map[string]interface{}{
-		"id":        keyPair.DeviceID,
-		"publicKey": keyPair.publicKeyBase64(),
-	}
-
-	// If we received a challenge, sign the nonce
-	if challengeNonce != "" {
-		signedAt := time.Now().UnixMilli()
-		signature := keyPair.signNonce(challengeNonce)
-
-		deviceAuth["nonce"] = challengeNonce
-		deviceAuth["signature"] = signature
-		deviceAuth["signedAt"] = signedAt
-
-		log.Printf("openclaw-gw: signed nonce for container %s, signedAt=%d", c.config.ContainerName, signedAt)
-	}
-
-	// Send connect request per OpenClaw Gateway protocol
+	// Define client parameters
 	// Valid client.id values (from GATEWAY_CLIENT_IDS):
 	//   "webchat-ui", "openclaw-control-ui", "webchat", "cli", "gateway-client",
 	//   "openclaw-macos", "openclaw-ios", "openclaw-android", "node-host",
 	//   "test", "fingerprint", "openclaw-probe"
 	// Valid client.mode values (from GATEWAY_CLIENT_MODES):
 	//   "webchat", "cli", "ui", "backend", "node", "probe", "test"
+	clientID := "gateway-client"
+	clientMode := "backend"
+	role := "operator"
+	scopes := []string{"operator.read", "operator.write"}
+	platform := "linux"
+	signedAtMs := time.Now().UnixMilli()
+
+	// Build device authentication object per protocol spec
+	// See: OpenClaw Gateway device-auth.ts
+	var deviceAuth map[string]interface{}
+	if challengeNonce != "" {
+		// Build the canonical v3 payload for signing
+		payload := buildDeviceAuthPayloadV3(DeviceAuthPayloadParams{
+			DeviceID:     keyPair.DeviceID,
+			ClientID:     clientID,
+			ClientMode:   clientMode,
+			Role:         role,
+			Scopes:       scopes,
+			SignedAtMs:   signedAtMs,
+			Token:        c.config.AuthToken,
+			Nonce:        challengeNonce,
+			Platform:     platform,
+			DeviceFamily: "",
+		})
+
+		// Debug log the payload (truncate nonce for security)
+		truncatedPayload := payload
+		if len(truncatedPayload) > 100 {
+			truncatedPayload = truncatedPayload[:100] + "..."
+		}
+		log.Printf("openclaw-gw: signing payload: %s", truncatedPayload)
+
+		signature := keyPair.signPayload(payload)
+
+		deviceAuth = map[string]interface{}{
+			"id":        keyPair.DeviceID,
+			"publicKey": keyPair.publicKeyBase64Url(),
+			"signature": signature,
+			"signedAt":  signedAtMs,
+			"nonce":     challengeNonce,
+		}
+
+		log.Printf("openclaw-gw: signed device auth payload for container %s, signedAt=%d", c.config.ContainerName, signedAtMs)
+	} else {
+		// No challenge received - some configurations may allow this
+		deviceAuth = map[string]interface{}{
+			"id":        keyPair.DeviceID,
+			"publicKey": keyPair.publicKeyBase64Url(),
+		}
+	}
+
+	// Send connect request per OpenClaw Gateway protocol
 	params := map[string]interface{}{
 		"minProtocol": 3,
 		"maxProtocol": 3,
 		"client": map[string]interface{}{
-			"id":       "gateway-client", // For backend service connections
+			"id":       clientID,  // For backend service connections
 			"version":  "1.0.0",
-			"platform": "linux",
-			"mode":     "backend", // Backend service mode
+			"platform": platform,
+			"mode":     clientMode, // Backend service mode
 		},
-		"role":      "operator",
-		"scopes":    []string{"operator.read", "operator.write"},
+		"role":      role,
+		"scopes":    scopes,
 		"device":    deviceAuth,
 		"locale":    "en-US",
 		"userAgent": "semantic-router-dashboard/1.0.0 (Go-http-client)",
