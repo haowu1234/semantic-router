@@ -227,9 +227,9 @@ func (h *OpenClawHandler) ProcessGatewayAgentEvent(containerName string, event G
 			workerDisplayName(*entry),
 			event.Content,
 			map[string]string{
-				"source":    "gateway_ws",
-				"sessionId": event.SessionID,
-				"agentId":   event.AgentID,
+				"source":     "gateway_ws",
+				"sessionKey": event.SessionKey,
+				"runId":      event.RunID,
 			},
 		)
 
@@ -254,9 +254,9 @@ func (h *OpenClawHandler) ProcessGatewayAgentEvent(containerName string, event G
 			"System",
 			toolMsg,
 			map[string]string{
-				"source":    "gateway_ws_tool",
-				"toolName":  event.ToolName,
-				"sessionId": event.SessionID,
+				"source":     "gateway_ws_tool",
+				"toolName":   event.ToolName,
+				"sessionKey": event.SessionKey,
 			},
 		)
 

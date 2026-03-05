@@ -234,9 +234,9 @@ func (h *OpenClawHandler) GatewayWSEventsHandler() http.HandlerFunc {
 					return
 				}
 				// Apply container filter if specified
-				if containerFilter != "" && !strings.EqualFold(event.AgentID, containerFilter) {
+				if containerFilter != "" && !strings.EqualFold(event.RunID, containerFilter) {
 					// Check if the event came from the filtered container
-					// (AgentID might be different from containerName in some cases)
+					// (RunID might be different from containerName in some cases)
 					continue
 				}
 				writeSSE(w, flusher, "agent_event", event)

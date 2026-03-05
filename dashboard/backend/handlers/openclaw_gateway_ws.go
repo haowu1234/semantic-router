@@ -37,6 +37,12 @@ const (
 	GatewayWSTypeError GatewayWSMessageType = "error"
 )
 
+// GatewayWSStateVersion represents the state version in Gateway WebSocket protocol
+type GatewayWSStateVersion struct {
+	Presence int64 `json:"presence"`
+	Health   int64 `json:"health"`
+}
+
 // GatewayWSMessage represents a message in the Gateway WebSocket protocol
 type GatewayWSMessage struct {
 	Type    GatewayWSMessageType   `json:"type"`
@@ -47,8 +53,8 @@ type GatewayWSMessage struct {
 	Payload interface{}            `json:"payload,omitempty"` // Response/Event payload per protocol
 	Event   string                 `json:"event,omitempty"`
 	Error   *GatewayWSError        `json:"error,omitempty"`
-	Seq     *int64                 `json:"seq,omitempty"`          // Event sequence number
-	StateV  *int64                 `json:"stateVersion,omitempty"` // Event state version
+	Seq     *int64                 `json:"seq,omitempty"`                // Event sequence number
+	StateV  *GatewayWSStateVersion `json:"stateVersion,omitempty"` // Event state version (presence + health)
 }
 
 // GatewayWSError represents an error in Gateway WebSocket protocol
@@ -58,17 +64,73 @@ type GatewayWSError struct {
 }
 
 // GatewayAgentEvent represents an agent event from the Gateway
+// OpenClaw's actual format uses: runId, seq, stream, ts, sessionKey, data
 type GatewayAgentEvent struct {
-	Type       string                 `json:"type"`
-	AgentID    string                 `json:"agentId,omitempty"`
-	SessionID  string                 `json:"sessionId,omitempty"`
-	Content    string                 `json:"content,omitempty"`
-	ToolName   string                 `json:"toolName,omitempty"`
-	ToolInput  map[string]interface{} `json:"toolInput,omitempty"`
-	ToolOutput string                 `json:"toolOutput,omitempty"`
-	Done       bool                   `json:"done,omitempty"`
-	Error      string                 `json:"error,omitempty"`
-	Timestamp  string                 `json:"timestamp,omitempty"`
+	// OpenClaw native fields
+	RunID      string                 `json:"runId,omitempty"`
+	Seq        int64                  `json:"seq,omitempty"`
+	Stream     string                 `json:"stream,omitempty"` // "lifecycle", "assistant", "tool", "error"
+	Ts         int64                  `json:"ts,omitempty"`
+	SessionKey string                 `json:"sessionKey,omitempty"`
+	Data       map[string]interface{} `json:"data,omitempty"`
+
+	// Derived fields for our internal use
+	Type       string                 `json:"-"` // Derived from Stream
+	Content    string                 `json:"-"` // Derived from Data.text or Data.delta
+	ToolName   string                 `json:"-"` // Derived from Data.name
+	ToolInput  map[string]interface{} `json:"-"` // Derived from Data
+	ToolOutput string                 `json:"-"` // Derived from Data.result
+	Done       bool                   `json:"-"` // Derived from Data.phase == "end"
+	Error      string                 `json:"-"` // Derived from Data
+	Timestamp  string                 `json:"-"` // Set by us
+}
+
+// parseAgentEventData extracts derived fields from OpenClaw's native format
+func (e *GatewayAgentEvent) parseAgentEventData() {
+	// Map stream to type
+	switch e.Stream {
+	case "assistant":
+		e.Type = "message"
+	case "tool":
+		e.Type = "tool"
+	case "lifecycle":
+		e.Type = "lifecycle"
+	case "error":
+		e.Type = "error"
+	default:
+		e.Type = e.Stream
+	}
+
+	if e.Data == nil {
+		return
+	}
+
+	// Extract text content from data.text or data.delta
+	if text, ok := e.Data["text"].(string); ok {
+		e.Content = text
+	} else if delta, ok := e.Data["delta"].(string); ok {
+		e.Content = delta
+	}
+
+	// Extract tool info
+	if name, ok := e.Data["name"].(string); ok {
+		e.ToolName = name
+	}
+	if result, ok := e.Data["result"].(string); ok {
+		e.ToolOutput = result
+	}
+
+	// Check lifecycle phase for done status
+	if phase, ok := e.Data["phase"].(string); ok {
+		if phase == "end" || phase == "final" {
+			e.Done = true
+		}
+		if phase == "error" {
+			if errMsg, ok := e.Data["error"].(string); ok {
+				e.Error = errMsg
+			}
+		}
+	}
 }
 
 // GatewayClientState represents the connection state
@@ -874,13 +936,22 @@ func (c *GatewayClient) handleAgentEvent(msg GatewayWSMessage) {
 		return
 	}
 
+	// Debug: log raw payload to understand OpenClaw's event format
+	log.Printf("openclaw-gw: raw agent event payload from %s: %s", c.config.ContainerName, string(data))
+
 	var event GatewayAgentEvent
 	if err := json.Unmarshal(data, &event); err != nil {
 		log.Printf("openclaw-gw: failed to parse agent event: %v", err)
 		return
 	}
 
+	// Parse OpenClaw's native format into our derived fields
+	event.parseAgentEventData()
 	event.Timestamp = time.Now().UTC().Format(time.RFC3339)
+
+	log.Printf("openclaw-gw: parsed agent event from %s: stream=%s type=%s content=%s",
+		c.config.ContainerName, event.Stream, event.Type, truncateString(event.Content, 50))
+
 	c.handler.OnAgentEvent(c.config.ContainerName, event)
 }
 
@@ -905,13 +976,14 @@ func (c *GatewayClient) handleAgentMessageEvent(msg GatewayWSMessage) {
 	}
 
 	event := GatewayAgentEvent{
-		Type:      "message",
-		AgentID:   payload.AgentID,
-		SessionID: payload.SessionID,
-		Content:   payload.Content,
-		Done:      payload.Done,
+		Stream:    "assistant",
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
+	// Set derived fields directly
+	event.Type = "message"
+	event.Content = payload.Content
+	event.Done = payload.Done
+	event.SessionKey = payload.SessionID // Map sessionId to sessionKey
 
 	c.handler.OnAgentEvent(c.config.ContainerName, event)
 }
@@ -938,14 +1010,15 @@ func (c *GatewayClient) handleAgentToolEvent(msg GatewayWSMessage) {
 	}
 
 	event := GatewayAgentEvent{
-		Type:       "tool",
-		AgentID:    payload.AgentID,
-		SessionID:  payload.SessionID,
-		ToolName:   payload.ToolName,
-		ToolInput:  payload.ToolInput,
-		ToolOutput: payload.ToolOutput,
-		Timestamp:  time.Now().UTC().Format(time.RFC3339),
+		Stream:    "tool",
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
+	// Set derived fields directly
+	event.Type = "tool"
+	event.ToolName = payload.ToolName
+	event.ToolInput = payload.ToolInput
+	event.ToolOutput = payload.ToolOutput
+	event.SessionKey = payload.SessionID // Map sessionId to sessionKey
 
 	c.handler.OnAgentEvent(c.config.ContainerName, event)
 }
@@ -1194,13 +1267,17 @@ func (m *GatewayClientManager) resolveGatewayHost(containerName string, port int
 
 func (m *GatewayClientManager) forwardEventToRoom(containerName string, event GatewayAgentEvent) {
 	// Only forward message events with content
+	// Type is derived from Stream: "assistant" -> "message"
 	if event.Type != "message" || strings.TrimSpace(event.Content) == "" {
+		log.Printf("openclaw-gw: skipping event forward (type=%s, stream=%s, content_len=%d)",
+			event.Type, event.Stream, len(event.Content))
 		return
 	}
 
 	// Find container entry
 	entry := m.handler.findEntry(containerName)
 	if entry == nil || entry.TeamID == "" {
+		log.Printf("openclaw-gw: container %s not found or has no team, skipping forward", containerName)
 		return
 	}
 
@@ -1222,6 +1299,7 @@ func (m *GatewayClientManager) forwardEventToRoom(containerName string, event Ga
 	}
 
 	if targetRoom == nil {
+		log.Printf("openclaw-gw: no room found for team %s, skipping forward", entry.TeamID)
 		return
 	}
 
@@ -1239,14 +1317,18 @@ func (m *GatewayClientManager) forwardEventToRoom(containerName string, event Ga
 		senderName,
 		event.Content,
 		map[string]string{
-			"source":    "gateway-ws",
-			"sessionId": event.SessionID,
-			"agentId":   event.AgentID,
+			"source":     "gateway-ws",
+			"sessionKey": event.SessionKey,
+			"runId":      event.RunID,
+			"stream":     event.Stream,
 		},
 	)
 
 	if err := m.handler.appendRoomMessage(targetRoom.ID, message); err != nil {
 		log.Printf("openclaw-gw: failed to forward event to room: %v", err)
+	} else {
+		log.Printf("openclaw-gw: forwarded message from %s to room %s: %s",
+			containerName, targetRoom.ID, truncateString(event.Content, 50))
 	}
 }
 
