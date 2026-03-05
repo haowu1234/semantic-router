@@ -12,6 +12,8 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -96,21 +98,140 @@ func (s GatewayClientState) String() string {
 
 // --- Device Key Pair for Gateway Authentication ---
 
-// DeviceKeyPair holds the Ed25519 key pair for device authentication
+// DeviceKeyPair holds the Ed25519 key pair for device authentication.
+// Per OpenClaw Gateway protocol, the device.id is derived from the public key fingerprint
+// to provide a stable identity across restarts. The key pair is persisted to disk.
 type DeviceKeyPair struct {
 	PrivateKey ed25519.PrivateKey
 	PublicKey  ed25519.PublicKey
-	DeviceID   string // SHA256 fingerprint of public key
+	DeviceID   string // SHA256 fingerprint of public key (stable identity)
+}
+
+// deviceKeyPairJSON is the JSON serialization format for persisting the key pair
+type deviceKeyPairJSON struct {
+	PrivateKey string `json:"privateKey"` // base64-encoded Ed25519 private key (64 bytes)
+	PublicKey  string `json:"publicKey"`  // base64-encoded Ed25519 public key (32 bytes)
+	DeviceID   string `json:"deviceId"`   // SHA256 fingerprint of public key
+	CreatedAt  string `json:"createdAt"`  // ISO8601 timestamp
 }
 
 var (
-	globalDeviceKeyPair *DeviceKeyPair
-	deviceKeyPairOnce   sync.Once
+	globalDeviceKeyPair   *DeviceKeyPair
+	deviceKeyPairOnce     sync.Once
+	deviceKeyPairDataDir  string
+	deviceKeyPairDataMu   sync.Mutex
 )
 
-// getOrCreateDeviceKeyPair returns the global device key pair, creating it if needed
+// SetDeviceKeyPairDataDir sets the data directory for persisting the device key pair.
+// This must be called before any connections are established.
+func SetDeviceKeyPairDataDir(dataDir string) {
+	deviceKeyPairDataMu.Lock()
+	defer deviceKeyPairDataMu.Unlock()
+	deviceKeyPairDataDir = dataDir
+}
+
+// deviceKeyPairPath returns the file path for the persisted device key pair
+func deviceKeyPairPath() string {
+	deviceKeyPairDataMu.Lock()
+	dir := deviceKeyPairDataDir
+	deviceKeyPairDataMu.Unlock()
+
+	if dir == "" {
+		// Fallback to current directory if not configured
+		dir = "."
+	}
+	return filepath.Join(dir, "device-keypair.json")
+}
+
+// loadDeviceKeyPair attempts to load an existing key pair from disk
+func loadDeviceKeyPair() (*DeviceKeyPair, error) {
+	path := deviceKeyPairPath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var stored deviceKeyPairJSON
+	if err := json.Unmarshal(data, &stored); err != nil {
+		return nil, fmt.Errorf("invalid device key pair JSON: %w", err)
+	}
+
+	privateKeyBytes, err := base64.StdEncoding.DecodeString(stored.PrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("invalid private key encoding: %w", err)
+	}
+	if len(privateKeyBytes) != ed25519.PrivateKeySize {
+		return nil, fmt.Errorf("invalid private key size: got %d, want %d", len(privateKeyBytes), ed25519.PrivateKeySize)
+	}
+
+	publicKeyBytes, err := base64.StdEncoding.DecodeString(stored.PublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("invalid public key encoding: %w", err)
+	}
+	if len(publicKeyBytes) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("invalid public key size: got %d, want %d", len(publicKeyBytes), ed25519.PublicKeySize)
+	}
+
+	// Verify device ID matches public key fingerprint
+	hash := sha256.Sum256(publicKeyBytes)
+	expectedDeviceID := hex.EncodeToString(hash[:])
+	if stored.DeviceID != expectedDeviceID {
+		return nil, fmt.Errorf("device ID mismatch: stored %s, computed %s", stored.DeviceID[:16], expectedDeviceID[:16])
+	}
+
+	return &DeviceKeyPair{
+		PrivateKey: ed25519.PrivateKey(privateKeyBytes),
+		PublicKey:  ed25519.PublicKey(publicKeyBytes),
+		DeviceID:   stored.DeviceID,
+	}, nil
+}
+
+// saveDeviceKeyPair persists the key pair to disk
+func saveDeviceKeyPair(kp *DeviceKeyPair) error {
+	path := deviceKeyPairPath()
+
+	// Ensure parent directory exists
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("failed to create directory for device key pair: %w", err)
+	}
+
+	stored := deviceKeyPairJSON{
+		PrivateKey: base64.StdEncoding.EncodeToString(kp.PrivateKey),
+		PublicKey:  base64.StdEncoding.EncodeToString(kp.PublicKey),
+		DeviceID:   kp.DeviceID,
+		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+	}
+
+	data, err := json.MarshalIndent(stored, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal device key pair: %w", err)
+	}
+
+	// Write with restricted permissions (private key!)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("failed to write device key pair: %w", err)
+	}
+
+	log.Printf("openclaw-gw: persisted device key pair to %s", path)
+	return nil
+}
+
+// getOrCreateDeviceKeyPair returns the global device key pair.
+// It first attempts to load from disk for stable identity across restarts.
+// If not found, generates a new key pair and persists it.
 func getOrCreateDeviceKeyPair() *DeviceKeyPair {
 	deviceKeyPairOnce.Do(func() {
+		// First, try to load existing key pair from disk
+		if loaded, err := loadDeviceKeyPair(); err == nil {
+			globalDeviceKeyPair = loaded
+			log.Printf("openclaw-gw: loaded persisted device key pair, deviceID=%s...", loaded.DeviceID[:16])
+			return
+		} else if !os.IsNotExist(err) {
+			// Log non-NotExist errors but continue to generate new key pair
+			log.Printf("openclaw-gw: failed to load device key pair (will generate new): %v", err)
+		}
+
+		// Generate new key pair
 		publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 		if err != nil {
 			log.Printf("openclaw-gw: failed to generate device key pair: %v", err)
@@ -127,7 +248,12 @@ func getOrCreateDeviceKeyPair() *DeviceKeyPair {
 			DeviceID:   deviceID,
 		}
 
-		log.Printf("openclaw-gw: generated device key pair, deviceID=%s", deviceID[:16]+"...")
+		log.Printf("openclaw-gw: generated new device key pair, deviceID=%s...", deviceID[:16])
+
+		// Persist to disk for stable identity across restarts
+		if err := saveDeviceKeyPair(globalDeviceKeyPair); err != nil {
+			log.Printf("openclaw-gw: warning: failed to persist device key pair: %v", err)
+		}
 	})
 	return globalDeviceKeyPair
 }
@@ -409,14 +535,20 @@ func (c *GatewayClient) performHandshake() error {
 	}
 
 	// Send connect request per OpenClaw Gateway protocol
+	// Valid client.id values (from GATEWAY_CLIENT_IDS):
+	//   "webchat-ui", "openclaw-control-ui", "webchat", "cli", "gateway-client",
+	//   "openclaw-macos", "openclaw-ios", "openclaw-android", "node-host",
+	//   "test", "fingerprint", "openclaw-probe"
+	// Valid client.mode values (from GATEWAY_CLIENT_MODES):
+	//   "webchat", "cli", "ui", "backend", "node", "probe", "test"
 	params := map[string]interface{}{
 		"minProtocol": 3,
 		"maxProtocol": 3,
 		"client": map[string]interface{}{
-			"id":       "semantic-router-dashboard",
+			"id":       "gateway-client", // For backend service connections
 			"version":  "1.0.0",
 			"platform": "linux",
-			"mode":     "operator",
+			"mode":     "backend", // Backend service mode
 		},
 		"role":      "operator",
 		"scopes":    []string{"operator.read", "operator.write"},

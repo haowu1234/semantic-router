@@ -1,10 +1,14 @@
 package handlers
 
 import (
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -248,5 +252,126 @@ func TestTruncateString(t *testing.T) {
 			t.Errorf("truncateString(%q, %d) = %q, want %q",
 				tt.input, tt.maxLen, result, tt.expected)
 		}
+	}
+}
+
+func TestDeviceKeyPairPersistence(t *testing.T) {
+	// Create a temporary directory for the test
+	tempDir := t.TempDir()
+
+	// Reset global state for testing
+	deviceKeyPairOnce = sync.Once{}
+	globalDeviceKeyPair = nil
+
+	// Set the data directory
+	SetDeviceKeyPairDataDir(tempDir)
+
+	// Get or create key pair (should generate new)
+	kp1 := getOrCreateDeviceKeyPair()
+	if kp1 == nil {
+		t.Fatal("expected non-nil key pair")
+	}
+	if len(kp1.DeviceID) != 64 { // SHA256 hex = 64 chars
+		t.Errorf("expected 64-char device ID, got %d", len(kp1.DeviceID))
+	}
+	if len(kp1.PublicKey) != 32 {
+		t.Errorf("expected 32-byte public key, got %d", len(kp1.PublicKey))
+	}
+	if len(kp1.PrivateKey) != 64 {
+		t.Errorf("expected 64-byte private key, got %d", len(kp1.PrivateKey))
+	}
+
+	// Verify key pair file was created
+	keyPairPath := deviceKeyPairPath()
+	if _, err := os.Stat(keyPairPath); os.IsNotExist(err) {
+		t.Fatal("device key pair file was not created")
+	}
+
+	// Reset and load again (should load from disk)
+	deviceKeyPairOnce = sync.Once{}
+	globalDeviceKeyPair = nil
+
+	kp2 := getOrCreateDeviceKeyPair()
+	if kp2 == nil {
+		t.Fatal("expected non-nil key pair on reload")
+	}
+
+	// Verify device ID is stable across restarts
+	if kp2.DeviceID != kp1.DeviceID {
+		t.Errorf("device ID changed after restart: %s -> %s", kp1.DeviceID[:16], kp2.DeviceID[:16])
+	}
+
+	// Verify keys are identical
+	if string(kp2.PublicKey) != string(kp1.PublicKey) {
+		t.Error("public key changed after restart")
+	}
+	if string(kp2.PrivateKey) != string(kp1.PrivateKey) {
+		t.Error("private key changed after restart")
+	}
+}
+
+func TestDeviceKeyPairSignNonce(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Reset global state
+	deviceKeyPairOnce = sync.Once{}
+	globalDeviceKeyPair = nil
+	SetDeviceKeyPairDataDir(tempDir)
+
+	kp := getOrCreateDeviceKeyPair()
+	if kp == nil {
+		t.Fatal("expected non-nil key pair")
+	}
+
+	// Sign a test nonce
+	nonce := "test-challenge-nonce-12345"
+	signature := kp.signNonce(nonce)
+
+	if signature == "" {
+		t.Error("expected non-empty signature")
+	}
+
+	// Verify signature is valid base64
+	sigBytes, err := base64.StdEncoding.DecodeString(signature)
+	if err != nil {
+		t.Errorf("signature is not valid base64: %v", err)
+	}
+
+	// Ed25519 signatures are 64 bytes
+	if len(sigBytes) != 64 {
+		t.Errorf("expected 64-byte signature, got %d", len(sigBytes))
+	}
+
+	// Verify the signature is actually valid
+	if !ed25519.Verify(kp.PublicKey, []byte(nonce), sigBytes) {
+		t.Error("signature verification failed")
+	}
+}
+
+func TestDeviceKeyPairPublicKeyBase64(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Reset global state
+	deviceKeyPairOnce = sync.Once{}
+	globalDeviceKeyPair = nil
+	SetDeviceKeyPairDataDir(tempDir)
+
+	kp := getOrCreateDeviceKeyPair()
+	if kp == nil {
+		t.Fatal("expected non-nil key pair")
+	}
+
+	pubKeyB64 := kp.publicKeyBase64()
+	if pubKeyB64 == "" {
+		t.Error("expected non-empty public key base64")
+	}
+
+	// Verify it's valid base64 and decodes to 32 bytes
+	decoded, err := base64.StdEncoding.DecodeString(pubKeyB64)
+	if err != nil {
+		t.Errorf("public key base64 is invalid: %v", err)
+	}
+	if len(decoded) != 32 {
+		t.Errorf("expected 32-byte public key, got %d", len(decoded))
 	}
 }

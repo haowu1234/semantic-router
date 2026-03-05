@@ -63,6 +63,10 @@ type OpenClawHandler struct {
 }
 
 func NewOpenClawHandler(dataDir string, readOnly bool) *OpenClawHandler {
+	// Set the data directory for device key pair persistence
+	// This must be done before any Gateway WS connections are established
+	SetDeviceKeyPairDataDir(dataDir)
+
 	return &OpenClawHandler{dataDir: dataDir, readOnly: readOnly}
 }
 
