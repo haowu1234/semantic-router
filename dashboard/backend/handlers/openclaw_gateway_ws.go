@@ -1085,19 +1085,54 @@ func (c *GatewayClient) setState(state GatewayClientState) {
 // --- Gateway Client Manager ---
 
 // GatewayClientManager manages multiple Gateway WebSocket clients
+// streamBuffer holds accumulated delta content for a streaming run
+type streamBuffer struct {
+	containerName string
+	runID         string
+	sessionKey    string
+	content       strings.Builder
+	lastUpdate    time.Time
+}
+
 type GatewayClientManager struct {
-	handler     *OpenClawHandler
-	clients     sync.Map // containerName -> *GatewayClient
-	eventSubs   sync.Map // subscriberID -> chan GatewayAgentEvent
-	mu          sync.RWMutex
-	autoConnect bool
+	handler       *OpenClawHandler
+	clients       sync.Map // containerName -> *GatewayClient
+	eventSubs     sync.Map // subscriberID -> chan GatewayAgentEvent
+	streamBuffers sync.Map // runID -> *streamBuffer (for aggregating streaming deltas)
+	mu            sync.RWMutex
+	autoConnect   bool
 }
 
 // NewGatewayClientManager creates a new manager
 func NewGatewayClientManager(handler *OpenClawHandler) *GatewayClientManager {
-	return &GatewayClientManager{
+	mgr := &GatewayClientManager{
 		handler:     handler,
 		autoConnect: true,
+	}
+	// Start cleanup goroutine for stale stream buffers
+	go mgr.cleanupStaleBuffers()
+	return mgr
+}
+
+// cleanupStaleBuffers periodically removes buffers that haven't been updated
+func (m *GatewayClientManager) cleanupStaleBuffers() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		now := time.Now()
+		m.streamBuffers.Range(func(key, value interface{}) bool {
+			buf := value.(*streamBuffer)
+			// If buffer is older than 60 seconds without updates, flush and remove
+			if now.Sub(buf.lastUpdate) > 60*time.Second {
+				content := buf.content.String()
+				if strings.TrimSpace(content) != "" {
+					log.Printf("openclaw-gw: flushing stale buffer for runId=%s (timeout)", buf.runID)
+					m.flushStreamBuffer(buf)
+				}
+				m.streamBuffers.Delete(key)
+			}
+			return true
+		})
 	}
 }
 
@@ -1266,11 +1301,78 @@ func (m *GatewayClientManager) resolveGatewayHost(containerName string, port int
 }
 
 func (m *GatewayClientManager) forwardEventToRoom(containerName string, event GatewayAgentEvent) {
-	// Only forward message events with content
-	// Type is derived from Stream: "assistant" -> "message"
-	if event.Type != "message" || strings.TrimSpace(event.Content) == "" {
-		log.Printf("openclaw-gw: skipping event forward (type=%s, stream=%s, content_len=%d)",
-			event.Type, event.Stream, len(event.Content))
+	// Handle lifecycle events to detect stream completion
+	if event.Stream == "lifecycle" {
+		phase, _ := event.Data["phase"].(string)
+		if phase == "end" || phase == "final" || phase == "error" {
+			// Stream completed - flush the buffer
+			if buf, ok := m.streamBuffers.Load(event.RunID); ok {
+				streamBuf := buf.(*streamBuffer)
+				content := streamBuf.content.String()
+				if strings.TrimSpace(content) != "" {
+					log.Printf("openclaw-gw: stream completed for runId=%s, flushing buffer (%d chars)",
+						event.RunID, len(content))
+					m.flushStreamBuffer(streamBuf)
+				}
+				m.streamBuffers.Delete(event.RunID)
+			}
+		}
+		return
+	}
+
+	// Only process assistant stream for room messages
+	if event.Stream != "assistant" {
+		return
+	}
+
+	// Check if this is a complete message (data.text) or a delta (data.delta)
+	isComplete := false
+	content := ""
+	if event.Data != nil {
+		if text, ok := event.Data["text"].(string); ok && text != "" {
+			// Complete message - send directly
+			isComplete = true
+			content = text
+		} else if delta, ok := event.Data["delta"].(string); ok {
+			// Delta - accumulate in buffer
+			content = delta
+		}
+	}
+
+	if content == "" {
+		return
+	}
+
+	if isComplete {
+		// Complete message - delete any existing buffer and send directly
+		m.streamBuffers.Delete(event.RunID)
+		m.sendRoomMessage(containerName, event.RunID, event.SessionKey, content)
+	} else {
+		// Delta - accumulate in buffer
+		buf, _ := m.streamBuffers.LoadOrStore(event.RunID, &streamBuffer{
+			containerName: containerName,
+			runID:         event.RunID,
+			sessionKey:    event.SessionKey,
+			lastUpdate:    time.Now(),
+		})
+		streamBuf := buf.(*streamBuffer)
+		streamBuf.content.WriteString(content)
+		streamBuf.lastUpdate = time.Now()
+	}
+}
+
+// flushStreamBuffer sends accumulated content to room
+func (m *GatewayClientManager) flushStreamBuffer(buf *streamBuffer) {
+	content := buf.content.String()
+	if strings.TrimSpace(content) == "" {
+		return
+	}
+	m.sendRoomMessage(buf.containerName, buf.runID, buf.sessionKey, content)
+}
+
+// sendRoomMessage sends a complete message to the room
+func (m *GatewayClientManager) sendRoomMessage(containerName, runID, sessionKey, content string) {
+	if strings.TrimSpace(content) == "" {
 		return
 	}
 
@@ -1315,12 +1417,12 @@ func (m *GatewayClientManager) forwardEventToRoom(containerName string, event Ga
 		senderType,
 		containerName,
 		senderName,
-		event.Content,
+		content,
 		map[string]string{
 			"source":     "gateway-ws",
-			"sessionKey": event.SessionKey,
-			"runId":      event.RunID,
-			"stream":     event.Stream,
+			"sessionKey": sessionKey,
+			"runId":      runID,
+			"stream":     "assistant",
 		},
 	)
 
@@ -1328,7 +1430,7 @@ func (m *GatewayClientManager) forwardEventToRoom(containerName string, event Ga
 		log.Printf("openclaw-gw: failed to forward event to room: %v", err)
 	} else {
 		log.Printf("openclaw-gw: forwarded message from %s to room %s: %s",
-			containerName, targetRoom.ID, truncateString(event.Content, 50))
+			containerName, targetRoom.ID, truncateString(content, 50))
 	}
 }
 
