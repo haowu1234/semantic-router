@@ -402,7 +402,7 @@ func generateDockerRunCmd(runtime string, req ProvisionRequest, dataDir string) 
   --health-start-period 15s \
   --health-retries 3 \
   -v %s/workspace:/workspace \
-  -v %s/openclaw.json:/config/openclaw.json:ro \
+  -v %s/openclaw.json:/config/openclaw.json \
   -v %s:/state \
   -e OPENCLAW_CONFIG_PATH=/config/openclaw.json \
   -e OPENCLAW_STATE_DIR=/state \
@@ -436,7 +436,7 @@ func generateComposeYAML(req ProvisionRequest, dataDir string) string {
       - %s
     volumes:
       - %s/workspace:/workspace
-      - %s/openclaw.json:/config/openclaw.json:ro
+      - %s/openclaw.json:/config/openclaw.json
       - %s:/state
     environment:
       OPENCLAW_CONFIG_PATH: /config/openclaw.json
@@ -471,7 +471,7 @@ volumes:
     network_mode: %s
     volumes:
       - %s/workspace:/workspace
-      - %s/openclaw.json:/config/openclaw.json:ro
+      - %s/openclaw.json:/config/openclaw.json
       - %s:/state
     environment:
       OPENCLAW_CONFIG_PATH: /config/openclaw.json
