@@ -225,13 +225,34 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 			req.Container.MatrixHomeserver = os.Getenv("MATRIX_INTERNAL_URL")
 			req.Container.MatrixDomain = os.Getenv("MATRIX_DOMAIN")
 			req.Container.MatrixAdminUser = os.Getenv("MATRIX_ADMIN_USER")
-			// For leader agents, use MATRIX_LEADER_ACCESS_TOKEN
-			// For worker agents, they'll need to register themselves or get tokens via API
+
+			// Determine matrix username from container name
+			// Use a sanitized version of the agent name as the matrix user
+			matrixUsername := deriveMatrixUsername(req.Container.ContainerName, req.Identity.Name)
+
+			// For leader agents, use MATRIX_LEADER_ACCESS_TOKEN (pre-configured)
+			// For worker agents, dynamically register and get token
 			if strings.Contains(strings.ToLower(req.Container.ContainerName), "leader") {
 				req.Container.MatrixAccessToken = os.Getenv("MATRIX_LEADER_ACCESS_TOKEN")
+				log.Printf("Matrix communication enabled for leader %s: homeserver=%s domain=%s (using pre-configured token)",
+					req.Container.ContainerName, req.Container.MatrixHomeserver, req.Container.MatrixDomain)
+			} else {
+				// Worker agent: register user and get token via MatrixClient
+				if h.matrixClient != nil {
+					token, err := h.ensureMatrixUserAndGetToken(matrixUsername)
+					if err != nil {
+						log.Printf("Warning: failed to setup Matrix user for worker %s: %v (Matrix communication may not work)",
+							req.Container.ContainerName, err)
+					} else {
+						req.Container.MatrixAccessToken = token
+						log.Printf("Matrix communication enabled for worker %s: homeserver=%s domain=%s user=%s",
+							req.Container.ContainerName, req.Container.MatrixHomeserver, req.Container.MatrixDomain, matrixUsername)
+					}
+				} else {
+					log.Printf("Warning: Matrix enabled but MatrixClient not initialized for worker %s (Matrix communication will not work)",
+						req.Container.ContainerName)
+				}
 			}
-			log.Printf("Matrix communication enabled for %s: homeserver=%s domain=%s",
-				req.Container.ContainerName, req.Container.MatrixHomeserver, req.Container.MatrixDomain)
 		}
 
 		configPath := filepath.Join(cDir, "openclaw.json")

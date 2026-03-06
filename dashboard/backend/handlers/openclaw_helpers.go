@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -326,6 +327,10 @@ func writeOpenClawConfig(path string, req ProvisionRequest) error {
 		// Determine if this is a leader agent (by name convention)
 		isLeader := strings.Contains(strings.ToLower(req.Container.ContainerName), "leader")
 
+		// Derive the Matrix user ID for this agent
+		matrixUsername := deriveMatrixUsername(req.Container.ContainerName, req.Identity.Name)
+		matrixUserID := fmt.Sprintf("@%s:%s", matrixUsername, domain)
+
 		// Build allowFrom list for DM policy
 		var dmAllowFrom []string
 		if isLeader {
@@ -335,6 +340,7 @@ func writeOpenClawConfig(path string, req ProvisionRequest) error {
 		matrixChannel := map[string]interface{}{
 			"enabled":    true,
 			"homeserver": req.Container.MatrixHomeserver,
+			"userId":     matrixUserID,
 			"dm": map[string]interface{}{
 				"policy":    "allowlist",
 				"allowFrom": dmAllowFrom,
@@ -519,4 +525,112 @@ You wake up fresh each session. These files are your continuity:
 
 Skills provide your tools. When you need one, check its SKILL.md.
 `
+}
+
+// deriveMatrixUsername derives a Matrix username from container name and identity name.
+// The username is sanitized to be valid for Matrix user IDs.
+func deriveMatrixUsername(containerName, identityName string) string {
+	// Prefer identity name if available, otherwise use container name
+	raw := strings.TrimSpace(identityName)
+	if raw == "" {
+		raw = containerName
+	}
+
+	// Sanitize for Matrix username (lowercase, alphanumeric, dots, dashes, underscores)
+	// Matrix user localpart: a-z, 0-9, ., _, =, -, /
+	cleaned := strings.ToLower(raw)
+	var result strings.Builder
+	for _, r := range cleaned {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
+			result.WriteRune(r)
+		} else if r == ' ' || r == ':' {
+			result.WriteRune('_')
+		}
+	}
+
+	username := result.String()
+	if username == "" {
+		username = "worker"
+	}
+
+	// Ensure username doesn't start with underscore or dot
+	username = strings.TrimLeft(username, "._")
+	if username == "" {
+		username = "worker"
+	}
+
+	// Limit length (Matrix allows up to 255, but keep it reasonable)
+	const maxLen = 32
+	if len(username) > maxLen {
+		username = username[:maxLen]
+	}
+
+	return username
+}
+
+// ensureMatrixUserAndGetToken registers a Matrix user (if not exists) and returns an access token.
+// This uses the shared registration token for user creation.
+func (h *OpenClawHandler) ensureMatrixUserAndGetToken(username string) (string, error) {
+	if h.matrixClient == nil {
+		return "", fmt.Errorf("matrix client not initialized")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Generate a deterministic password for the agent based on username and a secret
+	// In production, consider using a more secure password derivation
+	password := generateAgentPassword(username)
+
+	// Try to login first (user may already exist)
+	token, err := h.matrixClient.LoginUser(ctx, username, password)
+	if err == nil {
+		log.Printf("Matrix user %q already exists, logged in successfully", username)
+		return token, nil
+	}
+
+	// Login failed, try to register
+	log.Printf("Matrix login failed for %q, attempting registration: %v", username, err)
+
+	_, regErr := h.matrixClient.RegisterUser(ctx, username, password)
+	if regErr != nil {
+		// Check if user already exists (M_USER_IN_USE)
+		if strings.Contains(regErr.Error(), "M_USER_IN_USE") {
+			// User exists but password might be different, this is an error state
+			return "", fmt.Errorf("matrix user %q exists but login failed (password mismatch?): %w", username, err)
+		}
+		return "", fmt.Errorf("failed to register matrix user %q: %w", username, regErr)
+	}
+
+	log.Printf("Matrix user %q registered successfully", username)
+
+	// Now login to get a fresh access token
+	token, err = h.matrixClient.LoginUser(ctx, username, password)
+	if err != nil {
+		return "", fmt.Errorf("failed to login after registration for %q: %w", username, err)
+	}
+
+	return token, nil
+}
+
+// generateAgentPassword generates a deterministic password for an agent.
+// Uses the registration token as a seed to create reproducible passwords.
+func generateAgentPassword(username string) string {
+	regToken := strings.TrimSpace(os.Getenv("MATRIX_REG_TOKEN"))
+	if regToken == "" {
+		regToken = "default-agent-password-seed"
+	}
+
+	// Simple deterministic password: hash of username + regToken
+	// This ensures the same agent always gets the same password
+	combined := username + ":" + regToken
+
+	// Use a simple hash (in production, use HMAC or similar)
+	h := 0
+	for _, c := range combined {
+		h = 31*h + int(c)
+	}
+
+	// Generate password string
+	return fmt.Sprintf("agent-%s-%x", username, uint32(h))
 }

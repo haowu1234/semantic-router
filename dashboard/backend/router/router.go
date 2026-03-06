@@ -316,6 +316,39 @@ func Setup(cfg *config.Config) *http.ServeMux {
 	if cfg.OpenClawEnabled {
 		openClawHandler = handlers.NewOpenClawHandler(cfg.OpenClawDataDir, cfg.ReadonlyMode)
 		openClawHandler.SetRouterConfigPath(cfg.AbsConfigPath)
+
+		// Initialize Matrix client for OpenClaw if Matrix is enabled
+		// This allows dynamic registration of worker agent users
+		if matrixEnabled := os.Getenv("MATRIX_ENABLED"); matrixEnabled == "true" {
+			matrixURL := strings.TrimSpace(os.Getenv("MATRIX_INTERNAL_URL"))
+			matrixDomain := strings.TrimSpace(os.Getenv("MATRIX_DOMAIN"))
+			matrixRegToken := strings.TrimSpace(os.Getenv("MATRIX_REG_TOKEN"))
+			matrixSystemUser := strings.TrimSpace(os.Getenv("MATRIX_SYSTEM_USER"))
+
+			if matrixSystemUser == "" {
+				matrixSystemUser = "system"
+			}
+			if matrixDomain == "" {
+				matrixDomain = "matrix.vllm-sr.local"
+			}
+
+			if matrixURL != "" && matrixRegToken != "" {
+				matrixClient, err := handlers.NewMatrixClient(handlers.MatrixClientConfig{
+					HomeserverURL: matrixURL,
+					Domain:        matrixDomain,
+					SystemUser:    matrixSystemUser,
+					RegToken:      matrixRegToken,
+				})
+				if err != nil {
+					log.Printf("Warning: failed to initialize Matrix client for OpenClaw: %v (worker agents will not have Matrix access)", err)
+				} else {
+					openClawHandler.SetMatrixClient(matrixClient, matrixDomain)
+					log.Printf("Matrix client initialized for OpenClaw worker registration (homeserver=%s, domain=%s)", matrixURL, matrixDomain)
+				}
+			} else {
+				log.Printf("Warning: MATRIX_ENABLED=true but MATRIX_INTERNAL_URL or MATRIX_REG_TOKEN not set (worker agents will not have Matrix access)")
+			}
+		}
 	}
 
 	// MCP endpoints (if enabled)

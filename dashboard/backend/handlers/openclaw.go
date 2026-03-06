@@ -58,10 +58,20 @@ type OpenClawHandler struct {
 	roomSSEClients   sync.Map
 	roomSSELastEvent sync.Map
 	roomAutomationMu sync.Map
+	// Matrix client for registering worker agents (optional, nil if Matrix disabled)
+	matrixClient *MatrixClient
+	matrixDomain string
 }
 
 func NewOpenClawHandler(dataDir string, readOnly bool) *OpenClawHandler {
 	return &OpenClawHandler{dataDir: dataDir, readOnly: readOnly}
+}
+
+// SetMatrixClient sets the Matrix client for dynamic worker user registration.
+// This should be called when MATRIX_ENABLED=true during initialization.
+func (h *OpenClawHandler) SetMatrixClient(client *MatrixClient, domain string) {
+	h.matrixClient = client
+	h.matrixDomain = domain
 }
 
 func (h *OpenClawHandler) SetRouterConfigPath(configPath string) {
