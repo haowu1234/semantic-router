@@ -151,6 +151,7 @@ def start_vllm_sr(
             
             if matrix_result.get("credentials"):
                 # Add Matrix environment variables for dashboard
+                # These are required for the dashboard to register worker agents
                 env_vars.update({
                     "MATRIX_ENABLED": "true",
                     "MATRIX_DOMAIN": matrix_config.get("domain"),
@@ -158,6 +159,10 @@ def start_vllm_sr(
                     "MATRIX_EXTERNAL_URL": f"http://localhost:{matrix_config.get('port', 6167)}",
                     "MATRIX_SYSTEM_ACCESS_TOKEN": matrix_result["credentials"].get("system", {}).get("access_token", ""),
                     "MATRIX_LEADER_ACCESS_TOKEN": matrix_result["credentials"].get("leader", {}).get("access_token", ""),
+                    # Critical: REG_TOKEN is required for dashboard to register worker agent users
+                    "MATRIX_REG_TOKEN": matrix_config.get("registration_token", ""),
+                    "MATRIX_ADMIN_USER": matrix_config.get("admin_user", "admin"),
+                    "MATRIX_SYSTEM_USER": "system",
                 })
 
     # Detect minimal mode (dashboard disabled)

@@ -232,7 +232,8 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 
 			// For leader agents, use MATRIX_LEADER_ACCESS_TOKEN (pre-configured)
 			// For worker agents, dynamically register and get token
-			if strings.Contains(strings.ToLower(req.Container.ContainerName), "leader") {
+			// Use RoleKind instead of name matching for accurate detection
+			if req.RoleKind == "leader" {
 				req.Container.MatrixAccessToken = os.Getenv("MATRIX_LEADER_ACCESS_TOKEN")
 				log.Printf("Matrix communication enabled for leader %s: homeserver=%s domain=%s (using pre-configured token)",
 					req.Container.ContainerName, req.Container.MatrixHomeserver, req.Container.MatrixDomain)

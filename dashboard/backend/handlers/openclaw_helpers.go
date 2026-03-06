@@ -324,8 +324,8 @@ func writeOpenClawConfig(path string, req ProvisionRequest) error {
 			adminUser = "admin"
 		}
 
-		// Determine if this is a leader agent (by name convention)
-		isLeader := strings.Contains(strings.ToLower(req.Container.ContainerName), "leader")
+		// Determine if this is a leader agent (by role, not name)
+		isLeader := req.RoleKind == "leader"
 
 		// Derive the Matrix user ID for this agent
 		matrixUsername := deriveMatrixUsername(req.Container.ContainerName, req.Identity.Name)

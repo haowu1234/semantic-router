@@ -27,8 +27,10 @@ log = getLogger(__name__)
 MATRIX_SERVER_NAME = "vllm-sr-matrix"
 MATRIX_DOMAIN_DEFAULT = "matrix.vllm-sr.local"
 
-# Image configs
-TUWUNEL_IMAGE = "ghcr.io/girlbossceo/conduwuit:latest"  # conduwuit/tuwunel
+# Image configs - Tuwunel (successor to conduwuit)
+# DockerHub: jevolk/tuwunel:latest
+# GHCR: ghcr.io/matrix-construct/tuwunel:latest
+TUWUNEL_IMAGE = "ghcr.io/matrix-construct/tuwunel:latest"
 
 
 def generate_matrix_token():
