@@ -111,12 +111,9 @@ def docker_start_matrix_server(network_name: str, matrix_config: dict):
         "-v", f"{data_dir}:/data",
         # Port mapping
         "-p", f"{port}:{port}",
-        # Health check
-        "--health-cmd", f"curl -sf http://localhost:{port}/_matrix/client/versions || exit 1",
-        "--health-interval", "10s",
-        "--health-timeout", "5s",
-        "--health-retries", "3",
-        "--health-start-period", "10s",
+        # Note: Tuwunel is a minimal scratch image with NO shell, NO curl, NO tools
+        # Health check must be done externally via wait_for_matrix_healthy()
+        "--no-healthcheck",
         # Image
         TUWUNEL_IMAGE,
     ]
@@ -126,36 +123,38 @@ def docker_start_matrix_server(network_name: str, matrix_config: dict):
     return result.returncode, result.stdout, result.stderr
 
 
-def wait_for_matrix_healthy(timeout: int = 60) -> bool:
+def wait_for_matrix_healthy(timeout: int = 60, port: int = 6167) -> bool:
     """
-    Wait for Matrix server to become healthy.
+    Wait for Matrix server to become healthy by checking HTTP endpoint.
     
     Args:
         timeout: Maximum seconds to wait
+        port: Matrix server port (default 6167)
         
     Returns:
         True if healthy, False if timeout
     """
-    runtime = get_container_runtime()
+    import urllib.request
+    import urllib.error
+    
     start_time = time.time()
+    url = f"http://localhost:{port}/_matrix/client/versions"
     
     while time.time() - start_time < timeout:
-        import subprocess
-        
-        # Check container health status
-        cmd = [runtime, "inspect", "--format", "{{.State.Health.Status}}", MATRIX_SERVER_NAME]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        
-        if result.returncode == 0:
-            status = result.stdout.strip()
-            if status == "healthy":
-                return True
-            elif status == "unhealthy":
-                log.warning("Matrix server is unhealthy")
-                return False
+        try:
+            req = urllib.request.Request(url, method='GET')
+            with urllib.request.urlopen(req, timeout=5) as response:
+                if response.status == 200:
+                    log.info(f"Matrix server is healthy (responded to {url})")
+                    return True
+        except urllib.error.URLError as e:
+            log.debug(f"Matrix server not ready yet: {e}")
+        except Exception as e:
+            log.debug(f"Health check failed: {e}")
                 
         time.sleep(2)
-        
+    
+    log.warning(f"Matrix server health check timed out after {timeout}s")
     return False
 
 
