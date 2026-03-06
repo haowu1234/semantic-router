@@ -290,7 +290,10 @@ func defaultOpenClawBaseImage() string {
 	if candidate := strings.TrimSpace(os.Getenv("OPENCLAW_BASE_IMAGE")); candidate != "" {
 		return candidate
 	}
-	return "ghcr.io/openclaw/openclaw:latest"
+	// Default to openclaw-matrix which has Matrix plugin built-in.
+	// This avoids the "keyed-async-queue" module error that occurs when
+	// installing @openclaw/matrix at runtime on the official image.
+	return "openclaw-matrix:latest"
 }
 
 func defaultOpenClawModelBaseURL() string {
@@ -485,26 +488,27 @@ func (h *OpenClawHandler) discoverLocalOpenClawImage() string {
 
 func (h *OpenClawHandler) resolveBaseImage(requested string) string {
 	requested = strings.TrimSpace(requested)
-	if requested != "" && requested != "ghcr.io/openclaw/openclaw:latest" {
+	defaultImg := defaultOpenClawBaseImage() // openclaw-matrix:latest
+
+	// If user explicitly requested a non-default image, use it
+	if requested != "" && requested != defaultImg && requested != "ghcr.io/openclaw/openclaw:latest" {
 		return requested
 	}
 
-	configured := defaultOpenClawBaseImage()
-	if configured != "ghcr.io/openclaw/openclaw:latest" {
-		return configured
+	// Try the configured default (openclaw-matrix:latest)
+	if h.imageExists(defaultImg) {
+		return defaultImg
 	}
 
-	if h.imageExists("ghcr.io/openclaw/openclaw:latest") {
-		return "ghcr.io/openclaw/openclaw:latest"
-	}
-
+	// Fallback: try to discover any local openclaw image
 	discovered := h.discoverLocalOpenClawImage()
 	if discovered != "" {
-		log.Printf("openclaw: auto-selected local image %q (ghcr.io/openclaw/openclaw:latest missing)", discovered)
+		log.Printf("openclaw: auto-selected local image %q (%s missing)", discovered, defaultImg)
 		return discovered
 	}
 
-	return "ghcr.io/openclaw/openclaw:latest"
+	// Last resort: return default and let ensureImageAvailable handle the error
+	return defaultImg
 }
 
 func (h *OpenClawHandler) ensureImageAvailable(image string) error {

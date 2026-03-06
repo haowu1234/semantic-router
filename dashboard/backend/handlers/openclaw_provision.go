@@ -319,15 +319,16 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 			req.Container.BaseImage,
 		)
 
-		// Build the startup command: optionally install Matrix plugin first, then start gateway
+		// Build the startup command.
+		// With openclaw-matrix image, Matrix plugin is already built-in, no runtime installation needed.
+		// For official ghcr.io/openclaw/openclaw image, Matrix would need runtime install but has
+		// compatibility issues (keyed-async-queue error), so we recommend using openclaw-matrix.
 		var startupCmd string
 		if req.Container.MatrixEnabled {
-			// Matrix plugin (@openclaw/matrix) is not bundled in the base image and must be installed separately.
-			// We install it at container startup to avoid building a custom image.
-			// The plugin is cached in the /state volume, so subsequent restarts are fast.
-			startupCmd = `set -e; if ! ls /state/plugins/@openclaw/matrix 2>/dev/null; then echo "Installing @openclaw/matrix plugin..."; node openclaw.mjs plugins install @openclaw/matrix; fi; exec node openclaw.mjs gateway --allow-unconfigured --bind lan`
+			// Enable Matrix plugin at startup via config or CLI flag
+			startupCmd = `exec openclaw gateway --allow-unconfigured --host 0.0.0.0`
 		} else {
-			startupCmd = `exec node openclaw.mjs gateway --allow-unconfigured --bind lan`
+			startupCmd = `exec openclaw gateway --allow-unconfigured --host 0.0.0.0`
 		}
 		args = append(args, "sh", "-c", startupCmd)
 		// In bridge mode, no port conflict retry needed since containers have isolated namespaces.

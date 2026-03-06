@@ -557,9 +557,11 @@ def docker_start_vllm_sr(
     log.info(f"Mounting OpenClaw data directory: {openclaw_data_dir}")
 
     # Default OpenClaw image for dashboard provisioning (can be overridden by host env).
+    # Use openclaw-matrix which has Matrix plugin built-in, avoiding the
+    # "keyed-async-queue" module error with the official image.
     env_vars.setdefault(
         "OPENCLAW_BASE_IMAGE",
-        os.getenv("OPENCLAW_BASE_IMAGE", "ghcr.io/openclaw/openclaw:latest"),
+        os.getenv("OPENCLAW_BASE_IMAGE", "openclaw-matrix:latest"),
     )
     # OpenClaw containers join the same bridge network as vllm-sr-container.
     # This decouples their lifecycle: restarting vllm-sr no longer breaks agent networking.

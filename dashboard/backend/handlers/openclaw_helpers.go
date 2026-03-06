@@ -382,14 +382,14 @@ func generateDockerRunCmd(runtime string, req ProvisionRequest, dataDir string) 
 		req.Container.GatewayPort,
 	)
 
-	// Build startup command: install Matrix plugin first if enabled
+	// Build startup command.
+	// With openclaw-matrix image, Matrix plugin is already built-in, no runtime installation needed.
 	var startupCmd string
 	if req.Container.MatrixEnabled {
-		// Matrix plugin (@openclaw/matrix) is not bundled in base image; install at startup.
-		// Plugin is cached in /state volume, so subsequent restarts are fast.
-		startupCmd = `sh -c 'set -e; if ! ls /state/plugins/@openclaw/matrix 2>/dev/null; then echo "Installing @openclaw/matrix plugin..."; node openclaw.mjs plugins install @openclaw/matrix; fi; exec node openclaw.mjs gateway --allow-unconfigured --bind lan'`
+		// Enable Matrix plugin at startup
+		startupCmd = `openclaw gateway --allow-unconfigured --host 0.0.0.0`
 	} else {
-		startupCmd = `node openclaw.mjs gateway --allow-unconfigured --bind lan`
+		startupCmd = `openclaw gateway --allow-unconfigured --host 0.0.0.0`
 	}
 
 	// Mount the entire data directory as /config instead of a single file to avoid
