@@ -13,10 +13,11 @@ import (
 
 // MatrixClientConfig 客户端配置
 type MatrixClientConfig struct {
-	HomeserverURL string
-	Domain        string
-	SystemUser    string
-	RegToken      string
+	HomeserverURL     string
+	Domain            string
+	SystemUser        string
+	RegToken          string
+	SystemAccessToken string // 可选：如果提供，则直接使用此 token，跳过密码登录
 }
 
 // MatrixClient Matrix 客户端
@@ -98,12 +99,42 @@ func NewMatrixClient(config MatrixClientConfig) (*MatrixClient, error) {
 		},
 	}
 
-	// 登录系统账户
+	// 如果提供了 SystemAccessToken，直接使用，跳过密码登录
+	if config.SystemAccessToken != "" {
+		if err := client.validateAndUseToken(); err != nil {
+			return nil, fmt.Errorf("matrix token validation failed: %w", err)
+		}
+		return client, nil
+	}
+
+	// 否则使用密码登录
 	if err := client.login(); err != nil {
 		return nil, fmt.Errorf("matrix login failed: %w", err)
 	}
 
 	return client, nil
+}
+
+// validateAndUseToken 验证并使用预配置的 access token
+func (c *MatrixClient) validateAndUseToken() error {
+	c.accessToken = c.config.SystemAccessToken
+
+	// 调用 whoami 验证 token 有效性
+	resp, err := c.doRequest("GET", "/_matrix/client/v3/account/whoami", nil)
+	if err != nil {
+		return fmt.Errorf("token validation failed: %w", err)
+	}
+
+	var whoamiResp struct {
+		UserID   string `json:"user_id"`
+		DeviceID string `json:"device_id"`
+	}
+	if err := json.Unmarshal(resp, &whoamiResp); err != nil {
+		return fmt.Errorf("failed to parse whoami response: %w", err)
+	}
+
+	c.userID = whoamiResp.UserID
+	return nil
 }
 
 // login 登录 Matrix 服务器

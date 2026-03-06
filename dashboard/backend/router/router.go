@@ -324,6 +324,7 @@ func Setup(cfg *config.Config) *http.ServeMux {
 			matrixDomain := strings.TrimSpace(os.Getenv("MATRIX_DOMAIN"))
 			matrixRegToken := strings.TrimSpace(os.Getenv("MATRIX_REG_TOKEN"))
 			matrixSystemUser := strings.TrimSpace(os.Getenv("MATRIX_SYSTEM_USER"))
+			matrixSystemAccessToken := strings.TrimSpace(os.Getenv("MATRIX_SYSTEM_ACCESS_TOKEN"))
 
 			if matrixSystemUser == "" {
 				matrixSystemUser = "system"
@@ -332,18 +333,23 @@ func Setup(cfg *config.Config) *http.ServeMux {
 				matrixDomain = "matrix.vllm-sr.local"
 			}
 
-			if matrixURL != "" && matrixRegToken != "" {
+			if matrixURL != "" && (matrixRegToken != "" || matrixSystemAccessToken != "") {
 				matrixClient, err := handlers.NewMatrixClient(handlers.MatrixClientConfig{
-					HomeserverURL: matrixURL,
-					Domain:        matrixDomain,
-					SystemUser:    matrixSystemUser,
-					RegToken:      matrixRegToken,
+					HomeserverURL:     matrixURL,
+					Domain:            matrixDomain,
+					SystemUser:        matrixSystemUser,
+					RegToken:          matrixRegToken,
+					SystemAccessToken: matrixSystemAccessToken,
 				})
 				if err != nil {
 					log.Printf("Warning: failed to initialize Matrix client for OpenClaw: %v (worker agents will not have Matrix access)", err)
 				} else {
 					openClawHandler.SetMatrixClient(matrixClient, matrixDomain)
-					log.Printf("Matrix client initialized for OpenClaw worker registration (homeserver=%s, domain=%s)", matrixURL, matrixDomain)
+					authMethod := "password"
+					if matrixSystemAccessToken != "" {
+						authMethod = "access_token"
+					}
+					log.Printf("Matrix client initialized for OpenClaw worker registration (homeserver=%s, domain=%s, auth=%s)", matrixURL, matrixDomain, authMethod)
 
 					// Initialize MatrixBridge for Matrix-only communication mode
 					// NOTE: 已移除 hybrid 模式，所有通信强制走 Matrix
@@ -368,7 +374,7 @@ func Setup(cfg *config.Config) *http.ServeMux {
 					}
 				}
 			} else {
-				log.Printf("Warning: MATRIX_ENABLED=true but MATRIX_INTERNAL_URL or MATRIX_REG_TOKEN not set (worker agents will not have Matrix access)")
+				log.Printf("Warning: MATRIX_ENABLED=true but MATRIX_INTERNAL_URL or (MATRIX_REG_TOKEN/MATRIX_SYSTEM_ACCESS_TOKEN) not set (worker agents will not have Matrix access)")
 			}
 		}
 	}
