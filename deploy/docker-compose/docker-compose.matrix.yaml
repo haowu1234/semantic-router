@@ -1,0 +1,64 @@
+version: "3.8"
+
+# Semantic Router Matrix 集成部署 (Element Web 前端)
+# 
+# 注意: Matrix 服务器 (Tuwunel) 现在由 vllm-sr serve 自动启动！
+# 此 compose 文件仅用于启动 Element Web 人类客户端。
+#
+# 使用方法:
+# 1. 在 config.yaml 中启用 matrix.enabled: true
+# 2. vllm-sr serve --config config.yaml  # 自动启动 Matrix 服务器
+# 3. docker-compose -f docker-compose.matrix.yaml up -d  # 启动 Element Web
+
+services:
+  # Element Web 客户端 (人类访问 Matrix 的界面)
+  element-web:
+    image: vectorim/element-web:latest
+    container_name: vllm-sr-element
+    restart: unless-stopped
+    environment:
+      # Element 会自动从 /app/config.json 读取配置
+      ELEMENT_CONFIG: |
+        {
+          "default_server_config": {
+            "m.homeserver": {
+              "base_url": "http://localhost:6167",
+              "server_name": "${MATRIX_DOMAIN:-matrix.vllm-sr.local}"
+            }
+          },
+          "disable_custom_urls": false,
+          "disable_guests": true,
+          "disable_login_language_selector": false,
+          "disable_3pid_login": true,
+          "brand": "vLLM-SR Agent Chat",
+          "default_federate": false,
+          "default_theme": "dark",
+          "room_directory": {
+            "servers": ["${MATRIX_DOMAIN:-matrix.vllm-sr.local}"]
+          },
+          "enable_presence_by_hs_url": {
+            "http://localhost:6167": true
+          },
+          "features": {
+            "feature_thread": true,
+            "feature_pinning": true,
+            "feature_jump_to_date": true
+          },
+          "setting_defaults": {
+            "breadcrumbs": true
+          }
+        }
+    volumes:
+      - ./element-config.json:/app/config.json:ro
+    ports:
+      - "8088:80"
+    networks:
+      - vllm-sr-network
+    # 等待 Matrix 服务器可用 (由 vllm-sr serve 启动)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+networks:
+  vllm-sr-network:
+    external: true
+    name: vllm-sr-network

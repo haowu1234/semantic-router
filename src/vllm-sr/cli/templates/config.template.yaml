@@ -739,3 +739,37 @@ memory:
   # Security: auth header for trusted user_id (optional)
   # auth_user_id_header: "x-authenticated-user-id"
   # require_auth_header: false
+
+# Matrix - Agent Communication (Human-in-the-Loop)
+# When enabled, OpenClaw agents automatically communicate via Matrix protocol.
+# Humans can monitor and intervene through Element Web or any Matrix client.
+matrix:
+  enabled: false              # Set to true to enable Matrix communication stack
+  
+  # Matrix server configuration
+  domain: "matrix.vllm-sr.local"  # Matrix domain (homeserver name)
+  port: 6167                      # Matrix server port
+  
+  # User configuration
+  admin_user: "admin"             # Human admin username
+  
+  # Data persistence
+  # data_dir: ".vllm-sr/matrix-data"  # Default: config directory
+  
+  # Registration token (auto-generated if not provided)
+  # Set MATRIX_REGISTRATION_TOKEN env var to override
+  # registration_token: "your-secure-token"
+  
+  # When matrix.enabled: true, the following happens automatically:
+  # 1. Tuwunel Matrix server starts alongside vllm-sr
+  # 2. System users created: @system, @admin, @leader
+  # 3. OpenClaw agents get Matrix channel auto-configured
+  # 4. Dashboard Room system bridges to Matrix rooms
+  # 5. Human can connect via Element Web to monitor agents
+  #
+  # Example workflow:
+  #   vllm-sr serve --config config.yaml  # Matrix server starts
+  #   Open http://localhost:6167 for Matrix API
+  #   Login to Element Web (or any Matrix client) as @admin
+  #   Watch agent communications in real-time
+  #   Send @agent_name commands to intervene

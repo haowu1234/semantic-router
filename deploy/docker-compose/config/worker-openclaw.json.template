@@ -1,0 +1,80 @@
+{
+  "$schema": "https://openclaw.io/schemas/config.json",
+  "name": "${WORKER_NAME:-worker}",
+  "version": "1.0.0",
+  
+  "gateway": {
+    "mode": "local",
+    "port": "${OPENCLAW_GATEWAY_PORT:-18800}",
+    "auth": {
+      "token": "${OPENCLAW_GATEWAY_TOKEN:-semantic-router-gateway}"
+    }
+  },
+  
+  "channels": {
+    "matrix": {
+      "enabled": true,
+      "homeserver": "${MATRIX_HOMESERVER_URL:-http://tuwunel:6167}",
+      "accessToken": "${MATRIX_ACCESS_TOKEN}",
+      
+      "dm": {
+        "policy": "allowlist",
+        "allowFrom": []
+      },
+      
+      "groupPolicy": "allowlist",
+      "groupAllowFrom": [
+        "@leader:${MATRIX_DOMAIN:-matrix.semantic-router.local}",
+        "@admin:${MATRIX_DOMAIN:-matrix.semantic-router.local}",
+        "@system:${MATRIX_DOMAIN:-matrix.semantic-router.local}"
+      ],
+      
+      "groups": {
+        "*": {
+          "allow": true,
+          "requireMention": true
+        }
+      }
+    }
+  },
+  
+  "skills": {
+    "autoLoad": true,
+    "directory": "${OPENCLAW_WORKSPACE:-/workspace}/skills"
+  },
+  
+  "session": {
+    "resetByType": {
+      "dm": { "mode": "never" },
+      "group": { "mode": "idle", "idleMinutes": 1440 }
+    }
+  },
+  
+  "llm": {
+    "provider": "openai-compatible",
+    "baseUrl": "${LLM_API_BASE_URL:-http://semantic-router:8080/v1}",
+    "apiKey": "${LLM_API_KEY:-sk-test}",
+    "model": "${LLM_MODEL:-qwen2.5:7b}",
+    "temperature": 0.7,
+    "maxTokens": 4096
+  },
+  
+  "identity": {
+    "name": "${WORKER_DISPLAY_NAME:-Worker}",
+    "emoji": "${WORKER_EMOJI:-🤖}",
+    "role": "${WORKER_ROLE:-AI Assistant}",
+    "vibe": "${WORKER_VIBE:-Helpful and efficient}",
+    "principles": [
+      "Complete assigned tasks efficiently",
+      "Report progress to the team room",
+      "Ask for clarification when needed",
+      "Collaborate with other workers when required"
+    ]
+  },
+  
+  "behavior": {
+    "autoJoinInvitedRooms": true,
+    "acknowledgeMessages": true,
+    "onlyRespondWhenMentioned": true
+  }
+}

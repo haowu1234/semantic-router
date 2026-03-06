@@ -1189,3 +1189,37 @@ providers:
 
   # Default reasoning effort level
   default_reasoning_effort: "low"
+
+# Matrix - Agent Communication (Human-in-the-Loop)
+# 当启用时，OpenClaw Agent 自动通过 Matrix 协议通信
+# 人类可以通过 Element Web 或任何 Matrix 客户端监控和干预
+matrix:
+  enabled: true                     # 启用 Matrix 通信栈
+  
+  # Matrix 服务器配置
+  domain: "matrix.vllm-sr.local"    # Matrix 域名 (homeserver name)
+  port: 6167                        # Matrix 服务器端口
+  
+  # 用户配置
+  admin_user: "admin"               # 人类管理员用户名
+  
+  # 数据持久化 (默认: 配置文件目录下的 .vllm-sr/matrix-data)
+  # data_dir: ".vllm-sr/matrix-data"
+  
+  # 注册令牌 (如果不提供会自动生成)
+  # 设置 MATRIX_REGISTRATION_TOKEN 环境变量可覆盖
+  # registration_token: "your-secure-token"
+  
+  # 启用后自动完成的操作:
+  # 1. Tuwunel Matrix 服务器随 vllm-sr 一起启动
+  # 2. 创建系统用户: @system, @admin, @leader
+  # 3. OpenClaw Agent 自动获得 Matrix channel 配置
+  # 4. Dashboard Room 系统桥接到 Matrix rooms
+  # 5. 人类可以通过 Element Web 连接监控 Agent
+  #
+  # 使用流程:
+  #   vllm-sr serve --config claw.yaml  # Matrix 服务器自动启动
+  #   打开 http://localhost:6167 访问 Matrix API
+  #   使用 Element Web (或其他 Matrix 客户端) 以 @admin 登录
+  #   实时观察 Agent 通信
+  #   发送 @agent_name 命令进行干预

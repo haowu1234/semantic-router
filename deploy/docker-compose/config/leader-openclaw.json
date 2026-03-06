@@ -1,0 +1,85 @@
+{
+  "$schema": "https://openclaw.io/schemas/config.json",
+  "name": "leader",
+  "version": "1.0.0",
+  
+  "gateway": {
+    "mode": "local",
+    "port": 18799,
+    "auth": {
+      "token": "${OPENCLAW_GATEWAY_TOKEN:-semantic-router-gateway}"
+    }
+  },
+  
+  "channels": {
+    "matrix": {
+      "enabled": true,
+      "homeserver": "${MATRIX_HOMESERVER_URL:-http://tuwunel:6167}",
+      "accessToken": "${MATRIX_ACCESS_TOKEN}",
+      
+      "dm": {
+        "policy": "allowlist",
+        "allowFrom": [
+          "@admin:${MATRIX_DOMAIN:-matrix.semantic-router.local}",
+          "@system:${MATRIX_DOMAIN:-matrix.semantic-router.local}"
+        ]
+      },
+      
+      "groupPolicy": "allowlist",
+      "groupAllowFrom": [
+        "@admin:${MATRIX_DOMAIN:-matrix.semantic-router.local}",
+        "@system:${MATRIX_DOMAIN:-matrix.semantic-router.local}"
+      ],
+      
+      "groups": {
+        "*": {
+          "allow": true,
+          "requireMention": true
+        }
+      }
+    }
+  },
+  
+  "skills": {
+    "autoLoad": true,
+    "directory": "${OPENCLAW_WORKSPACE:-/workspace}/skills"
+  },
+  
+  "session": {
+    "resetByType": {
+      "dm": { "mode": "daily", "atHour": 4 },
+      "group": { "mode": "idle", "idleMinutes": 2880 }
+    }
+  },
+  
+  "llm": {
+    "provider": "openai-compatible",
+    "baseUrl": "${LLM_API_BASE_URL:-http://semantic-router:8080/v1}",
+    "apiKey": "${LLM_API_KEY:-sk-test}",
+    "model": "${LLM_MODEL:-qwen2.5:7b}",
+    "temperature": 0.7,
+    "maxTokens": 4096
+  },
+  
+  "identity": {
+    "name": "Leader",
+    "emoji": "👨‍💼",
+    "role": "Team Leader and Coordinator",
+    "vibe": "Professional, organized, and supportive",
+    "principles": [
+      "Coordinate team members effectively",
+      "Ensure tasks are properly assigned and tracked",
+      "Facilitate communication between workers",
+      "Report progress to admin regularly"
+    ]
+  },
+  
+  "behavior": {
+    "autoJoinInvitedRooms": true,
+    "acknowledgeMessages": true,
+    "progressReporting": {
+      "enabled": true,
+      "interval": "hourly"
+    }
+  }
+}

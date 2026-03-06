@@ -1,0 +1,52 @@
+{
+  "default_server_config": {
+    "m.homeserver": {
+      "base_url": "http://localhost:6167",
+      "server_name": "matrix.semantic-router.local"
+    }
+  },
+  "brand": "Semantic Router Matrix",
+  "integrations_ui_url": "",
+  "integrations_rest_url": "",
+  "integrations_widgets_urls": [],
+  "bug_report_endpoint_url": "",
+  "show_labs_settings": false,
+  "features": {
+    "feature_thread": true,
+    "feature_pinning": true,
+    "feature_video_rooms": false,
+    "feature_element_call_video_rooms": false
+  },
+  "default_country_code": "CN",
+  "room_directory": {
+    "servers": ["matrix.semantic-router.local"]
+  },
+  "setting_defaults": {
+    "breadcrumbs": true,
+    "UIFeature.registration": false,
+    "UIFeature.passwordReset": false,
+    "UIFeature.deactivate": false,
+    "UIFeature.shareQRCode": false,
+    "UIFeature.identityServer": false,
+    "UIFeature.thirdPartyId": false,
+    "UIFeature.Feedback": false,
+    "UIFeature.voip": false,
+    "UIFeature.Widgets": false,
+    "UIFeature.Flair": false,
+    "UIFeature.Communities": false,
+    "UIFeature.AdvancedSettings": false,
+    "UIFeature.RoomHistorySettings": false,
+    "UIFeature.TimelineEnableRelativeDates": true,
+    "showRedactions": false,
+    "showJoinLeaves": false,
+    "showAvatarChanges": false,
+    "showDisplaynameChanges": false,
+    "showReadReceipts": false,
+    "showImages": true,
+    "showPreviews": true
+  },
+  "disable_custom_urls": true,
+  "disable_guests": true,
+  "disable_login_language_selector": true,
+  "disable_3pid_login": true
+}

@@ -311,6 +311,57 @@ func writeOpenClawConfig(path string, req ProvisionRequest) error {
 	if req.Container.BrowserEnabled {
 		cfg["browser"] = map[string]interface{}{"enabled": true, "headless": true, "noSandbox": true}
 	}
+
+	// Matrix channel configuration for agent-to-agent and human-in-the-loop communication
+	if req.Container.MatrixEnabled && req.Container.MatrixHomeserver != "" {
+		domain := req.Container.MatrixDomain
+		if domain == "" {
+			domain = "matrix.vllm-sr.local"
+		}
+		adminUser := req.Container.MatrixAdminUser
+		if adminUser == "" {
+			adminUser = "admin"
+		}
+
+		// Determine if this is a leader agent (by name convention)
+		isLeader := strings.Contains(strings.ToLower(req.Container.ContainerName), "leader")
+
+		// Build allowFrom list for DM policy
+		var dmAllowFrom []string
+		if isLeader {
+			dmAllowFrom = []string{fmt.Sprintf("@%s:%s", adminUser, domain)}
+		}
+
+		matrixChannel := map[string]interface{}{
+			"enabled":    true,
+			"homeserver": req.Container.MatrixHomeserver,
+			"dm": map[string]interface{}{
+				"policy":    "allowlist",
+				"allowFrom": dmAllowFrom,
+			},
+			"groupPolicy": "allowlist",
+			"groupAllowFrom": []string{
+				fmt.Sprintf("@%s:%s", adminUser, domain),
+				fmt.Sprintf("@leader:%s", domain),
+			},
+			"groups": map[string]interface{}{
+				"*": map[string]interface{}{
+					"allow":          true,
+					"requireMention": true,
+				},
+			},
+		}
+
+		// Add access token if provided
+		if req.Container.MatrixAccessToken != "" {
+			matrixChannel["accessToken"] = req.Container.MatrixAccessToken
+		}
+
+		cfg["channels"] = map[string]interface{}{
+			"matrix": matrixChannel,
+		}
+	}
+
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
@@ -324,6 +375,17 @@ func generateDockerRunCmd(runtime string, req ProvisionRequest, dataDir string) 
 		`node -e "fetch('http://127.0.0.1:%d/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"`,
 		req.Container.GatewayPort,
 	)
+
+	// Build startup command: install Matrix plugin first if enabled
+	var startupCmd string
+	if req.Container.MatrixEnabled {
+		// Matrix plugin (@openclaw/matrix) is not bundled in base image; install at startup.
+		// Plugin is cached in /state volume, so subsequent restarts are fast.
+		startupCmd = `sh -c 'set -e; if ! ls /state/plugins/@openclaw/matrix 2>/dev/null; then echo "Installing @openclaw/matrix plugin..."; node openclaw.mjs plugins install @openclaw/matrix; fi; exec node openclaw.mjs gateway --allow-unconfigured --bind lan'`
+	} else {
+		startupCmd = `node openclaw.mjs gateway --allow-unconfigured --bind lan`
+	}
+
 	return fmt.Sprintf(`%s run -d \
   --name %s \
   --user 0:0 \
@@ -339,14 +401,23 @@ func generateDockerRunCmd(runtime string, req ProvisionRequest, dataDir string) 
   -e OPENCLAW_CONFIG_PATH=/config/openclaw.json \
   -e OPENCLAW_STATE_DIR=/state \
   %s \
-  node openclaw.mjs gateway --allow-unconfigured --bind lan`,
+  %s`,
 		runtime, req.Container.ContainerName, req.Container.NetworkMode, healthCmd,
-		dataDir, dataDir, volumeName, req.Container.BaseImage)
+		dataDir, dataDir, volumeName, req.Container.BaseImage, startupCmd)
 }
 
 func generateComposeYAML(req ProvisionRequest, dataDir string) string {
 	volumeName := "openclaw-state-" + req.Container.ContainerName
 	networkMode := req.Container.NetworkMode
+
+	// Build command based on whether Matrix is enabled
+	// Matrix plugin (@openclaw/matrix) is not bundled in base image; install at startup.
+	var commandYAML string
+	if req.Container.MatrixEnabled {
+		commandYAML = `command: ["sh", "-c", "set -e; if ! ls /state/plugins/@openclaw/matrix 2>/dev/null; then echo 'Installing @openclaw/matrix plugin...'; node openclaw.mjs plugins install @openclaw/matrix; fi; exec node openclaw.mjs gateway --allow-unconfigured --bind lan"]`
+	} else {
+		commandYAML = `command: ["node", "openclaw.mjs", "gateway", "--allow-unconfigured", "--bind", "lan"]`
+	}
 
 	// For bridge network names (not "host" or "container:xxx"), use the networks syntax.
 	if networkMode != "" && networkMode != "host" && !strings.HasPrefix(networkMode, "container:") {
@@ -370,7 +441,7 @@ func generateComposeYAML(req ProvisionRequest, dataDir string) string {
       timeout: 5s
       start_period: 15s
       retries: 3
-    command: ["node", "openclaw.mjs", "gateway", "--allow-unconfigured", "--bind", "lan"]
+    %s
     restart: unless-stopped
 
 networks:
@@ -382,6 +453,7 @@ volumes:
 `, req.Container.BaseImage, req.Container.ContainerName, networkMode,
 			dataDir, dataDir, volumeName,
 			req.Container.GatewayPort,
+			commandYAML,
 			networkMode, volumeName)
 	}
 
@@ -404,7 +476,7 @@ volumes:
       timeout: 5s
       start_period: 15s
       retries: 3
-    command: ["node", "openclaw.mjs", "gateway", "--allow-unconfigured", "--bind", "lan"]
+    %s
     restart: unless-stopped
 
 volumes:
@@ -412,6 +484,7 @@ volumes:
 `, req.Container.BaseImage, req.Container.ContainerName, networkMode,
 		dataDir, dataDir, volumeName,
 		req.Container.GatewayPort,
+		commandYAML,
 		volumeName)
 }
 

@@ -582,6 +582,12 @@ type ContainerConfig struct {
 	BrowserEnabled bool   `json:"browserEnabled"`
 	BaseImage      string `json:"baseImage"`
 	NetworkMode    string `json:"networkMode"`
+	// Matrix communication configuration (injected by dashboard when MATRIX_ENABLED=true)
+	MatrixEnabled     bool   `json:"matrixEnabled,omitempty"`
+	MatrixHomeserver  string `json:"matrixHomeserver,omitempty"`
+	MatrixDomain      string `json:"matrixDomain,omitempty"`
+	MatrixAccessToken string `json:"matrixAccessToken,omitempty"`
+	MatrixAdminUser   string `json:"matrixAdminUser,omitempty"`
 }
 
 type ProvisionRequest struct {

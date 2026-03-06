@@ -218,6 +218,22 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 			}
 		}
 
+		// Inject Matrix configuration if MATRIX_ENABLED is set
+		// This allows OpenClaw agents to communicate via Matrix protocol
+		if matrixEnabled := os.Getenv("MATRIX_ENABLED"); matrixEnabled == "true" {
+			req.Container.MatrixEnabled = true
+			req.Container.MatrixHomeserver = os.Getenv("MATRIX_INTERNAL_URL")
+			req.Container.MatrixDomain = os.Getenv("MATRIX_DOMAIN")
+			req.Container.MatrixAdminUser = os.Getenv("MATRIX_ADMIN_USER")
+			// For leader agents, use MATRIX_LEADER_ACCESS_TOKEN
+			// For worker agents, they'll need to register themselves or get tokens via API
+			if strings.Contains(strings.ToLower(req.Container.ContainerName), "leader") {
+				req.Container.MatrixAccessToken = os.Getenv("MATRIX_LEADER_ACCESS_TOKEN")
+			}
+			log.Printf("Matrix communication enabled for %s: homeserver=%s domain=%s",
+				req.Container.ContainerName, req.Container.MatrixHomeserver, req.Container.MatrixDomain)
+		}
+
 		configPath := filepath.Join(cDir, "openclaw.json")
 		err = writeOpenClawConfig(configPath, req)
 		if err != nil {
@@ -273,8 +289,19 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 			"-e", "OPENCLAW_CONFIG_PATH=/config/openclaw.json",
 			"-e", "OPENCLAW_STATE_DIR=/state",
 			req.Container.BaseImage,
-			"node", "openclaw.mjs", "gateway", "--allow-unconfigured", "--bind", "lan",
 		)
+
+		// Build the startup command: optionally install Matrix plugin first, then start gateway
+		var startupCmd string
+		if req.Container.MatrixEnabled {
+			// Matrix plugin (@openclaw/matrix) is not bundled in the base image and must be installed separately.
+			// We install it at container startup to avoid building a custom image.
+			// The plugin is cached in the /state volume, so subsequent restarts are fast.
+			startupCmd = `set -e; if ! ls /state/plugins/@openclaw/matrix 2>/dev/null; then echo "Installing @openclaw/matrix plugin..."; node openclaw.mjs plugins install @openclaw/matrix; fi; exec node openclaw.mjs gateway --allow-unconfigured --bind lan`
+		} else {
+			startupCmd = `exec node openclaw.mjs gateway --allow-unconfigured --bind lan`
+		}
+		args = append(args, "sh", "-c", startupCmd)
 		// In bridge mode, no port conflict retry needed since containers have isolated namespaces.
 		// In host mode, retry with alternate ports if user didn't explicitly request a port.
 		startAttemptLimit := 1

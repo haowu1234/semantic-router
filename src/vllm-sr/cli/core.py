@@ -30,6 +30,19 @@ from cli.docker_cli import (
 )
 from cli.logo import print_vllm_logo
 
+# Matrix communication stack (optional)
+try:
+    from cli.matrix import (
+        start_matrix_stack,
+        stop_matrix_stack,
+        get_matrix_config,
+        generate_openclaw_matrix_config,
+        MATRIX_SERVER_NAME,
+    )
+    MATRIX_AVAILABLE = True
+except ImportError:
+    MATRIX_AVAILABLE = False
+
 log = getLogger(__name__)
 
 
@@ -120,6 +133,32 @@ def start_vllm_sr(
                 "OTEL_EXPORTER_OTLP_ENDPOINT": "http://vllm-sr-jaeger:4317",
             }
         )
+
+    # Start Matrix communication stack if enabled in config
+    matrix_result = {"matrix_config": {}, "credentials": {}}
+    if MATRIX_AVAILABLE:
+        matrix_config = get_matrix_config(config, config_dir)
+        if matrix_config.get("enabled"):
+            if network_name is None:
+                # Create network if not already created by observability
+                network_name = "vllm-sr-network"
+                return_code, stdout, stderr = docker_create_network(network_name)
+                if return_code != 0:
+                    log.error(f"Failed to create network: {stderr}")
+                    sys.exit(1)
+            
+            matrix_result = start_matrix_stack(config, config_dir, network_name)
+            
+            if matrix_result.get("credentials"):
+                # Add Matrix environment variables for dashboard
+                env_vars.update({
+                    "MATRIX_ENABLED": "true",
+                    "MATRIX_DOMAIN": matrix_config.get("domain"),
+                    "MATRIX_INTERNAL_URL": f"http://{MATRIX_SERVER_NAME}:{matrix_config.get('port', 6167)}",
+                    "MATRIX_EXTERNAL_URL": f"http://localhost:{matrix_config.get('port', 6167)}",
+                    "MATRIX_SYSTEM_ACCESS_TOKEN": matrix_result["credentials"].get("system", {}).get("access_token", ""),
+                    "MATRIX_LEADER_ACCESS_TOKEN": matrix_result["credentials"].get("leader", {}).get("access_token", ""),
+                })
 
     # Detect minimal mode (dashboard disabled)
     dashboard_disabled = env_vars.get("DISABLE_DASHBOARD") == "true"
@@ -266,6 +305,16 @@ def start_vllm_sr(
         log.info(f"  • Grafana: http://localhost:3000 (admin/admin)")
         log.info(f"  • Prometheus: http://localhost:9090")
 
+    # Show Matrix communication endpoints if enabled
+    if matrix_result.get("credentials"):
+        matrix_cfg = matrix_result.get("matrix_config", {})
+        log.info("")
+        log.info("Matrix Communication:")
+        log.info(f"  • Matrix API: http://localhost:{matrix_cfg.get('port', 6167)}")
+        log.info(f"  • Domain: {matrix_cfg.get('domain', 'matrix.vllm-sr.local')}")
+        log.info(f"  • Admin: @{matrix_cfg.get('admin_user', 'admin')}:{matrix_cfg.get('domain')}")
+        log.info("  • OpenClaw agents will auto-connect via Matrix")
+
     log.info("")
     log.info("Commands:")
     if not dashboard_disabled:
@@ -345,6 +394,10 @@ def stop_vllm_sr():
                 docker_stop_container(container_name)
             docker_remove_container(container_name)
             log.info(f"{container_name} stopped")
+
+    # Stop Matrix communication stack if running
+    if MATRIX_AVAILABLE:
+        stop_matrix_stack()
 
     # Remove network (now clean — OpenClaw containers already disconnected)
     return_code, stdout, stderr = docker_remove_network(network_name)
