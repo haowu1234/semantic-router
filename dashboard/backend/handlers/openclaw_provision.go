@@ -307,7 +307,7 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 		)
 		args = append(args,
 			"-v", absCDir+"/workspace:/workspace",
-			"-v", absCDir+"/openclaw.json:/config/openclaw.json:ro",
+			"-v", absCDir+"/openclaw.json:/config/openclaw.json",
 			"-v", volumeName+":/state",
 			"-e", "OPENCLAW_CONFIG_PATH=/config/openclaw.json",
 			"-e", "OPENCLAW_STATE_DIR=/state",
