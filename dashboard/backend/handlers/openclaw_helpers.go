@@ -332,9 +332,14 @@ func writeOpenClawConfig(path string, req ProvisionRequest) error {
 		matrixUserID := fmt.Sprintf("@%s:%s", matrixUsername, domain)
 
 		// Build allowFrom list for DM policy
+		// Leader can receive DMs from admin and system (Dashboard)
+		// Worker cannot receive DMs (empty list)
 		var dmAllowFrom []string
 		if isLeader {
-			dmAllowFrom = []string{fmt.Sprintf("@%s:%s", adminUser, domain)}
+			dmAllowFrom = []string{
+				fmt.Sprintf("@%s:%s", adminUser, domain),
+				fmt.Sprintf("@system:%s", domain),
+			}
 		}
 
 		matrixChannel := map[string]interface{}{
@@ -346,9 +351,12 @@ func writeOpenClawConfig(path string, req ProvisionRequest) error {
 				"allowFrom": dmAllowFrom,
 			},
 			"groupPolicy": "allowlist",
+			// groupAllowFrom: who can invite this agent to group rooms
+			// Must include @system since Dashboard uses @system identity to invite agents
 			"groupAllowFrom": []string{
 				fmt.Sprintf("@%s:%s", adminUser, domain),
 				fmt.Sprintf("@leader:%s", domain),
+				fmt.Sprintf("@system:%s", domain),
 			},
 			"groups": map[string]interface{}{
 				"*": map[string]interface{}{
