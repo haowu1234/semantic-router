@@ -305,9 +305,14 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 			"--health-start-period", "15s",
 			"--health-retries", "3",
 		)
+		// Mount the entire config directory instead of a single file to avoid
+		// EBUSY errors when OpenClaw uses atomic rename() to update the config.
+		// Bind-mounting a single file prevents rename() from working across
+		// filesystem boundaries.
+		configDir := filepath.Dir(configPath) // absCDir itself contains openclaw.json
 		args = append(args,
 			"-v", absCDir+"/workspace:/workspace",
-			"-v", absCDir+"/openclaw.json:/config/openclaw.json",
+			"-v", configDir+":/config",
 			"-v", volumeName+":/state",
 			"-e", "OPENCLAW_CONFIG_PATH=/config/openclaw.json",
 			"-e", "OPENCLAW_STATE_DIR=/state",

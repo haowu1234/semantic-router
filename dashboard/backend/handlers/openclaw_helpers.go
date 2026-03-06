@@ -392,6 +392,8 @@ func generateDockerRunCmd(runtime string, req ProvisionRequest, dataDir string) 
 		startupCmd = `node openclaw.mjs gateway --allow-unconfigured --bind lan`
 	}
 
+	// Mount the entire data directory as /config instead of a single file to avoid
+	// EBUSY errors when OpenClaw uses atomic rename() to update the config.
 	return fmt.Sprintf(`%s run -d \
   --name %s \
   --user 0:0 \
@@ -402,7 +404,7 @@ func generateDockerRunCmd(runtime string, req ProvisionRequest, dataDir string) 
   --health-start-period 15s \
   --health-retries 3 \
   -v %s/workspace:/workspace \
-  -v %s/openclaw.json:/config/openclaw.json \
+  -v %s:/config \
   -v %s:/state \
   -e OPENCLAW_CONFIG_PATH=/config/openclaw.json \
   -e OPENCLAW_STATE_DIR=/state \
@@ -426,6 +428,8 @@ func generateComposeYAML(req ProvisionRequest, dataDir string) string {
 	}
 
 	// For bridge network names (not "host" or "container:xxx"), use the networks syntax.
+	// Mount the entire data directory as /config instead of a single file to avoid
+	// EBUSY errors when OpenClaw uses atomic rename() to update the config.
 	if networkMode != "" && networkMode != "host" && !strings.HasPrefix(networkMode, "container:") {
 		return fmt.Sprintf(`services:
   openclaw:
@@ -436,7 +440,7 @@ func generateComposeYAML(req ProvisionRequest, dataDir string) string {
       - %s
     volumes:
       - %s/workspace:/workspace
-      - %s/openclaw.json:/config/openclaw.json
+      - %s:/config
       - %s:/state
     environment:
       OPENCLAW_CONFIG_PATH: /config/openclaw.json
@@ -463,6 +467,7 @@ volumes:
 			networkMode, volumeName)
 	}
 
+	// Host or container:xxx network mode - also use directory mount for config
 	return fmt.Sprintf(`services:
   openclaw:
     image: %s
@@ -471,7 +476,7 @@ volumes:
     network_mode: %s
     volumes:
       - %s/workspace:/workspace
-      - %s/openclaw.json:/config/openclaw.json
+      - %s:/config
       - %s:/state
     environment:
       OPENCLAW_CONFIG_PATH: /config/openclaw.json
