@@ -39,15 +39,16 @@ type ContainerEntry struct {
 }
 
 type TeamEntry struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Vibe        string `json:"vibe,omitempty"`
-	Role        string `json:"role,omitempty"`
-	Principal   string `json:"principal,omitempty"`
-	Description string `json:"description,omitempty"`
-	LeaderID    string `json:"leaderId,omitempty"`
-	CreatedAt   string `json:"createdAt"`
-	UpdatedAt   string `json:"updatedAt"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Vibe          string `json:"vibe,omitempty"`
+	Role          string `json:"role,omitempty"`
+	Principal     string `json:"principal,omitempty"`
+	Description   string `json:"description,omitempty"`
+	LeaderID      string `json:"leaderId,omitempty"`
+	MatrixRoomID  string `json:"matrixRoomId,omitempty"` // Actual Matrix room ID (e.g., !abc123:domain)
+	CreatedAt     string `json:"createdAt"`
+	UpdatedAt     string `json:"updatedAt"`
 }
 
 type OpenClawHandler struct {

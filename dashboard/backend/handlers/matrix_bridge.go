@@ -288,6 +288,7 @@ func (b *MatrixBridge) convertFromMatrixEvent(roomID string, event *MatrixEvent)
 
 // CreateRoom 在 Matrix 服务器上创建房间
 // NOTE: 不再支持 Native 模式，房间必须在 Matrix 上创建
+// Returns the full Matrix room ID (e.g., !abc123:matrix.domain) for storage
 func (b *MatrixBridge) CreateRoom(ctx context.Context, name, teamID string, members []string) (string, error) {
 	if b.matrixClient == nil {
 		return "", fmt.Errorf("matrix client not initialized - matrix is required for all communication")
@@ -308,7 +309,9 @@ func (b *MatrixBridge) CreateRoom(ctx context.Context, name, teamID string, memb
 		return "", err
 	}
 
-	return b.UnmapRoomID(matrixRoomID), nil
+	// Return the full Matrix room ID (e.g., !abc123:domain) instead of unmapped ID
+	// This is needed for InviteUser and other Matrix API calls
+	return matrixRoomID, nil
 }
 
 // NOTE: NativeRoomStore 已移除，不再支持本地存储

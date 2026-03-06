@@ -150,24 +150,35 @@ func (h *OpenClawHandler) TeamsHandler() http.HandlerFunc {
 		}
 
 		// Create Matrix room for the team if MatrixBridge is available
+		// This is done synchronously to ensure MatrixRoomID is saved before response
 		if h.matrixBridge != nil {
-			go func(team TeamEntry) {
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer cancel()
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
 
-				// Collect existing team members for initial invite
-				var members []string
-				if leaderID != "" {
-					members = append(members, leaderID)
-				}
+			// Collect existing team members for initial invite
+			var members []string
+			if leaderID != "" {
+				members = append(members, leaderID)
+			}
 
-				matrixRoomID, err := h.matrixBridge.CreateRoom(ctx, team.Name+" Room", team.ID, members)
-				if err != nil {
-					log.Printf("openclaw: failed to create Matrix room for team %s: %v", team.ID, err)
-				} else {
-					log.Printf("openclaw: created Matrix room for team %s: %s", team.ID, matrixRoomID)
+			matrixRoomID, err := h.matrixBridge.CreateRoom(ctx, created.Name+" Room", created.ID, members)
+			if err != nil {
+				log.Printf("openclaw: failed to create Matrix room for team %s: %v", created.ID, err)
+			} else {
+				log.Printf("openclaw: created Matrix room for team %s: %s", created.ID, matrixRoomID)
+				// Save the actual Matrix room ID to the team entry
+				created.MatrixRoomID = matrixRoomID
+				// Update teams in storage
+				for i, t := range teams {
+					if t.ID == created.ID {
+						teams[i].MatrixRoomID = matrixRoomID
+						break
+					}
 				}
-			}(created)
+				if err := h.saveTeams(teams); err != nil {
+					log.Printf("openclaw: failed to save team with Matrix room ID: %v", err)
+				}
+			}
 		}
 
 			w.Header().Set("Content-Type", "application/json")

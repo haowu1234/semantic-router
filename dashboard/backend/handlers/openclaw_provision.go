@@ -493,22 +493,33 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 
 		// Invite worker to team's Matrix room if MatrixBridge is available
 		if h.matrixBridge != nil && h.matrixClient != nil && h.matrixDomain != "" {
-			go func(workerName, teamID, matrixDomain string) {
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer cancel()
-
-				// Build Matrix user ID for the worker
-				workerMatrixUserID := fmt.Sprintf("@%s:%s", deriveMatrixUsername(workerName, ""), matrixDomain)
-				// Build Matrix room ID for the team
-				matrixRoomID := h.matrixBridge.MapRoomID(fmt.Sprintf("team-%s", teamID))
-
-				// Invite worker to the team's Matrix room
-				if err := h.matrixClient.InviteUser(ctx, matrixRoomID, workerMatrixUserID); err != nil {
-					log.Printf("openclaw: failed to invite worker %s to Matrix room %s: %v", workerName, matrixRoomID, err)
-				} else {
-					log.Printf("openclaw: invited worker %s to Matrix room %s", workerName, matrixRoomID)
+			// Find the team's actual Matrix room ID
+			var teamMatrixRoomID string
+			for _, t := range teams {
+				if t.ID == req.TeamID {
+					teamMatrixRoomID = t.MatrixRoomID
+					break
 				}
-			}(req.Container.ContainerName, req.TeamID, h.matrixDomain)
+			}
+
+			if teamMatrixRoomID == "" {
+				log.Printf("openclaw: team %s has no Matrix room ID, cannot invite worker %s", req.TeamID, req.Container.ContainerName)
+			} else {
+				go func(workerName, matrixRoomID, matrixDomain string) {
+					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+
+					// Build Matrix user ID for the worker
+					workerMatrixUserID := fmt.Sprintf("@%s:%s", deriveMatrixUsername(workerName, ""), matrixDomain)
+
+					// Invite worker to the team's Matrix room using the actual room ID
+					if err := h.matrixClient.InviteUser(ctx, matrixRoomID, workerMatrixUserID); err != nil {
+						log.Printf("openclaw: failed to invite worker %s to Matrix room %s: %v", workerName, matrixRoomID, err)
+					} else {
+						log.Printf("openclaw: invited worker %s to Matrix room %s", workerName, matrixRoomID)
+					}
+				}(req.Container.ContainerName, teamMatrixRoomID, h.matrixDomain)
+			}
 		}
 
 		dockerCmd := generateDockerRunCmd(runtimeName, req, absCDir)

@@ -333,8 +333,8 @@ func writeOpenClawConfig(path string, req ProvisionRequest) error {
 
 		// Build allowFrom list for DM policy
 		// Leader can receive DMs from admin and system (Dashboard)
-		// Worker cannot receive DMs (empty list)
-		var dmAllowFrom []string
+		// Worker cannot receive DMs (empty list, not null)
+		dmAllowFrom := []string{}  // Initialize to empty slice to ensure JSON [] instead of null
 		if isLeader {
 			dmAllowFrom = []string{
 				fmt.Sprintf("@%s:%s", adminUser, domain),
