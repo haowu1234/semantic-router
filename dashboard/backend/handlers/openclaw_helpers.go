@@ -597,7 +597,8 @@ func (h *OpenClawHandler) ensureMatrixUserAndGetToken(username string) (string, 
 	// Login failed, try to register
 	log.Printf("Matrix login failed for %q, attempting registration: %v", username, err)
 
-	_, regErr := h.matrixClient.RegisterUser(ctx, username, password)
+	// RegisterUser now returns access token directly
+	token, regErr := h.matrixClient.RegisterUser(ctx, username, password)
 	if regErr != nil {
 		// Check if user already exists (M_USER_IN_USE)
 		if strings.Contains(regErr.Error(), "M_USER_IN_USE") {
@@ -608,13 +609,6 @@ func (h *OpenClawHandler) ensureMatrixUserAndGetToken(username string) (string, 
 	}
 
 	log.Printf("Matrix user %q registered successfully", username)
-
-	// Now login to get a fresh access token
-	token, err = h.matrixClient.LoginUser(ctx, username, password)
-	if err != nil {
-		return "", fmt.Errorf("failed to login after registration for %q: %w", username, err)
-	}
-
 	return token, nil
 }
 

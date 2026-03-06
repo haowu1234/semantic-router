@@ -20,6 +20,21 @@ type MatrixClientConfig struct {
 	SystemAccessToken string // 可选：如果提供，则直接使用此 token，跳过密码登录
 }
 
+// MatrixError 表示 Matrix API 返回的错误
+type MatrixError struct {
+	StatusCode int
+	ErrCode    string
+	Message    string
+	Body       string
+}
+
+func (e *MatrixError) Error() string {
+	if e.ErrCode != "" {
+		return fmt.Sprintf("matrix error %s: %s", e.ErrCode, e.Message)
+	}
+	return fmt.Sprintf("matrix api error %d: %s", e.StatusCode, e.Body)
+}
+
 // MatrixClient Matrix 客户端
 type MatrixClient struct {
 	config      MatrixClientConfig
@@ -367,17 +382,66 @@ func (c *MatrixClient) Sync(ctx context.Context, since string, timeout int) (*Ma
 	return &syncResp, nil
 }
 
-// RegisterUser 注册新用户 (需要 admin 权限)
+// RegisterUser 注册新用户并返回 access token (使用 registration token)
+// Matrix 使用 User-Interactive Authentication (UIA) 流程:
+// 1. 首次请求返回 401 + session + flows
+// 2. 使用 session 和 auth 参数完成认证阶段
 func (c *MatrixClient) RegisterUser(ctx context.Context, username, password string) (string, error) {
-	regReq := map[string]interface{}{
+	// Step 1: 初始请求获取 session
+	initReq := map[string]interface{}{
 		"username":                    username,
 		"password":                    password,
-		"registration_token":          c.config.RegToken,
 		"device_id":                   fmt.Sprintf("semantic-router-%s", username),
 		"initial_device_display_name": fmt.Sprintf("Semantic Router %s", username),
 	}
 
-	resp, err := c.doRequest("POST", "/_matrix/client/v3/register", regReq)
+	resp, err := c.doRequestRaw("POST", "/_matrix/client/v3/register", initReq)
+	if err == nil {
+		// 直接成功（服务器可能不需要 UIA）
+		var regResp struct {
+			UserID      string `json:"user_id"`
+			AccessToken string `json:"access_token"`
+		}
+		if err := json.Unmarshal(resp, &regResp); err != nil {
+			return "", err
+		}
+		return regResp.AccessToken, nil
+	}
+
+	// Step 2: 解析 UIA 响应获取 session
+	matrixErr, ok := err.(*MatrixError)
+	if !ok || matrixErr.StatusCode != 401 {
+		return "", err
+	}
+
+	var uiaResp struct {
+		Session string `json:"session"`
+		Flows   []struct {
+			Stages []string `json:"stages"`
+		} `json:"flows"`
+	}
+	if parseErr := json.Unmarshal([]byte(matrixErr.Body), &uiaResp); parseErr != nil {
+		return "", fmt.Errorf("failed to parse UIA response: %w", parseErr)
+	}
+
+	if uiaResp.Session == "" {
+		return "", fmt.Errorf("matrix UIA response missing session")
+	}
+
+	// Step 3: 完成 registration_token 认证阶段
+	authReq := map[string]interface{}{
+		"username":                    username,
+		"password":                    password,
+		"device_id":                   fmt.Sprintf("semantic-router-%s", username),
+		"initial_device_display_name": fmt.Sprintf("Semantic Router %s", username),
+		"auth": map[string]interface{}{
+			"type":    "m.login.registration_token",
+			"token":   c.config.RegToken,
+			"session": uiaResp.Session,
+		},
+	}
+
+	resp, err = c.doRequest("POST", "/_matrix/client/v3/register", authReq)
 	if err != nil {
 		return "", err
 	}
@@ -390,7 +454,7 @@ func (c *MatrixClient) RegisterUser(ctx context.Context, username, password stri
 		return "", err
 	}
 
-	return regResp.UserID, nil
+	return regResp.AccessToken, nil
 }
 
 // LoginUser 登录用户并返回 access token
@@ -424,6 +488,11 @@ func (c *MatrixClient) LoginUser(ctx context.Context, username, password string)
 // doRequest 发送 HTTP 请求
 func (c *MatrixClient) doRequest(method, endpoint string, body interface{}) ([]byte, error) {
 	return c.doRequestWithToken(method, endpoint, body, "")
+}
+
+// doRequestRaw 发送 HTTP 请求，返回 MatrixError 而不是简单的 error（用于 UIA 流程）
+func (c *MatrixClient) doRequestRaw(method, endpoint string, body interface{}) ([]byte, error) {
+	return c.doRequestWithTokenRaw(method, endpoint, body, "")
 }
 
 // doRequestWithAuth 发送带认证的请求
@@ -474,6 +543,58 @@ func (c *MatrixClient) doRequestWithToken(method, endpoint string, body interfac
 			return nil, fmt.Errorf("matrix error %s: %s", matrixErr.ErrCode, matrixErr.Error)
 		}
 		return nil, fmt.Errorf("matrix api error %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	return respBody, nil
+}
+
+// doRequestWithTokenRaw 发送请求，返回 MatrixError 结构（用于 UIA 流程）
+func (c *MatrixClient) doRequestWithTokenRaw(method, endpoint string, body interface{}, token string) ([]byte, error) {
+	url := c.config.HomeserverURL + endpoint
+
+	var bodyReader io.Reader
+	if body != nil {
+		jsonBody, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		bodyReader = bytes.NewReader(jsonBody)
+	}
+
+	req, err := http.NewRequest(method, url, bodyReader)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode >= 400 {
+		// 返回 MatrixError 以便调用者可以解析完整响应
+		var parsed struct {
+			ErrCode string `json:"errcode"`
+			Error   string `json:"error"`
+		}
+		_ = json.Unmarshal(respBody, &parsed)
+		return nil, &MatrixError{
+			StatusCode: resp.StatusCode,
+			ErrCode:    parsed.ErrCode,
+			Message:    parsed.Error,
+			Body:       string(respBody),
+		}
 	}
 
 	return respBody, nil

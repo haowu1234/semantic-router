@@ -160,8 +160,28 @@ func (h *OpenClawHandler) saveTeams(entries []TeamEntry) error {
 }
 
 func findTeamByID(entries []TeamEntry, id string) *TeamEntry {
+	// First pass: exact ID match
 	for i := range entries {
 		if entries[i].ID == id {
+			return &entries[i]
+		}
+	}
+	// Second pass: case-insensitive ID match
+	lowerID := strings.ToLower(id)
+	for i := range entries {
+		if strings.ToLower(entries[i].ID) == lowerID {
+			return &entries[i]
+		}
+	}
+	// Third pass: ID prefix match (e.g., "vllm-sr" matches "vllm-sr-lab")
+	for i := range entries {
+		if strings.HasPrefix(strings.ToLower(entries[i].ID), lowerID) {
+			return &entries[i]
+		}
+	}
+	// Fourth pass: case-insensitive name match
+	for i := range entries {
+		if strings.EqualFold(entries[i].Name, id) {
 			return &entries[i]
 		}
 	}
