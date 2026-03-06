@@ -387,9 +387,9 @@ func generateDockerRunCmd(runtime string, req ProvisionRequest, dataDir string) 
 	var startupCmd string
 	if req.Container.MatrixEnabled {
 		// Enable Matrix plugin at startup
-		startupCmd = `openclaw gateway --allow-unconfigured --host 0.0.0.0`
+		startupCmd = `openclaw gateway --allow-unconfigured --bind lan`
 	} else {
-		startupCmd = `openclaw gateway --allow-unconfigured --host 0.0.0.0`
+		startupCmd = `openclaw gateway --allow-unconfigured --bind lan`
 	}
 
 	// Mount the entire data directory as /config instead of a single file to avoid

@@ -326,9 +326,9 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 		var startupCmd string
 		if req.Container.MatrixEnabled {
 			// Enable Matrix plugin at startup via config or CLI flag
-			startupCmd = `exec openclaw gateway --allow-unconfigured --host 0.0.0.0`
+			startupCmd = `exec openclaw gateway --allow-unconfigured --bind lan`
 		} else {
-			startupCmd = `exec openclaw gateway --allow-unconfigured --host 0.0.0.0`
+			startupCmd = `exec openclaw gateway --allow-unconfigured --bind lan`
 		}
 		args = append(args, "sh", "-c", startupCmd)
 		// In bridge mode, no port conflict retry needed since containers have isolated namespaces.
