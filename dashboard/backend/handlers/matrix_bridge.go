@@ -3,54 +3,41 @@ package handlers
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
 )
 
 // CommunicationMode 定义通信模式
+// NOTE: 已移除 ModeNative 和 ModeHybrid，全部强制使用 Matrix 协议
 type CommunicationMode string
 
 const (
-	ModeNative CommunicationMode = "native"
+	// ModeMatrix 是唯一支持的通信模式，所有消息必须通过 Matrix 服务器
+	// 如果 Matrix 服务器不可用，操作将失败而不是降级
 	ModeMatrix CommunicationMode = "matrix"
-	ModeHybrid CommunicationMode = "hybrid"
 )
 
 // MatrixBridgeConfig 桥接配置
+// NOTE: 已移除 SyncToMatrix/SyncFromMatrix，所有通信强制走 Matrix
 type MatrixBridgeConfig struct {
-	Mode           CommunicationMode
-	ServerDomain   string
-	InternalURL    string
-	ExternalURL    string
-	RegToken       string
-	AdminUser      string
-	SystemUser     string
-	RoomModeMap    map[string]CommunicationMode
-	SyncToMatrix   bool
-	SyncFromMatrix bool
-	DedupTTL       time.Duration
+	Mode         CommunicationMode
+	ServerDomain string
+	InternalURL  string
+	ExternalURL  string
+	RegToken     string
+	AdminUser    string
+	SystemUser   string
+	DedupTTL     time.Duration
 }
 
 // MatrixBridge 通信桥接器
+// NOTE: 已移除 nativeStore 和 roomModes，所有通信强制走 Matrix
 type MatrixBridge struct {
 	config       MatrixBridgeConfig
 	matrixClient *MatrixClient
-	nativeStore  *NativeRoomStore
 	dedupCache   *DedupCache
-	roomModes    []roomModeRule
 	mu           sync.RWMutex
-}
-
-type roomModeRule struct {
-	pattern *regexp.Regexp
-	mode    CommunicationMode
-}
-
-// NativeRoomStore 原生 Room 存储接口
-type NativeRoomStore struct {
-	handler *OpenClawHandler
 }
 
 // DedupCache 消息去重缓存
@@ -103,135 +90,59 @@ func (c *DedupCache) cleanup() {
 }
 
 // NewMatrixBridge 创建通信桥接器
+// NOTE: Matrix 客户端是必须的，如果初始化失败则返回错误
 func NewMatrixBridge(config MatrixBridgeConfig) (*MatrixBridge, error) {
+	// 强制使用 Matrix 模式
+	config.Mode = ModeMatrix
+
 	bridge := &MatrixBridge{
 		config:     config,
 		dedupCache: NewDedupCache(config.DedupTTL),
 	}
 
-	// 编译 Room 模式规则
-	for pattern, mode := range config.RoomModeMap {
-		re, err := compileGlobPattern(pattern)
-		if err != nil {
-			return nil, fmt.Errorf("invalid room pattern %q: %w", pattern, err)
-		}
-		bridge.roomModes = append(bridge.roomModes, roomModeRule{
-			pattern: re,
-			mode:    mode,
-		})
+	// Matrix 客户端是必须的，不再可选
+	client, err := NewMatrixClient(MatrixClientConfig{
+		HomeserverURL: config.InternalURL,
+		Domain:        config.ServerDomain,
+		SystemUser:    config.SystemUser,
+		RegToken:      config.RegToken,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("matrix client is required but failed to initialize: %w", err)
 	}
-
-	// 初始化 Matrix 客户端 (如果启用)
-	if config.Mode == ModeMatrix || config.Mode == ModeHybrid {
-		client, err := NewMatrixClient(MatrixClientConfig{
-			HomeserverURL: config.InternalURL,
-			Domain:        config.ServerDomain,
-			SystemUser:    config.SystemUser,
-			RegToken:      config.RegToken,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to init matrix client: %w", err)
-		}
-		bridge.matrixClient = client
-	}
+	bridge.matrixClient = client
 
 	return bridge, nil
 }
 
-// SetNativeStore 设置原生存储
-func (b *MatrixBridge) SetNativeStore(store *NativeRoomStore) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.nativeStore = store
-}
-
 // GetRoomMode 获取 Room 的通信模式
+// NOTE: 始终返回 ModeMatrix，不再支持其他模式
 func (b *MatrixBridge) GetRoomMode(roomID string) CommunicationMode {
-	if b.config.Mode != ModeHybrid {
-		return b.config.Mode
-	}
-
-	// 按顺序匹配规则
-	for _, rule := range b.roomModes {
-		if rule.pattern.MatchString(roomID) {
-			return rule.mode
-		}
-	}
-	return ModeNative
+	return ModeMatrix
 }
 
-// SendMessage 发送消息 (自动路由到正确的后端)
+// SendMessage 发送消息到 Matrix 服务器
+// NOTE: 不再支持 fallback 到本地存储，Matrix 不可用时返回错误
 func (b *MatrixBridge) SendMessage(ctx context.Context, msg *ClawRoomMessage) error {
-	mode := b.GetRoomMode(msg.RoomID)
-
 	// 检查去重
 	if b.dedupCache.IsDuplicate(msg.ID) {
 		return nil
 	}
 	b.dedupCache.Mark(msg.ID)
 
-	switch mode {
-	case ModeNative:
-		return b.sendNative(ctx, msg)
-	case ModeMatrix:
-		return b.sendMatrix(ctx, msg)
-	default:
-		return fmt.Errorf("unknown mode: %s", mode)
-	}
-}
-
-// sendNative 发送到原生 Room 系统
-func (b *MatrixBridge) sendNative(ctx context.Context, msg *ClawRoomMessage) error {
-	if b.nativeStore != nil {
-		if err := b.nativeStore.SaveMessage(msg); err != nil {
-			return err
-		}
-	}
-
-	// 同步到 Matrix (如果启用)
-	if b.config.SyncToMatrix && b.matrixClient != nil {
-		go b.syncToMatrix(msg)
-	}
-	return nil
+	// 直接发送到 Matrix，不再有 fallback
+	return b.sendMatrix(ctx, msg)
 }
 
 // sendMatrix 发送到 Matrix 服务器
+// NOTE: 这是唯一的发送方式，不再有 fallback
 func (b *MatrixBridge) sendMatrix(ctx context.Context, msg *ClawRoomMessage) error {
 	if b.matrixClient == nil {
-		return fmt.Errorf("matrix client not initialized")
+		return fmt.Errorf("matrix client not initialized - matrix is required for all communication")
 	}
 
 	matrixMsg := b.convertToMatrixMessage(msg)
-	if err := b.matrixClient.SendMessage(ctx, matrixMsg); err != nil {
-		return err
-	}
-
-	// 同步到 Native (如果启用)
-	if b.config.SyncFromMatrix && b.nativeStore != nil {
-		go b.syncFromMatrix(msg)
-	}
-	return nil
-}
-
-// syncToMatrix 同步消息到 Matrix
-func (b *MatrixBridge) syncToMatrix(msg *ClawRoomMessage) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	matrixMsg := b.convertToMatrixMessage(msg)
-	if err := b.matrixClient.SendMessage(ctx, matrixMsg); err != nil {
-		// 记录错误但不阻塞
-		fmt.Printf("failed to sync message to matrix: %v\n", err)
-	}
-}
-
-// syncFromMatrix 同步消息到 Native
-func (b *MatrixBridge) syncFromMatrix(msg *ClawRoomMessage) {
-	if b.nativeStore != nil {
-		if err := b.nativeStore.SaveMessage(msg); err != nil {
-			fmt.Printf("failed to sync message from matrix: %v\n", err)
-		}
-	}
+	return b.matrixClient.SendMessage(ctx, matrixMsg)
 }
 
 // convertToMatrixMessage 转换消息格式
@@ -301,24 +212,13 @@ func (b *MatrixBridge) UnmapUserID(matrixID string) string {
 	return parts[0]
 }
 
-// GetMessages 获取房间消息
+// GetMessages 从 Matrix 获取房间消息
+// NOTE: 不再支持从本地存储获取，只从 Matrix 获取
 func (b *MatrixBridge) GetMessages(ctx context.Context, roomID string) ([]ClawRoomMessage, error) {
-	mode := b.GetRoomMode(roomID)
-
-	switch mode {
-	case ModeNative:
-		if b.nativeStore != nil {
-			return b.nativeStore.GetMessages(roomID)
-		}
-		return nil, fmt.Errorf("native store not initialized")
-	case ModeMatrix:
-		if b.matrixClient != nil {
-			return b.getMatrixMessages(ctx, roomID)
-		}
-		return nil, fmt.Errorf("matrix client not initialized")
-	default:
-		return nil, fmt.Errorf("unknown mode: %s", mode)
+	if b.matrixClient == nil {
+		return nil, fmt.Errorf("matrix client not initialized - matrix is required for all communication")
 	}
+	return b.getMatrixMessages(ctx, roomID)
 }
 
 // getMatrixMessages 从 Matrix 获取消息
@@ -386,75 +286,30 @@ func (b *MatrixBridge) convertFromMatrixEvent(roomID string, event *MatrixEvent)
 	}
 }
 
-// CreateRoom 创建房间
+// CreateRoom 在 Matrix 服务器上创建房间
+// NOTE: 不再支持 Native 模式，房间必须在 Matrix 上创建
 func (b *MatrixBridge) CreateRoom(ctx context.Context, name, teamID string, members []string) (string, error) {
-	mode := b.GetRoomMode(fmt.Sprintf("team-%s", teamID))
-
-	switch mode {
-	case ModeMatrix:
-		if b.matrixClient == nil {
-			return "", fmt.Errorf("matrix client not initialized")
-		}
-
-		// 转换成员 ID
-		var matrixMembers []string
-		for _, m := range members {
-			matrixMembers = append(matrixMembers, b.MapUserID(m))
-		}
-
-		matrixRoomID, err := b.matrixClient.CreateRoom(ctx, &CreateRoomRequest{
-			Name:   name,
-			Topic:  fmt.Sprintf("Semantic Router Team Room: %s", teamID),
-			Invite: matrixMembers,
-		})
-		if err != nil {
-			return "", err
-		}
-
-		return b.UnmapRoomID(matrixRoomID), nil
-
-	default:
-		// Native 模式不需要额外创建
-		return fmt.Sprintf("team-%s", teamID), nil
-	}
-}
-
-// NativeRoomStore 方法实现
-
-// SaveMessage 保存消息到原生存储
-func (s *NativeRoomStore) SaveMessage(msg *ClawRoomMessage) error {
-	if s.handler == nil {
-		return fmt.Errorf("handler not initialized")
+	if b.matrixClient == nil {
+		return "", fmt.Errorf("matrix client not initialized - matrix is required for all communication")
 	}
 
-	s.handler.mu.Lock()
-	defer s.handler.mu.Unlock()
+	// 转换成员 ID
+	var matrixMembers []string
+	for _, m := range members {
+		matrixMembers = append(matrixMembers, b.MapUserID(m))
+	}
 
-	messages, err := s.handler.loadRoomMessages(msg.RoomID)
+	matrixRoomID, err := b.matrixClient.CreateRoom(ctx, &CreateRoomRequest{
+		Name:   name,
+		Topic:  fmt.Sprintf("Semantic Router Team Room: %s", teamID),
+		Invite: matrixMembers,
+	})
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	messages = append(messages, *msg)
-	return s.handler.saveRoomMessages(msg.RoomID, messages)
+	return b.UnmapRoomID(matrixRoomID), nil
 }
 
-// GetMessages 从原生存储获取消息
-func (s *NativeRoomStore) GetMessages(roomID string) ([]ClawRoomMessage, error) {
-	if s.handler == nil {
-		return nil, fmt.Errorf("handler not initialized")
-	}
-
-	s.handler.mu.RLock()
-	defer s.handler.mu.RUnlock()
-
-	return s.handler.loadRoomMessages(roomID)
-}
-
-// 辅助函数: 编译 glob 模式为正则
-func compileGlobPattern(pattern string) (*regexp.Regexp, error) {
-	escaped := regexp.QuoteMeta(pattern)
-	escaped = strings.ReplaceAll(escaped, `\*`, `.*`)
-	escaped = strings.ReplaceAll(escaped, `\?`, `.`)
-	return regexp.Compile("^" + escaped + "$")
-}
+// NOTE: NativeRoomStore 已移除，不再支持本地存储
+// 所有消息存储和检索必须通过 Matrix 服务器

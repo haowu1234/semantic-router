@@ -220,7 +220,7 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 		}
 
 		// Inject Matrix configuration if MATRIX_ENABLED is set
-		// This allows OpenClaw agents to communicate via Matrix protocol
+		// NOTE: Matrix is now REQUIRED - agents cannot be provisioned without valid Matrix credentials
 		if matrixEnabled := os.Getenv("MATRIX_ENABLED"); matrixEnabled == "true" {
 			req.Container.MatrixEnabled = true
 			req.Container.MatrixHomeserver = os.Getenv("MATRIX_INTERNAL_URL")
@@ -236,25 +236,35 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 			// Use RoleKind instead of name matching for accurate detection
 			if req.RoleKind == "leader" {
 				req.Container.MatrixAccessToken = os.Getenv("MATRIX_LEADER_ACCESS_TOKEN")
+				if req.Container.MatrixAccessToken == "" {
+					h.mu.Unlock()
+					writeJSONError(w, "Matrix is required but MATRIX_LEADER_ACCESS_TOKEN is not set", http.StatusPreconditionFailed)
+					return
+				}
 				log.Printf("Matrix communication enabled for leader %s: homeserver=%s domain=%s (using pre-configured token)",
 					req.Container.ContainerName, req.Container.MatrixHomeserver, req.Container.MatrixDomain)
 			} else {
 				// Worker agent: register user and get token via MatrixClient
-				if h.matrixClient != nil {
-					token, err := h.ensureMatrixUserAndGetToken(matrixUsername)
-					if err != nil {
-						log.Printf("Warning: failed to setup Matrix user for worker %s: %v (Matrix communication may not work)",
-							req.Container.ContainerName, err)
-					} else {
-						req.Container.MatrixAccessToken = token
-						log.Printf("Matrix communication enabled for worker %s: homeserver=%s domain=%s user=%s",
-							req.Container.ContainerName, req.Container.MatrixHomeserver, req.Container.MatrixDomain, matrixUsername)
-					}
-				} else {
-					log.Printf("Warning: Matrix enabled but MatrixClient not initialized for worker %s (Matrix communication will not work)",
-						req.Container.ContainerName)
+				if h.matrixClient == nil {
+					h.mu.Unlock()
+					writeJSONError(w, "Matrix is required but MatrixClient is not initialized. Ensure Matrix server is running and MATRIX_ENABLED=true.", http.StatusPreconditionFailed)
+					return
 				}
+				token, err := h.ensureMatrixUserAndGetToken(matrixUsername)
+				if err != nil {
+					h.mu.Unlock()
+					writeJSONError(w, fmt.Sprintf("Matrix is required but failed to setup Matrix user for worker %s: %v", req.Container.ContainerName, err), http.StatusPreconditionFailed)
+					return
+				}
+				req.Container.MatrixAccessToken = token
+				log.Printf("Matrix communication enabled for worker %s: homeserver=%s domain=%s user=%s",
+					req.Container.ContainerName, req.Container.MatrixHomeserver, req.Container.MatrixDomain, matrixUsername)
 			}
+		} else {
+			// Matrix is not enabled - this is now an error condition
+			h.mu.Unlock()
+			writeJSONError(w, "Matrix communication is required. Set MATRIX_ENABLED=true and ensure Matrix server is running.", http.StatusPreconditionFailed)
+			return
 		}
 
 		configPath := filepath.Join(cDir, "openclaw.json")

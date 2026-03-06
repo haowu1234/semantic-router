@@ -76,14 +76,10 @@ func (h *OpenClawHandler) SetMatrixClient(client *MatrixClient, domain string) {
 	h.matrixDomain = domain
 }
 
-// SetMatrixBridge sets the Matrix bridge for hybrid native/matrix communication.
-// This enables creating Matrix rooms when teams are created, and inviting workers to rooms.
+// SetMatrixBridge sets the Matrix bridge for Matrix-only communication.
+// NOTE: Native store syncing has been removed - all communication goes through Matrix
 func (h *OpenClawHandler) SetMatrixBridge(bridge *MatrixBridge) {
 	h.matrixBridge = bridge
-	// Also connect the native store to the bridge for message syncing
-	if bridge != nil {
-		bridge.SetNativeStore(&NativeRoomStore{handler: h})
-	}
 }
 
 // GetMatrixBridge returns the Matrix bridge (may be nil if Matrix is disabled)

@@ -2,14 +2,12 @@ package router
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/vllm-project/semantic-router/dashboard/backend/config"
@@ -347,26 +345,21 @@ func Setup(cfg *config.Config) *http.ServeMux {
 					openClawHandler.SetMatrixClient(matrixClient, matrixDomain)
 					log.Printf("Matrix client initialized for OpenClaw worker registration (homeserver=%s, domain=%s)", matrixURL, matrixDomain)
 
-					// Initialize MatrixBridge for hybrid communication mode
-					// This enables creating Matrix rooms when teams are created, and syncing messages
+					// Initialize MatrixBridge for Matrix-only communication mode
+					// NOTE: 已移除 hybrid 模式，所有通信强制走 Matrix
 					matrixBridge, bridgeErr := handlers.NewMatrixBridge(handlers.MatrixBridgeConfig{
-						Mode:           handlers.ModeHybrid, // Use hybrid mode: native + matrix
-						ServerDomain:   matrixDomain,
-						InternalURL:    matrixURL,
-						RegToken:       matrixRegToken,
-						SystemUser:     matrixSystemUser,
-						SyncToMatrix:   true,  // Sync native messages to Matrix
-						SyncFromMatrix: true,  // Sync Matrix messages to native
-						DedupTTL:       5 * time.Minute,
-						RoomModeMap: map[string]handlers.CommunicationMode{
-							"team-*": handlers.ModeHybrid, // Team rooms use hybrid mode
-						},
+						Mode:         handlers.ModeMatrix, // 强制 Matrix 模式，无降级
+						ServerDomain: matrixDomain,
+						InternalURL:  matrixURL,
+						RegToken:     matrixRegToken,
+						SystemUser:   matrixSystemUser,
+						DedupTTL:     5 * time.Minute,
 					})
 					if bridgeErr != nil {
-						log.Printf("Warning: failed to initialize MatrixBridge: %v (hybrid communication disabled)", bridgeErr)
+						log.Printf("Warning: failed to initialize MatrixBridge: %v (Matrix communication disabled - this is now a fatal condition)", bridgeErr)
 					} else {
 						openClawHandler.SetMatrixBridge(matrixBridge)
-						log.Printf("MatrixBridge initialized for hybrid communication (mode=hybrid, sync_to_matrix=true, sync_from_matrix=true)")
+						log.Printf("MatrixBridge initialized for Matrix-only communication (mode=matrix, no fallback)")
 
 						// Start MatrixSyncWorker to sync messages from Matrix to native
 						syncWorker := handlers.NewMatrixSyncWorker(matrixClient, matrixBridge, nil)
@@ -448,48 +441,18 @@ func Setup(cfg *config.Config) *http.ServeMux {
 		mux.HandleFunc("/api/openclaw/containers/", ocHandler.DeleteHandler())
 		log.Printf("OpenClaw API endpoints registered: /api/openclaw/*")
 
-		// Dynamic reverse proxy: /embedded/openclaw/{containerName}/...
-		// Lazily creates and caches a WebSocket-aware proxy per container.
-		var proxyCache sync.Map // map[string]http.Handler
+		// NOTE: Embedded WebSocket proxy has been removed
+		// All communication must now go through Matrix protocol
+		// The /embedded/openclaw/ endpoint now returns an error directing users to use Matrix
 		mux.HandleFunc("/embedded/openclaw/", func(w http.ResponseWriter, r *http.Request) {
 			if middleware.HandleCORSPreflight(w, r) {
 				return
 			}
-			// Extract container name from path: /embedded/openclaw/{name}/...
-			rest := strings.TrimPrefix(r.URL.Path, "/embedded/openclaw/")
-			parts := strings.SplitN(rest, "/", 2)
-			name := parts[0]
-			if name == "" {
-				http.Error(w, "container name required in path", http.StatusBadRequest)
-				return
-			}
-			targetBase, ok := ocHandler.TargetBaseForContainer(name)
-			if !ok {
-				http.Error(w, "container not found in registry", http.StatusNotFound)
-				return
-			}
-			token := strings.TrimSpace(ocHandler.GatewayTokenForContainer(name))
-			staticHeaders := map[string]string{}
-			if token != "" {
-				staticHeaders["Authorization"] = "Bearer " + token
-				staticHeaders["X-OpenClaw-Token"] = token
-			}
-			// Look up or create cached proxy for this container
-			stripPrefix := "/embedded/openclaw/" + name
-			cacheKey := fmt.Sprintf("%s:%s:%s", name, targetBase, token)
-			handler, loaded := proxyCache.Load(cacheKey)
-			if !loaded {
-				h, err := proxy.NewWebSocketAwareHandlerWithHeaders(targetBase, stripPrefix, staticHeaders)
-				if err != nil {
-					log.Printf("Failed to create proxy for %s: %v", name, err)
-					http.Error(w, "proxy error", http.StatusBadGateway)
-					return
-				}
-				handler, _ = proxyCache.LoadOrStore(cacheKey, h)
-			}
-			handler.(http.Handler).ServeHTTP(w, r)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusGone)
+			_, _ = w.Write([]byte(`{"error":"Direct WebSocket proxy has been removed","message":"All OpenClaw communication must now go through Matrix protocol. Please ensure MATRIX_ENABLED=true and Matrix server is running.","migration":"See documentation for Matrix setup guide."}`))
 		})
-		log.Printf("OpenClaw dynamic proxy configured: /embedded/openclaw/{name}/ (WebSocket enabled)")
+		log.Printf("OpenClaw embedded proxy disabled: all communication must go through Matrix protocol")
 	} else {
 		// Return disabled status even when feature is off
 		mux.HandleFunc("/api/openclaw/status", func(w http.ResponseWriter, r *http.Request) {

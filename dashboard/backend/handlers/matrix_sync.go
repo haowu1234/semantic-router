@@ -160,12 +160,8 @@ func (w *MatrixSyncWorker) handleRoomMessage(roomID string, event *MatrixEvent) 
 	nativeRoomID := w.bridge.UnmapRoomID(roomID)
 	nativeMsg := w.convertToNativeMessage(nativeRoomID, event)
 
-	// 同步到 native 系统
-	if w.bridge.config.SyncFromMatrix && w.bridge.nativeStore != nil {
-		if err := w.bridge.nativeStore.SaveMessage(nativeMsg); err != nil {
-			log.Printf("failed to sync matrix message to native: %v", err)
-		}
-	}
+	// NOTE: Native store syncing has been removed - all messages stay in Matrix
+	// Only broadcast to WebSocket clients for real-time updates
 
 	// 广播到 WebSocket 客户端
 	if w.nativeHub != nil {
