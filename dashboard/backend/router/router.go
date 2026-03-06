@@ -354,12 +354,13 @@ func Setup(cfg *config.Config) *http.ServeMux {
 					// Initialize MatrixBridge for Matrix-only communication mode
 					// NOTE: 已移除 hybrid 模式，所有通信强制走 Matrix
 					matrixBridge, bridgeErr := handlers.NewMatrixBridge(handlers.MatrixBridgeConfig{
-						Mode:         handlers.ModeMatrix, // 强制 Matrix 模式，无降级
-						ServerDomain: matrixDomain,
-						InternalURL:  matrixURL,
-						RegToken:     matrixRegToken,
-						SystemUser:   matrixSystemUser,
-						DedupTTL:     5 * time.Minute,
+						Mode:              handlers.ModeMatrix, // 强制 Matrix 模式，无降级
+						ServerDomain:      matrixDomain,
+						InternalURL:       matrixURL,
+						RegToken:          matrixRegToken,
+						SystemUser:        matrixSystemUser,
+						SystemAccessToken: matrixSystemAccessToken,
+						DedupTTL:          5 * time.Minute,
 					})
 					if bridgeErr != nil {
 						log.Printf("Warning: failed to initialize MatrixBridge: %v (Matrix communication disabled - this is now a fatal condition)", bridgeErr)

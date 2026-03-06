@@ -21,14 +21,15 @@ const (
 // MatrixBridgeConfig 桥接配置
 // NOTE: 已移除 SyncToMatrix/SyncFromMatrix，所有通信强制走 Matrix
 type MatrixBridgeConfig struct {
-	Mode         CommunicationMode
-	ServerDomain string
-	InternalURL  string
-	ExternalURL  string
-	RegToken     string
-	AdminUser    string
-	SystemUser   string
-	DedupTTL     time.Duration
+	Mode              CommunicationMode
+	ServerDomain      string
+	InternalURL       string
+	ExternalURL       string
+	RegToken          string
+	AdminUser         string
+	SystemUser        string
+	SystemAccessToken string // 可选：如果提供，则直接使用此 token，跳过密码登录
+	DedupTTL          time.Duration
 }
 
 // MatrixBridge 通信桥接器
@@ -102,10 +103,11 @@ func NewMatrixBridge(config MatrixBridgeConfig) (*MatrixBridge, error) {
 
 	// Matrix 客户端是必须的，不再可选
 	client, err := NewMatrixClient(MatrixClientConfig{
-		HomeserverURL: config.InternalURL,
-		Domain:        config.ServerDomain,
-		SystemUser:    config.SystemUser,
-		RegToken:      config.RegToken,
+		HomeserverURL:     config.InternalURL,
+		Domain:            config.ServerDomain,
+		SystemUser:        config.SystemUser,
+		RegToken:          config.RegToken,
+		SystemAccessToken: config.SystemAccessToken,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("matrix client is required but failed to initialize: %w", err)
