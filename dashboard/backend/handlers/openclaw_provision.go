@@ -495,10 +495,35 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 		if h.matrixBridge != nil && h.matrixClient != nil && h.matrixDomain != "" {
 			// Find the team's actual Matrix room ID
 			var teamMatrixRoomID string
-			for _, t := range teams {
+			var teamIndex int = -1
+			var teamEntry *TeamEntry
+			for i, t := range teams {
 				if t.ID == req.TeamID {
 					teamMatrixRoomID = t.MatrixRoomID
+					teamIndex = i
+					teamEntry = &teams[i]
 					break
+				}
+			}
+
+			// Auto-create Matrix room for teams that don't have one (migration fix)
+			if teamMatrixRoomID == "" && teamEntry != nil {
+				log.Printf("openclaw: team %s has no Matrix room, creating one now...", req.TeamID)
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				roomID, err := h.matrixBridge.CreateRoom(ctx, teamEntry.Name+" Room", teamEntry.ID, nil)
+				cancel()
+				if err != nil {
+					log.Printf("openclaw: failed to auto-create Matrix room for team %s: %v", req.TeamID, err)
+				} else {
+					log.Printf("openclaw: auto-created Matrix room for team %s: %s", req.TeamID, roomID)
+					teamMatrixRoomID = roomID
+					// Update team entry in memory and persist
+					if teamIndex >= 0 {
+						teams[teamIndex].MatrixRoomID = roomID
+						if saveErr := h.saveTeams(teams); saveErr != nil {
+							log.Printf("openclaw: failed to persist team Matrix room ID: %v", saveErr)
+						}
+					}
 				}
 			}
 

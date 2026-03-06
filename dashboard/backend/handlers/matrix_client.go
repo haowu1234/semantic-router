@@ -110,7 +110,7 @@ func NewMatrixClient(config MatrixClientConfig) (*MatrixClient, error) {
 	client := &MatrixClient{
 		config: config,
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: 60 * time.Second, // 需要比 sync timeout (30s) 更长，留出网络传输时间
 		},
 	}
 
@@ -237,10 +237,16 @@ func (c *MatrixClient) SendMessage(ctx context.Context, msg *MatrixMessage) erro
 
 // CreateRoom 创建房间
 func (c *MatrixClient) CreateRoom(ctx context.Context, req *CreateRoomRequest) (string, error) {
+	// 确保 invite 是空数组而不是 null，Matrix API 要求必须是数组类型
+	invite := req.Invite
+	if invite == nil {
+		invite = []string{}
+	}
+
 	payload := map[string]interface{}{
 		"name":       req.Name,
 		"topic":      req.Topic,
-		"invite":     req.Invite,
+		"invite":     invite,
 		"preset":     "trusted_private_chat",
 		"visibility": "private",
 	}
