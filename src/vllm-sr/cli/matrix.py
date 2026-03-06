@@ -100,6 +100,7 @@ def docker_start_matrix_server(network_name: str, matrix_config: dict):
         "-e", f"CONDUWUIT_SERVER_NAME={domain}",
         "-e", "CONDUWUIT_DATABASE_PATH=/data",
         "-e", f"CONDUWUIT_PORT={port}",
+        "-e", "CONDUWUIT_ADDRESS=0.0.0.0",  # Listen on all interfaces (required for Docker)
         "-e", "CONDUWUIT_ALLOW_REGISTRATION=true",
         "-e", f"CONDUWUIT_REGISTRATION_TOKEN={registration_token}",
         "-e", "CONDUWUIT_ALLOW_FEDERATION=false",

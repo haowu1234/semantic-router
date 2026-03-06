@@ -1,6 +1,7 @@
 package router
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/vllm-project/semantic-router/dashboard/backend/config"
 	"github.com/vllm-project/semantic-router/dashboard/backend/evaluation"
@@ -344,6 +346,33 @@ func Setup(cfg *config.Config) *http.ServeMux {
 				} else {
 					openClawHandler.SetMatrixClient(matrixClient, matrixDomain)
 					log.Printf("Matrix client initialized for OpenClaw worker registration (homeserver=%s, domain=%s)", matrixURL, matrixDomain)
+
+					// Initialize MatrixBridge for hybrid communication mode
+					// This enables creating Matrix rooms when teams are created, and syncing messages
+					matrixBridge, bridgeErr := handlers.NewMatrixBridge(handlers.MatrixBridgeConfig{
+						Mode:           handlers.ModeHybrid, // Use hybrid mode: native + matrix
+						ServerDomain:   matrixDomain,
+						InternalURL:    matrixURL,
+						RegToken:       matrixRegToken,
+						SystemUser:     matrixSystemUser,
+						SyncToMatrix:   true,  // Sync native messages to Matrix
+						SyncFromMatrix: true,  // Sync Matrix messages to native
+						DedupTTL:       5 * time.Minute,
+						RoomModeMap: map[string]handlers.CommunicationMode{
+							"team-*": handlers.ModeHybrid, // Team rooms use hybrid mode
+						},
+					})
+					if bridgeErr != nil {
+						log.Printf("Warning: failed to initialize MatrixBridge: %v (hybrid communication disabled)", bridgeErr)
+					} else {
+						openClawHandler.SetMatrixBridge(matrixBridge)
+						log.Printf("MatrixBridge initialized for hybrid communication (mode=hybrid, sync_to_matrix=true, sync_from_matrix=true)")
+
+						// Start MatrixSyncWorker to sync messages from Matrix to native
+						syncWorker := handlers.NewMatrixSyncWorker(matrixClient, matrixBridge, nil)
+						go syncWorker.Start(context.Background())
+						log.Printf("MatrixSyncWorker started for message synchronization")
+					}
 				}
 			} else {
 				log.Printf("Warning: MATRIX_ENABLED=true but MATRIX_INTERNAL_URL or MATRIX_REG_TOKEN not set (worker agents will not have Matrix access)")

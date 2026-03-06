@@ -61,6 +61,8 @@ type OpenClawHandler struct {
 	// Matrix client for registering worker agents (optional, nil if Matrix disabled)
 	matrixClient *MatrixClient
 	matrixDomain string
+	// Matrix bridge for hybrid native/matrix communication (optional, nil if Matrix disabled)
+	matrixBridge *MatrixBridge
 }
 
 func NewOpenClawHandler(dataDir string, readOnly bool) *OpenClawHandler {
@@ -72,6 +74,21 @@ func NewOpenClawHandler(dataDir string, readOnly bool) *OpenClawHandler {
 func (h *OpenClawHandler) SetMatrixClient(client *MatrixClient, domain string) {
 	h.matrixClient = client
 	h.matrixDomain = domain
+}
+
+// SetMatrixBridge sets the Matrix bridge for hybrid native/matrix communication.
+// This enables creating Matrix rooms when teams are created, and inviting workers to rooms.
+func (h *OpenClawHandler) SetMatrixBridge(bridge *MatrixBridge) {
+	h.matrixBridge = bridge
+	// Also connect the native store to the bridge for message syncing
+	if bridge != nil {
+		bridge.SetNativeStore(&NativeRoomStore{handler: h})
+	}
+}
+
+// GetMatrixBridge returns the Matrix bridge (may be nil if Matrix is disabled)
+func (h *OpenClawHandler) GetMatrixBridge() *MatrixBridge {
+	return h.matrixBridge
 }
 
 func (h *OpenClawHandler) SetRouterConfigPath(configPath string) {

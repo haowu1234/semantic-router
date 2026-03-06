@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -144,9 +145,30 @@ func (h *OpenClawHandler) TeamsHandler() http.HandlerFunc {
 					return
 				}
 			}
-			if _, err := h.ensureDefaultRoomLocked(created); err != nil {
-				log.Printf("openclaw: failed to ensure default room after creating team %s: %v", created.ID, err)
-			}
+		if _, err := h.ensureDefaultRoomLocked(created); err != nil {
+			log.Printf("openclaw: failed to ensure default room after creating team %s: %v", created.ID, err)
+		}
+
+		// Create Matrix room for the team if MatrixBridge is available
+		if h.matrixBridge != nil {
+			go func(team TeamEntry) {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+
+				// Collect existing team members for initial invite
+				var members []string
+				if leaderID != "" {
+					members = append(members, leaderID)
+				}
+
+				matrixRoomID, err := h.matrixBridge.CreateRoom(ctx, team.Name+" Room", team.ID, members)
+				if err != nil {
+					log.Printf("openclaw: failed to create Matrix room for team %s: %v", team.ID, err)
+				} else {
+					log.Printf("openclaw: created Matrix room for team %s: %s", team.ID, matrixRoomID)
+				}
+			}(created)
+		}
 
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
