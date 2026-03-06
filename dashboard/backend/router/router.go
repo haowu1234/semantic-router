@@ -2,12 +2,14 @@ package router
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/vllm-project/semantic-router/dashboard/backend/config"
@@ -448,18 +450,49 @@ func Setup(cfg *config.Config) *http.ServeMux {
 		mux.HandleFunc("/api/openclaw/containers/", ocHandler.DeleteHandler())
 		log.Printf("OpenClaw API endpoints registered: /api/openclaw/*")
 
-		// NOTE: Embedded WebSocket proxy has been removed
-		// All communication must now go through Matrix protocol
-		// The /embedded/openclaw/ endpoint now returns an error directing users to use Matrix
+		// Dynamic reverse proxy: /embedded/openclaw/{containerName}/...
+		// Lazily creates and caches a WebSocket-aware proxy per container.
+		// This allows direct access to OpenClaw Worker UI even in Matrix mode.
+		var proxyCache sync.Map // map[string]http.Handler
 		mux.HandleFunc("/embedded/openclaw/", func(w http.ResponseWriter, r *http.Request) {
 			if middleware.HandleCORSPreflight(w, r) {
 				return
 			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusGone)
-			_, _ = w.Write([]byte(`{"error":"Direct WebSocket proxy has been removed","message":"All OpenClaw communication must now go through Matrix protocol. Please ensure MATRIX_ENABLED=true and Matrix server is running.","migration":"See documentation for Matrix setup guide."}`))
+			// Extract container name from path: /embedded/openclaw/{name}/...
+			rest := strings.TrimPrefix(r.URL.Path, "/embedded/openclaw/")
+			parts := strings.SplitN(rest, "/", 2)
+			name := parts[0]
+			if name == "" {
+				http.Error(w, "container name required in path", http.StatusBadRequest)
+				return
+			}
+			targetBase, ok := ocHandler.TargetBaseForContainer(name)
+			if !ok {
+				http.Error(w, "container not found in registry", http.StatusNotFound)
+				return
+			}
+			token := strings.TrimSpace(ocHandler.GatewayTokenForContainer(name))
+			staticHeaders := map[string]string{}
+			if token != "" {
+				staticHeaders["Authorization"] = "Bearer " + token
+				staticHeaders["X-OpenClaw-Token"] = token
+			}
+			// Look up or create cached proxy for this container
+			stripPrefix := "/embedded/openclaw/" + name
+			cacheKey := fmt.Sprintf("%s:%s:%s", name, targetBase, token)
+			handler, loaded := proxyCache.Load(cacheKey)
+			if !loaded {
+				h, err := proxy.NewWebSocketAwareHandlerWithHeaders(targetBase, stripPrefix, staticHeaders)
+				if err != nil {
+					log.Printf("Failed to create proxy for %s: %v", name, err)
+					http.Error(w, "proxy error", http.StatusBadGateway)
+					return
+				}
+				handler, _ = proxyCache.LoadOrStore(cacheKey, h)
+			}
+			handler.(http.Handler).ServeHTTP(w, r)
 		})
-		log.Printf("OpenClaw embedded proxy disabled: all communication must go through Matrix protocol")
+		log.Printf("OpenClaw dynamic proxy configured: /embedded/openclaw/{name}/ (WebSocket enabled)")
 	} else {
 		// Return disabled status even when feature is off
 		mux.HandleFunc("/api/openclaw/status", func(w http.ResponseWriter, r *http.Request) {
