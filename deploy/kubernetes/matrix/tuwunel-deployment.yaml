@@ -1,0 +1,325 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: semantic-router-matrix
+  labels:
+    app.kubernetes.io/name: semantic-router-matrix
+    app.kubernetes.io/component: communication
+
+---
+# Secret: Matrix 凭证
+apiVersion: v1
+kind: Secret
+metadata:
+  name: matrix-secrets
+  namespace: semantic-router-matrix
+type: Opaque
+stringData:
+  registration-token: "${MATRIX_REGISTRATION_TOKEN}"
+  system-access-token: "${SYSTEM_MATRIX_ACCESS_TOKEN}"
+  admin-access-token: "${ADMIN_MATRIX_ACCESS_TOKEN}"
+  leader-access-token: "${LEADER_MATRIX_ACCESS_TOKEN}"
+
+---
+# ConfigMap: Tuwunel 配置
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tuwunel-config
+  namespace: semantic-router-matrix
+data:
+  CONDUWUIT_SERVER_NAME: "matrix.semantic-router.svc.cluster.local"
+  CONDUWUIT_DATABASE_PATH: "/data/tuwunel"
+  CONDUWUIT_PORT: "6167"
+  CONDUWUIT_ALLOW_REGISTRATION: "true"
+  CONDUWUIT_MAX_REQUEST_SIZE: "52428800"
+  CONDUWUIT_MAX_CONCURRENT_REQUESTS: "500"
+  CONDUWUIT_ROCKSDB_CACHE_CAPACITY_MB: "256"
+  CONDUWUIT_LOG: "info"
+  CONDUWUIT_ALLOW_FEDERATION: "false"
+
+---
+# StatefulSet: Tuwunel Matrix Server
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: tuwunel
+  namespace: semantic-router-matrix
+  labels:
+    app: tuwunel
+spec:
+  serviceName: tuwunel
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tuwunel
+  template:
+    metadata:
+      labels:
+        app: tuwunel
+    spec:
+      containers:
+        - name: tuwunel
+          image: ghcr.io/tuwunel/tuwunel:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 6167
+              name: matrix
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: tuwunel-config
+          env:
+            - name: CONDUWUIT_REGISTRATION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: matrix-secrets
+                  key: registration-token
+          volumeMounts:
+            - name: data
+              mountPath: /data/tuwunel
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /_matrix/client/versions
+              port: 6167
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /_matrix/client/versions
+              port: 6167
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+
+---
+# Service: Tuwunel
+apiVersion: v1
+kind: Service
+metadata:
+  name: tuwunel
+  namespace: semantic-router-matrix
+  labels:
+    app: tuwunel
+spec:
+  selector:
+    app: tuwunel
+  ports:
+    - port: 6167
+      targetPort: 6167
+      name: matrix
+      protocol: TCP
+  type: ClusterIP
+
+---
+# ConfigMap: Element Web 配置
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: element-config
+  namespace: semantic-router-matrix
+data:
+  config.json: |
+    {
+      "default_server_config": {
+        "m.homeserver": {
+          "base_url": "http://tuwunel:6167",
+          "server_name": "matrix.semantic-router.svc.cluster.local"
+        }
+      },
+      "brand": "Semantic Router Matrix",
+      "show_labs_settings": false,
+      "features": {
+        "feature_thread": true,
+        "feature_pinning": true
+      },
+      "default_country_code": "CN",
+      "setting_defaults": {
+        "breadcrumbs": true
+      },
+      "disable_custom_urls": true,
+      "disable_guests": true
+    }
+
+---
+# Deployment: Element Web
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: element-web
+  namespace: semantic-router-matrix
+  labels:
+    app: element-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: element-web
+  template:
+    metadata:
+      labels:
+        app: element-web
+    spec:
+      containers:
+        - name: element-web
+          image: vectorim/element-web:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+              name: http
+          volumeMounts:
+            - name: config
+              mountPath: /app/config.json
+              subPath: config.json
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 3
+            periodSeconds: 10
+      volumes:
+        - name: config
+          configMap:
+            name: element-config
+
+---
+# Service: Element Web
+apiVersion: v1
+kind: Service
+metadata:
+  name: element-web
+  namespace: semantic-router-matrix
+  labels:
+    app: element-web
+spec:
+  selector:
+    app: element-web
+  ports:
+    - port: 80
+      targetPort: 80
+      name: http
+  type: ClusterIP
+
+---
+# Ingress: Matrix 服务
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: matrix-ingress
+  namespace: semantic-router-matrix
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: matrix.semantic-router.local
+      http:
+        paths:
+          - path: /_matrix
+            pathType: Prefix
+            backend:
+              service:
+                name: tuwunel
+                port:
+                  number: 6167
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: element-web
+                port:
+                  number: 80
+
+---
+# Job: 初始化 Matrix 用户
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: matrix-init
+  namespace: semantic-router-matrix
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: init
+          image: curlimages/curl:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              MATRIX_SERVER="http://tuwunel:6167"
+              
+              # 等待服务就绪
+              echo "Waiting for Matrix server..."
+              for i in $(seq 1 30); do
+                if curl -sf "${MATRIX_SERVER}/_matrix/client/versions" > /dev/null 2>&1; then
+                  echo "Matrix server ready!"
+                  break
+                fi
+                sleep 2
+              done
+              
+              # 注册用户函数
+              register_user() {
+                local username="$1"
+                curl -sf -X POST "${MATRIX_SERVER}/_matrix/client/v3/register" \
+                  -H "Content-Type: application/json" \
+                  -d "{
+                    \"username\": \"${username}\",
+                    \"password\": \"${REG_TOKEN}\",
+                    \"registration_token\": \"${REG_TOKEN}\",
+                    \"device_id\": \"semantic-router-${username}\"
+                  }" || echo "User ${username} may already exist"
+              }
+              
+              echo "Creating system users..."
+              register_user "system"
+              register_user "admin"
+              register_user "leader"
+              
+              echo "Matrix initialization complete!"
+          env:
+            - name: REG_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: matrix-secrets
+                  key: registration-token

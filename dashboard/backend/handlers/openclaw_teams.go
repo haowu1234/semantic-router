@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -144,9 +145,54 @@ func (h *OpenClawHandler) TeamsHandler() http.HandlerFunc {
 					return
 				}
 			}
-			if _, err := h.ensureDefaultRoomLocked(created); err != nil {
-				log.Printf("openclaw: failed to ensure default room after creating team %s: %v", created.ID, err)
+		if _, err := h.ensureDefaultRoomLocked(created); err != nil {
+			log.Printf("openclaw: failed to ensure default room after creating team %s: %v", created.ID, err)
+		}
+
+		// Create Matrix room for the team - this is REQUIRED for team communication
+		// If Matrix room creation fails, the team creation also fails
+		if h.matrixBridge != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			// Collect existing team members for initial invite
+			var members []string
+			if leaderID != "" {
+				members = append(members, leaderID)
 			}
+
+			matrixRoomID, err := h.matrixBridge.CreateRoom(ctx, created.Name+" Room", created.ID, members)
+			if err != nil {
+				// Matrix room is required - fail the team creation
+				log.Printf("openclaw: failed to create Matrix room for team %s: %v", created.ID, err)
+				// Remove the team we just added since Matrix room failed
+				teams = teams[:len(teams)-1]
+				if saveErr := h.saveTeams(teams); saveErr != nil {
+					log.Printf("openclaw: failed to rollback team creation: %v", saveErr)
+				}
+				h.mu.Unlock()
+				writeJSONError(w, fmt.Sprintf("Failed to create Matrix room for team: %v", err), http.StatusInternalServerError)
+				return
+			}
+
+			log.Printf("openclaw: created Matrix room for team %s: %s", created.ID, matrixRoomID)
+			created.MatrixRoomID = matrixRoomID
+			// Update teams in storage
+			for i, t := range teams {
+				if t.ID == created.ID {
+					teams[i].MatrixRoomID = matrixRoomID
+					break
+				}
+			}
+			if err := h.saveTeams(teams); err != nil {
+				log.Printf("openclaw: failed to save team with Matrix room ID: %v", err)
+			}
+
+			// 注册 Room ID 映射，让 MatrixBridge 知道 native room ID 对应的实际 Matrix room ID
+			nativeRoomID := defaultRoomIDForTeam(created.ID)
+			h.matrixBridge.RegisterRoomMapping(nativeRoomID, matrixRoomID)
+			log.Printf("openclaw: registered room mapping: %s -> %s", nativeRoomID, matrixRoomID)
+		}
 
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
@@ -161,7 +207,15 @@ func (h *OpenClawHandler) TeamsHandler() http.HandlerFunc {
 
 func (h *OpenClawHandler) TeamByIDHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		teamID := sanitizeTeamID(strings.TrimPrefix(r.URL.Path, "/api/openclaw/teams/"))
+		path := strings.TrimPrefix(r.URL.Path, "/api/openclaw/teams/")
+
+		// Check for /repair-matrix sub-path
+		if strings.HasSuffix(path, "/repair-matrix") {
+			h.TeamRepairMatrixHandler().ServeHTTP(w, r)
+			return
+		}
+
+		teamID := sanitizeTeamID(path)
 		if teamID == "" {
 			writeJSONError(w, "team id required in path", http.StatusBadRequest)
 			return
@@ -378,5 +432,99 @@ func (h *OpenClawHandler) TeamByIDHandler() http.HandlerFunc {
 		default:
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
+	}
+}
+
+// TeamRepairMatrixHandler handles POST /api/openclaw/teams/{id}/repair-matrix
+// Creates a Matrix room for teams that don't have one (migration fix for old teams)
+func (h *OpenClawHandler) TeamRepairMatrixHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		if h.readOnly {
+			http.Error(w, `{"error":"Read-only mode enabled"}`, http.StatusForbidden)
+			return
+		}
+
+		if h.matrixBridge == nil {
+			writeJSONError(w, "Matrix is not enabled", http.StatusPreconditionFailed)
+			return
+		}
+
+		// Extract team ID from URL path
+		path := strings.TrimPrefix(r.URL.Path, "/api/openclaw/teams/")
+		parts := strings.Split(path, "/")
+		if len(parts) < 2 || parts[1] != "repair-matrix" {
+			writeJSONError(w, "Invalid URL format, expected /api/openclaw/teams/{id}/repair-matrix", http.StatusBadRequest)
+			return
+		}
+		teamID := parts[0]
+
+		h.mu.Lock()
+		defer h.mu.Unlock()
+
+		teams, err := h.loadTeams()
+		if err != nil {
+			writeJSONError(w, fmt.Sprintf("Failed to load teams: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		var team *TeamEntry
+		var teamIndex int = -1
+		for i := range teams {
+			if teams[i].ID == teamID {
+				team = &teams[i]
+				teamIndex = i
+				break
+			}
+		}
+
+		if team == nil {
+			writeJSONError(w, fmt.Sprintf("Team %s not found", teamID), http.StatusNotFound)
+			return
+		}
+
+		if team.MatrixRoomID != "" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success":      true,
+				"message":      "Team already has a Matrix room",
+				"matrixRoomId": team.MatrixRoomID,
+				"repaired":     false,
+			})
+			return
+		}
+
+		// Create Matrix room
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		matrixRoomID, err := h.matrixBridge.CreateRoom(ctx, team.Name+" Room", team.ID, nil)
+		if err != nil {
+			writeJSONError(w, fmt.Sprintf("Failed to create Matrix room: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		// Save the room ID
+		teams[teamIndex].MatrixRoomID = matrixRoomID
+		if err := h.saveTeams(teams); err != nil {
+			log.Printf("openclaw: failed to save team after repair: %v", err)
+		}
+
+		// 注册 Room ID 映射
+		nativeRoomID := defaultRoomIDForTeam(teamID)
+		h.matrixBridge.RegisterRoomMapping(nativeRoomID, matrixRoomID)
+		log.Printf("openclaw: repaired Matrix room for team %s: %s (mapping: %s -> %s)", teamID, matrixRoomID, nativeRoomID, matrixRoomID)
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":      true,
+			"message":      "Matrix room created successfully",
+			"matrixRoomId": matrixRoomID,
+			"repaired":     true,
+		})
 	}
 }

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -326,20 +327,68 @@ func writeSSE(w http.ResponseWriter, flusher http.Flusher, eventName string, pay
 }
 
 func (h *OpenClawHandler) appendRoomMessage(roomID string, message ClawRoomMessage) error {
-	h.mu.Lock()
-	messages, err := h.loadRoomMessages(roomID)
-	if err != nil {
-		h.mu.Unlock()
-		return err
-	}
-	messages = append(messages, message)
-	if err := h.saveRoomMessages(roomID, messages); err != nil {
-		h.mu.Unlock()
-		return err
-	}
-	h.mu.Unlock()
+	// Matrix-first: 先发送到 Matrix
+	if h.matrixBridge != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
 
-	// Broadcast to WebSocket clients (also handles SSE backward compatibility)
+		// 确保消息有正确的 roomID 和 teamID
+		message.RoomID = roomID
+		if message.TeamID == "" {
+			// 尝试从 room 获取 teamID
+			h.mu.RLock()
+			rooms, _ := h.loadRooms()
+			h.mu.RUnlock()
+			if room := findRoomByID(rooms, roomID); room != nil {
+				message.TeamID = room.TeamID
+			}
+		}
+
+		// 解析 @leader 等别名为实际的 Worker 名称
+		// 这是因为 Matrix 中没有 @leader 用户，只有 @aaa, @bbb 等实际 Worker 用户
+		message.Mentions = h.resolveMentionAliases(message.TeamID, message.Mentions)
+
+		// 🆕 混合注入：元数据（给系统）+ 正文（给 AI）
+		// - 元数据：结构化数据，供 Dashboard/Router 系统使用（OpenClaw 不读取）
+		// - 正文：自然语言上下文，OpenClaw 会直接传给 AI
+		if message.SenderType == "user" && len(message.Mentions) > 0 && message.TeamID != "" {
+			teamContext := h.buildTeamContextForMatrix(message.TeamID, message.Mentions)
+			if message.Metadata == nil {
+				message.Metadata = make(map[string]string)
+			}
+			// 元数据层：结构化数据（供系统回流/分析使用）
+			for k, v := range teamContext {
+				message.Metadata[k] = v
+			}
+			// 正文层：把团队成员指南注入到消息正文（OpenClaw 会传给 AI）
+			if guide := teamContext["semantic_router.team_mention_guide"]; guide != "" {
+				message.Content = message.Content + "\n\n---\n[Team Context]\n" + guide
+			}
+			log.Printf("openclaw: injected team context (metadata=%d fields, body augmented)", len(teamContext))
+		}
+
+		if err := h.matrixBridge.SendMessage(ctx, &message); err != nil {
+			log.Printf("openclaw: failed to send message to Matrix: %v", err)
+			// Matrix 发送失败，返回错误（不再 fallback 到本地存储）
+			return fmt.Errorf("failed to send message to Matrix: %w", err)
+		}
+	} else {
+		// Matrix 未启用，回退到本地存储（仅用于开发/测试）
+		h.mu.Lock()
+		messages, err := h.loadRoomMessages(roomID)
+		if err != nil {
+			h.mu.Unlock()
+			return err
+		}
+		messages = append(messages, message)
+		if err := h.saveRoomMessages(roomID, messages); err != nil {
+			h.mu.Unlock()
+			return err
+		}
+		h.mu.Unlock()
+	}
+
+	// 广播到 WebSocket 客户端（乐观 UI 更新）
 	h.publishRoomWSEvent(roomID, WSOutboundMessage{
 		Type:    WSTypeNewMessage,
 		Message: &message,
@@ -386,6 +435,214 @@ func workerAliases(worker ContainerEntry) []string {
 		aliases = append(aliases, alias)
 	}
 	return aliases
+}
+
+// buildTeamContextForMatrix 构建团队上下文信息，用于放入 Matrix 消息的 metadata
+// 这样 Worker 的 Matrix Plugin 可以获取完整的团队信息，无需额外查询
+func (h *OpenClawHandler) buildTeamContextForMatrix(teamID string, mentions []string) map[string]string {
+	result := make(map[string]string)
+
+	if teamID == "" {
+		return result
+	}
+
+	h.mu.RLock()
+	teams, err := h.loadTeams()
+	if err != nil {
+		h.mu.RUnlock()
+		return result
+	}
+	var team *TeamEntry
+	for i := range teams {
+		if teams[i].ID == teamID {
+			team = &teams[i]
+			break
+		}
+	}
+	if team == nil {
+		h.mu.RUnlock()
+		return result
+	}
+
+	entries, _ := h.loadRegistry()
+	h.mu.RUnlock()
+
+	workers := teamWorkers(entries, teamID)
+	if len(workers) == 0 {
+		return result
+	}
+
+	leader := resolveTeamLeader(*team, workers)
+
+	// 1. 构建 team_mention_guide（团队成员信息）
+	// 这里使用一个通用版本，不绑定到特定的 self worker
+	teamMentionGuide := buildTeamMentionGuideGeneric(*team, workers, leader)
+	result["semantic_router.team_mention_guide"] = teamMentionGuide
+
+	// 2. 添加 leader 信息
+	if leader != nil {
+		result["semantic_router.leader_id"] = leader.Name
+		result["semantic_router.leader_name"] = workerDisplayName(*leader)
+	}
+
+	// 3. 构建 workers JSON（供 Worker 解析）
+	workersJSON := buildWorkersJSON(workers)
+	result["semantic_router.team_workers"] = workersJSON
+
+	// 4. 添加 team 基础信息
+	result["semantic_router.team_name"] = team.Name
+
+	log.Printf("openclaw: built team context for matrix: team=%s, workers=%d, leader=%v",
+		teamID, len(workers), leader != nil)
+
+	return result
+}
+
+// buildTeamMentionGuideGeneric 构建通用的团队成员指南（不绑定到特定 self worker）
+func buildTeamMentionGuideGeneric(team TeamEntry, workers []ContainerEntry, leader *ContainerEntry) string {
+	if len(workers) == 0 {
+		return "No teammates registered."
+	}
+
+	sorted := append([]ContainerEntry(nil), workers...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+
+	lines := make([]string, 0, len(sorted)+5)
+	if leader != nil {
+		leaderRole := strings.TrimSpace(leader.AgentRole)
+		if leaderRole == "" {
+			leaderRole = "leader"
+		}
+		lines = append(
+			lines,
+			fmt.Sprintf(
+				"Leader: @%s = %s (%s)",
+				leader.Name,
+				workerDisplayName(*leader),
+				leaderRole,
+			),
+		)
+	} else {
+		lines = append(lines, "No leader is assigned yet.")
+	}
+
+	lines = append(lines, "Team members:")
+	for _, member := range sorted {
+		roleKind := normalizeRoleKind(member.RoleKind)
+		if roleKind != "leader" {
+			roleKind = "worker"
+		}
+		roleText := strings.TrimSpace(member.AgentRole)
+		if roleText == "" {
+			roleText = roleKind
+		}
+		displayName := workerDisplayName(member)
+		line := fmt.Sprintf("- @%s = %s (%s)", member.Name, displayName, roleText)
+		if leader != nil && member.Name == leader.Name {
+			line += " [leader]"
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// buildWorkersJSON 构建 workers 的 JSON 表示，供 Worker 解析使用
+func buildWorkersJSON(workers []ContainerEntry) string {
+	type workerInfo struct {
+		Name        string `json:"name"`
+		DisplayName string `json:"displayName"`
+		Role        string `json:"role"`
+		RoleKind    string `json:"roleKind"`
+	}
+	infos := make([]workerInfo, 0, len(workers))
+	for _, w := range workers {
+		infos = append(infos, workerInfo{
+			Name:        w.Name,
+			DisplayName: workerDisplayName(w),
+			Role:        w.AgentRole,
+			RoleKind:    normalizeRoleKind(w.RoleKind),
+		})
+	}
+	data, err := json.Marshal(infos)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
+// resolveMentionAliases 将消息中的别名（如 @leader, @all）解析为实际的 Worker 名称
+// 这是因为 Matrix 中没有 @leader 用户，只有实际的 Worker 用户（如 @aaa, @bbb）
+// 如果不解析，Worker 的 Matrix Plugin 将收不到 mention 通知
+func (h *OpenClawHandler) resolveMentionAliases(teamID string, mentions []string) []string {
+	if len(mentions) == 0 || teamID == "" {
+		return mentions
+	}
+
+	h.mu.RLock()
+	teams, err := h.loadTeams()
+	if err != nil {
+		h.mu.RUnlock()
+		return mentions
+	}
+	var team *TeamEntry
+	for i := range teams {
+		if teams[i].ID == teamID {
+			team = &teams[i]
+			break
+		}
+	}
+	if team == nil {
+		h.mu.RUnlock()
+		return mentions
+	}
+
+	entries, _ := h.loadRegistry()
+	h.mu.RUnlock()
+
+	workers := teamWorkers(entries, teamID)
+	if len(workers) == 0 {
+		return mentions
+	}
+
+	leader := resolveTeamLeader(*team, workers)
+
+	// 构建解析后的 mentions 列表
+	resolved := make([]string, 0, len(mentions))
+	seen := make(map[string]bool)
+
+	for _, mention := range mentions {
+		token := strings.ToLower(strings.TrimSpace(mention))
+		if token == "" {
+			continue
+		}
+
+		switch token {
+		case "leader":
+			// @leader → 实际 leader 的名称（如 "aaa"）
+			if leader != nil && !seen[leader.Name] {
+				resolved = append(resolved, leader.Name)
+				seen[leader.Name] = true
+				log.Printf("openclaw: resolved @leader -> @%s for team %s", leader.Name, teamID)
+			}
+		case "all":
+			// @all → 所有 Worker 的名称
+			for _, worker := range workers {
+				if !seen[worker.Name] {
+					resolved = append(resolved, worker.Name)
+					seen[worker.Name] = true
+				}
+			}
+			log.Printf("openclaw: resolved @all -> %d workers for team %s", len(workers), teamID)
+		default:
+			// 其他 mentions 保持不变
+			if !seen[token] {
+				resolved = append(resolved, token)
+				seen[token] = true
+			}
+		}
+	}
+
+	return resolved
 }
 
 func resolveMentionTargetsWithFallback(
@@ -815,13 +1072,35 @@ func (h *OpenClawHandler) roomAutomationLock(roomID string) *sync.Mutex {
 }
 
 func roomMessageAutomationProcessed(message ClawRoomMessage) bool {
+	// 检查内存缓存（Matrix 模式）
+	if message.RoomID != "" && message.ID != "" {
+		cacheKey := message.RoomID + ":" + message.ID
+		if _, ok := processedMessagesCache.Load(cacheKey); ok {
+			return true
+		}
+	}
+
+	// 检查消息 metadata（本地存储模式）
 	if message.Metadata == nil {
 		return false
 	}
 	return strings.TrimSpace(message.Metadata[roomAutomationProcessedAtKey]) != ""
 }
 
+// processedMessagesCache 用于 Matrix 模式下追踪已处理的消息
+// Key: roomID:messageID, Value: timestamp
+var processedMessagesCache = sync.Map{}
+
 func (h *OpenClawHandler) markRoomMessageAutomationProcessed(roomID, messageID string) error {
+	// Matrix 模式：使用内存缓存追踪已处理的消息
+	// 因为 Matrix 消息是不可变的，我们不能直接修改消息的 metadata
+	if h.matrixBridge != nil {
+		cacheKey := roomID + ":" + messageID
+		processedMessagesCache.Store(cacheKey, time.Now().UTC().Format(time.RFC3339Nano))
+		return nil
+	}
+
+	// 本地存储模式：修改消息的 metadata
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -853,6 +1132,15 @@ func (h *OpenClawHandler) markRoomMessageAutomationProcessed(roomID, messageID s
 }
 
 func (h *OpenClawHandler) processRoomUserMessage(roomID string, triggerMessageID string) {
+	// Matrix-Only 模式：当 Matrix 启用时，不主动调用 Worker
+	// Worker 的 Matrix Plugin 会自己监听 @mention 并响应
+	// Dashboard 只负责发送消息到 Matrix，不负责触发 Worker
+	if h.matrixBridge != nil {
+		log.Printf("openclaw: Matrix-Only mode - skipping processRoomUserMessage, Worker will respond via Matrix Plugin (room=%s, msg=%s)", roomID, triggerMessageID)
+		return
+	}
+
+	// 以下是 Matrix 未启用时的本地处理逻辑（仅用于开发/测试）
 	lock := h.roomAutomationLock(roomID)
 	lock.Lock()
 	defer lock.Unlock()
@@ -875,8 +1163,21 @@ func (h *OpenClawHandler) processRoomUserMessage(roomID string, triggerMessageID
 		rooms, roomErr := h.loadRooms()
 		teams, teamErr := h.loadTeams()
 		entries, entryErr := h.loadRegistry()
-		messages, msgErr := h.loadRoomMessages(roomID)
 		h.mu.RUnlock()
+
+		// 获取消息：Matrix-first
+		var messages []ClawRoomMessage
+		var msgErr error
+		if h.matrixBridge != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			messages, msgErr = h.matrixBridge.GetMessages(ctx, roomID)
+			cancel()
+		} else {
+			h.mu.RLock()
+			messages, msgErr = h.loadRoomMessages(roomID)
+			h.mu.RUnlock()
+		}
+
 		if roomErr != nil || teamErr != nil || entryErr != nil || msgErr != nil {
 			log.Printf(
 				"openclaw: room automation prefetch failed room=%s roomErr=%v teamErr=%v entryErr=%v msgErr=%v",
@@ -1282,14 +1583,9 @@ func (h *OpenClawHandler) handleRoomMessages(w http.ResponseWriter, r *http.Requ
 	case http.MethodGet:
 		h.mu.RLock()
 		rooms, roomErr := h.loadRooms()
-		messages, msgErr := h.loadRoomMessages(roomID)
 		h.mu.RUnlock()
 		if roomErr != nil {
 			writeJSONError(w, fmt.Sprintf("Failed to load rooms: %v", roomErr), http.StatusInternalServerError)
-			return
-		}
-		if msgErr != nil {
-			writeJSONError(w, fmt.Sprintf("Failed to load room messages: %v", msgErr), http.StatusInternalServerError)
 			return
 		}
 		if findRoomByID(rooms, roomID) == nil {
@@ -1306,6 +1602,32 @@ func (h *OpenClawHandler) handleRoomMessages(w http.ResponseWriter, r *http.Requ
 				limit = n
 			}
 		}
+
+		var messages []ClawRoomMessage
+		var msgErr error
+
+		// Matrix-first: 优先从 Matrix 获取消息
+		if h.matrixBridge != nil {
+			ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+			defer cancel()
+			messages, msgErr = h.matrixBridge.GetMessages(ctx, roomID)
+			if msgErr != nil {
+				log.Printf("openclaw: failed to get messages from Matrix for room %s: %v", roomID, msgErr)
+				// Matrix 获取失败，返回错误（不再 fallback 到本地）
+				writeJSONError(w, fmt.Sprintf("Failed to load room messages from Matrix: %v", msgErr), http.StatusInternalServerError)
+				return
+			}
+		} else {
+			// Matrix 未启用，回退到本地存储（仅用于开发/测试）
+			h.mu.RLock()
+			messages, msgErr = h.loadRoomMessages(roomID)
+			h.mu.RUnlock()
+			if msgErr != nil {
+				writeJSONError(w, fmt.Sprintf("Failed to load room messages: %v", msgErr), http.StatusInternalServerError)
+				return
+			}
+		}
+
 		if len(messages) > limit {
 			messages = messages[len(messages)-limit:]
 		}

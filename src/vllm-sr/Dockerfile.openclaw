@@ -1,0 +1,106 @@
+# ============================================================
+# OpenClaw with Built-in Matrix Plugin
+# ============================================================
+# Based on johnlanni/openclaw fork which has Matrix plugin compiled
+# from source, avoiding version incompatibility issues with the
+# official @openclaw/matrix npm package.
+#
+# This solves the "Cannot find module keyed-async-queue" error
+# that occurs when using ghcr.io/openclaw/openclaw:latest with
+# the Matrix plugin installed at runtime.
+#
+# Build:
+#   docker build -f src/vllm-sr/Dockerfile.openclaw -t openclaw-matrix:latest .
+#
+# Usage:
+#   Set OPENCLAW_BASE_IMAGE=openclaw-matrix:latest when running vllm-sr
+# ============================================================
+
+FROM node:22-slim AS builder
+
+# Build args
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG http_proxy
+ARG https_proxy
+ARG NPM_REGISTRY=https://registry.npmjs.org/
+
+# Set proxy environment variables for build
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    http_proxy=${http_proxy} \
+    https_proxy=${https_proxy}
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    git python3 make g++ curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install pnpm
+RUN npm install -g pnpm
+
+WORKDIR /build
+
+# Clone and build OpenClaw from johnlanni's fork
+# This fork has Matrix plugin integrated and working
+RUN git clone --depth 1 --single-branch \
+        https://github.com/johnlanni/openclaw.git . && \
+    git fetch --depth 1 origin df5225e1fc310158f84f888b74ba2ea815190181 && \
+    git checkout df5225e1fc310158f84f888b74ba2ea815190181 && \
+    pnpm config set registry ${NPM_REGISTRY} && \
+    pnpm install && \
+    pnpm build && \
+    pnpm ui:build
+
+# Verify Matrix native addon is built (critical for Matrix to work)
+RUN echo "==> Verifying Matrix SDK native addon..." && \
+    ADDON_DIR=/build/node_modules/.pnpm/@matrix-org+matrix-sdk-crypto-nodejs@0.4.0/node_modules/@matrix-org/matrix-sdk-crypto-nodejs && \
+    ls "$ADDON_DIR"/matrix-sdk-crypto.linux-*.node 2>/dev/null | grep -q . \
+        || (echo "WARNING: matrix-sdk-crypto native addon not found - Matrix may not work on this arch" && exit 0) && \
+    echo "==> Native addon check passed: $(ls $ADDON_DIR/matrix-sdk-crypto.linux-*.node 2>/dev/null || echo 'not found')"
+
+# Clean up unnecessary files to reduce image size
+RUN rm -rf \
+    .git .github \
+    test \
+    docker-compose.yml Dockerfile* \
+    scripts/git-hooks \
+    assets README-header.png \
+    .secrets.baseline .pre-commit-config.yaml \
+    .dockerignore .gitignore .gitattributes \
+    .oxfmtrc.jsonc .oxlintrc.json .shellcheckrc \
+    .detect-secrets.cfg .npmrc \
+    .env.example appcast.xml \
+    vitest*.config.ts tsdown.config.ts fly*.toml render.yaml
+
+# ============================================================
+# Final runtime image
+# ============================================================
+FROM node:22-slim
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    git curl ca-certificates procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy built OpenClaw
+COPY --from=builder /build /app
+
+WORKDIR /app
+
+# Set up OpenClaw environment
+ENV PATH="/app/packages/clawdbot/node_modules/.bin:${PATH}"
+# Don't set OPENCLAW_CONFIG_PATH - let it use default or mount point
+
+# Default state directory
+RUN mkdir -p /state /config
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD node -e "fetch('http://127.0.0.1:18790/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+# OpenClaw gateway port
+EXPOSE 18790
+
+# Default command - start OpenClaw
+CMD ["openclaw"]

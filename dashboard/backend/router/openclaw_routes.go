@@ -1,11 +1,14 @@
 package router
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/vllm-project/semantic-router/dashboard/backend/config"
 	"github.com/vllm-project/semantic-router/dashboard/backend/handlers"
@@ -20,7 +23,78 @@ func newOpenClawHandler(cfg *config.Config) *handlers.OpenClawHandler {
 
 	openClawHandler := handlers.NewOpenClawHandler(cfg.OpenClawDataDir, cfg.ReadonlyMode)
 	openClawHandler.SetRouterConfigPath(cfg.AbsConfigPath)
+
+	// Initialize Matrix client for OpenClaw if Matrix is enabled
+	// This allows dynamic registration of worker agent users
+	if matrixEnabled := os.Getenv("MATRIX_ENABLED"); matrixEnabled == "true" {
+		initializeMatrixForOpenClaw(openClawHandler)
+	}
+
 	return openClawHandler
+}
+
+func initializeMatrixForOpenClaw(openClawHandler *handlers.OpenClawHandler) {
+	matrixURL := strings.TrimSpace(os.Getenv("MATRIX_INTERNAL_URL"))
+	matrixDomain := strings.TrimSpace(os.Getenv("MATRIX_DOMAIN"))
+	matrixRegToken := strings.TrimSpace(os.Getenv("MATRIX_REG_TOKEN"))
+	matrixSystemUser := strings.TrimSpace(os.Getenv("MATRIX_SYSTEM_USER"))
+	matrixSystemAccessToken := strings.TrimSpace(os.Getenv("MATRIX_SYSTEM_ACCESS_TOKEN"))
+
+	if matrixSystemUser == "" {
+		matrixSystemUser = "system"
+	}
+	if matrixDomain == "" {
+		matrixDomain = "matrix.vllm-sr.local"
+	}
+
+	if matrixURL == "" || (matrixRegToken == "" && matrixSystemAccessToken == "") {
+		log.Printf("Warning: MATRIX_ENABLED=true but MATRIX_INTERNAL_URL or (MATRIX_REG_TOKEN/MATRIX_SYSTEM_ACCESS_TOKEN) not set (worker agents will not have Matrix access)")
+		return
+	}
+
+	matrixClient, err := handlers.NewMatrixClient(handlers.MatrixClientConfig{
+		HomeserverURL:     matrixURL,
+		Domain:            matrixDomain,
+		SystemUser:        matrixSystemUser,
+		RegToken:          matrixRegToken,
+		SystemAccessToken: matrixSystemAccessToken,
+	})
+	if err != nil {
+		log.Printf("Warning: failed to initialize Matrix client for OpenClaw: %v (worker agents will not have Matrix access)", err)
+		return
+	}
+
+	openClawHandler.SetMatrixClient(matrixClient, matrixDomain)
+	authMethod := "password"
+	if matrixSystemAccessToken != "" {
+		authMethod = "access_token"
+	}
+	log.Printf("Matrix client initialized for OpenClaw worker registration (homeserver=%s, domain=%s, auth=%s)", matrixURL, matrixDomain, authMethod)
+
+	// Initialize MatrixBridge for Matrix-only communication mode
+	// NOTE: 已移除 hybrid 模式，所有通信强制走 Matrix
+	matrixBridge, bridgeErr := handlers.NewMatrixBridge(handlers.MatrixBridgeConfig{
+		Mode:              handlers.ModeMatrix, // 强制 Matrix 模式，无降级
+		ServerDomain:      matrixDomain,
+		InternalURL:       matrixURL,
+		RegToken:          matrixRegToken,
+		SystemUser:        matrixSystemUser,
+		SystemAccessToken: matrixSystemAccessToken,
+		DedupTTL:          5 * time.Minute,
+	})
+	if bridgeErr != nil {
+		log.Printf("Warning: failed to initialize MatrixBridge: %v (Matrix communication disabled - this is now a fatal condition)", bridgeErr)
+		return
+	}
+
+	openClawHandler.SetMatrixBridge(matrixBridge)
+	log.Printf("MatrixBridge initialized for Matrix-only communication (mode=matrix, no fallback)")
+
+	// Start MatrixSyncWorker to sync messages from Matrix to WebSocket clients
+	// 使用 NewMatrixSyncWorkerWithHandler 以便能够广播到 WebSocket/SSE 客户端
+	syncWorker := handlers.NewMatrixSyncWorkerWithHandler(matrixClient, matrixBridge, openClawHandler)
+	go syncWorker.Start(context.Background())
+	log.Printf("MatrixSyncWorker started for real-time message synchronization")
 }
 
 func registerOpenClawRoutes(

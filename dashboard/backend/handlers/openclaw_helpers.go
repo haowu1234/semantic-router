@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -311,6 +312,85 @@ func writeOpenClawConfig(path string, req ProvisionRequest) error {
 	if req.Container.BrowserEnabled {
 		cfg["browser"] = map[string]interface{}{"enabled": true, "headless": true, "noSandbox": true}
 	}
+
+	// Matrix channel configuration for agent-to-agent and human-in-the-loop communication
+	if req.Container.MatrixEnabled && req.Container.MatrixHomeserver != "" {
+		domain := req.Container.MatrixDomain
+		if domain == "" {
+			domain = "matrix.vllm-sr.local"
+		}
+		adminUser := req.Container.MatrixAdminUser
+		if adminUser == "" {
+			adminUser = "admin"
+		}
+
+		// Determine if this is a leader agent (by role, not name)
+		isLeader := req.RoleKind == "leader"
+
+		// Derive the Matrix user ID for this agent
+		matrixUsername := deriveMatrixUsername(req.Container.ContainerName, req.Identity.Name)
+		matrixUserID := fmt.Sprintf("@%s:%s", matrixUsername, domain)
+
+		// Build allowFrom list for DM policy
+		// Leader can receive DMs from admin and system (Dashboard)
+		// Worker cannot receive DMs (empty list, not null)
+		dmAllowFrom := []string{}  // Initialize to empty slice to ensure JSON [] instead of null
+		if isLeader {
+			dmAllowFrom = []string{
+				fmt.Sprintf("@%s:%s", adminUser, domain),
+				fmt.Sprintf("@system:%s", domain),
+			}
+		}
+
+		// 构建团队协作 SystemPrompt
+		// 这个 prompt 教 AI 如何解读 [Team Context] 以及如何与队友协作
+		teamSystemPrompt := `You are a collaborative AI agent in a team environment.
+
+When you see [Team Context] in a message, it contains:
+- Who the team Leader is (you can mention them with @leader alias)
+- List of team members and their roles/responsibilities
+
+You can @mention teammates to collaborate on tasks. For example:
+- @leader for coordination or decisions
+- @<name> to delegate or request help from a specific teammate
+
+Always be helpful and coordinate effectively with your team.`
+
+		matrixChannel := map[string]interface{}{
+			"enabled":    true,
+			"homeserver": req.Container.MatrixHomeserver,
+			"userId":     matrixUserID,
+			"dm": map[string]interface{}{
+				"policy":    "allowlist",
+				"allowFrom": dmAllowFrom,
+			},
+			"groupPolicy": "allowlist",
+			// groupAllowFrom: who can invite this agent to group rooms
+			// Must include @system since Dashboard uses @system identity to invite agents
+			"groupAllowFrom": []string{
+				fmt.Sprintf("@%s:%s", adminUser, domain),
+				fmt.Sprintf("@leader:%s", domain),
+				fmt.Sprintf("@system:%s", domain),
+			},
+			"groups": map[string]interface{}{
+				"*": map[string]interface{}{
+					"allow":          true,
+					"requireMention": true,
+					"systemPrompt":   teamSystemPrompt,
+				},
+			},
+		}
+
+		// Add access token if provided
+		if req.Container.MatrixAccessToken != "" {
+			matrixChannel["accessToken"] = req.Container.MatrixAccessToken
+		}
+
+		cfg["channels"] = map[string]interface{}{
+			"matrix": matrixChannel,
+		}
+	}
+
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
@@ -324,6 +404,21 @@ func generateDockerRunCmd(runtime string, req ProvisionRequest, dataDir string) 
 		`node -e "fetch('http://127.0.0.1:%d/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"`,
 		req.Container.GatewayPort,
 	)
+
+	// Build startup command.
+	// With openclaw-matrix image, Matrix plugin is already built-in, no runtime installation needed.
+	// The entrypoint doesn't start gateway automatically, so we can enable plugin first then start gateway.
+	var startupCmd string
+	if req.Container.MatrixEnabled {
+		// Enable Matrix plugin first, then start gateway
+		// Note: "plugins enable" only modifies config, doesn't require gateway to be running
+		startupCmd = `openclaw plugins enable matrix; openclaw gateway --allow-unconfigured --bind lan`
+	} else {
+		startupCmd = `openclaw gateway --allow-unconfigured --bind lan`
+	}
+
+	// Mount the entire data directory as /config instead of a single file to avoid
+	// EBUSY errors when OpenClaw uses atomic rename() to update the config.
 	return fmt.Sprintf(`%s run -d \
   --name %s \
   --user 0:0 \
@@ -334,21 +429,33 @@ func generateDockerRunCmd(runtime string, req ProvisionRequest, dataDir string) 
   --health-start-period 15s \
   --health-retries 3 \
   -v %s/workspace:/workspace \
-  -v %s/openclaw.json:/config/openclaw.json:ro \
+  -v %s:/config \
   -v %s:/state \
   -e OPENCLAW_CONFIG_PATH=/config/openclaw.json \
   -e OPENCLAW_STATE_DIR=/state \
   %s \
-  node openclaw.mjs gateway --allow-unconfigured --bind lan`,
+  %s`,
 		runtime, req.Container.ContainerName, req.Container.NetworkMode, healthCmd,
-		dataDir, dataDir, volumeName, req.Container.BaseImage)
+		dataDir, dataDir, volumeName, req.Container.BaseImage, startupCmd)
 }
 
 func generateComposeYAML(req ProvisionRequest, dataDir string) string {
 	volumeName := "openclaw-state-" + req.Container.ContainerName
 	networkMode := req.Container.NetworkMode
 
+	// Build command based on whether Matrix is enabled
+	// Matrix plugin (@openclaw/matrix) is not bundled in base image; install at startup.
+	// Use "plugins enable matrix" to explicitly activate the plugin before starting gateway.
+	var commandYAML string
+	if req.Container.MatrixEnabled {
+		commandYAML = `command: ["sh", "-c", "set -e; if ! ls /state/plugins/@openclaw/matrix 2>/dev/null; then echo 'Installing @openclaw/matrix plugin...'; node openclaw.mjs plugins install @openclaw/matrix; fi; node openclaw.mjs plugins enable matrix; exec node openclaw.mjs gateway --allow-unconfigured --bind lan"]`
+	} else {
+		commandYAML = `command: ["node", "openclaw.mjs", "gateway", "--allow-unconfigured", "--bind", "lan"]`
+	}
+
 	// For bridge network names (not "host" or "container:xxx"), use the networks syntax.
+	// Mount the entire data directory as /config instead of a single file to avoid
+	// EBUSY errors when OpenClaw uses atomic rename() to update the config.
 	if networkMode != "" && networkMode != "host" && !strings.HasPrefix(networkMode, "container:") {
 		return fmt.Sprintf(`services:
   openclaw:
@@ -359,7 +466,7 @@ func generateComposeYAML(req ProvisionRequest, dataDir string) string {
       - %s
     volumes:
       - %s/workspace:/workspace
-      - %s/openclaw.json:/config/openclaw.json:ro
+      - %s:/config
       - %s:/state
     environment:
       OPENCLAW_CONFIG_PATH: /config/openclaw.json
@@ -370,7 +477,7 @@ func generateComposeYAML(req ProvisionRequest, dataDir string) string {
       timeout: 5s
       start_period: 15s
       retries: 3
-    command: ["node", "openclaw.mjs", "gateway", "--allow-unconfigured", "--bind", "lan"]
+    %s
     restart: unless-stopped
 
 networks:
@@ -382,9 +489,11 @@ volumes:
 `, req.Container.BaseImage, req.Container.ContainerName, networkMode,
 			dataDir, dataDir, volumeName,
 			req.Container.GatewayPort,
+			commandYAML,
 			networkMode, volumeName)
 	}
 
+	// Host or container:xxx network mode - also use directory mount for config
 	return fmt.Sprintf(`services:
   openclaw:
     image: %s
@@ -393,7 +502,7 @@ volumes:
     network_mode: %s
     volumes:
       - %s/workspace:/workspace
-      - %s/openclaw.json:/config/openclaw.json:ro
+      - %s:/config
       - %s:/state
     environment:
       OPENCLAW_CONFIG_PATH: /config/openclaw.json
@@ -404,7 +513,7 @@ volumes:
       timeout: 5s
       start_period: 15s
       retries: 3
-    command: ["node", "openclaw.mjs", "gateway", "--allow-unconfigured", "--bind", "lan"]
+    %s
     restart: unless-stopped
 
 volumes:
@@ -412,6 +521,7 @@ volumes:
 `, req.Container.BaseImage, req.Container.ContainerName, networkMode,
 		dataDir, dataDir, volumeName,
 		req.Container.GatewayPort,
+		commandYAML,
 		volumeName)
 }
 
@@ -446,4 +556,106 @@ You wake up fresh each session. These files are your continuity:
 
 Skills provide your tools. When you need one, check its SKILL.md.
 `
+}
+
+// deriveMatrixUsername derives a Matrix username from container name and identity name.
+// The username is sanitized to be valid for Matrix user IDs.
+func deriveMatrixUsername(containerName, identityName string) string {
+	// Prefer identity name if available, otherwise use container name
+	raw := strings.TrimSpace(identityName)
+	if raw == "" {
+		raw = containerName
+	}
+
+	// Sanitize for Matrix username (lowercase, alphanumeric, dots, dashes, underscores)
+	// Matrix user localpart: a-z, 0-9, ., _, =, -, /
+	cleaned := strings.ToLower(raw)
+	var result strings.Builder
+	for _, r := range cleaned {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
+			result.WriteRune(r)
+		} else if r == ' ' || r == ':' {
+			result.WriteRune('_')
+		}
+	}
+
+	username := result.String()
+	if username == "" {
+		username = "worker"
+	}
+
+	// Ensure username doesn't start with underscore or dot
+	username = strings.TrimLeft(username, "._")
+	if username == "" {
+		username = "worker"
+	}
+
+	// Limit length (Matrix allows up to 255, but keep it reasonable)
+	const maxLen = 32
+	if len(username) > maxLen {
+		username = username[:maxLen]
+	}
+
+	return username
+}
+
+// ensureMatrixUserAndGetToken registers a Matrix user (if not exists) and returns an access token.
+// This uses the shared registration token for user creation.
+func (h *OpenClawHandler) ensureMatrixUserAndGetToken(username string) (string, error) {
+	if h.matrixClient == nil {
+		return "", fmt.Errorf("matrix client not initialized")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Generate a deterministic password for the agent based on username and a secret
+	// In production, consider using a more secure password derivation
+	password := generateAgentPassword(username)
+
+	// Try to login first (user may already exist)
+	token, err := h.matrixClient.LoginUser(ctx, username, password)
+	if err == nil {
+		log.Printf("Matrix user %q already exists, logged in successfully", username)
+		return token, nil
+	}
+
+	// Login failed, try to register
+	log.Printf("Matrix login failed for %q, attempting registration: %v", username, err)
+
+	// RegisterUser now returns access token directly
+	token, regErr := h.matrixClient.RegisterUser(ctx, username, password)
+	if regErr != nil {
+		// Check if user already exists (M_USER_IN_USE)
+		if strings.Contains(regErr.Error(), "M_USER_IN_USE") {
+			// User exists but password might be different, this is an error state
+			return "", fmt.Errorf("matrix user %q exists but login failed (password mismatch?): %w", username, err)
+		}
+		return "", fmt.Errorf("failed to register matrix user %q: %w", username, regErr)
+	}
+
+	log.Printf("Matrix user %q registered successfully", username)
+	return token, nil
+}
+
+// generateAgentPassword generates a deterministic password for an agent.
+// Uses the registration token as a seed to create reproducible passwords.
+func generateAgentPassword(username string) string {
+	regToken := strings.TrimSpace(os.Getenv("MATRIX_REG_TOKEN"))
+	if regToken == "" {
+		regToken = "default-agent-password-seed"
+	}
+
+	// Simple deterministic password: hash of username + regToken
+	// This ensures the same agent always gets the same password
+	combined := username + ":" + regToken
+
+	// Use a simple hash (in production, use HMAC or similar)
+	h := 0
+	for _, c := range combined {
+		h = 31*h + int(c)
+	}
+
+	// Generate password string
+	return fmt.Sprintf("agent-%s-%x", username, uint32(h))
 }

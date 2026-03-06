@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -218,6 +219,41 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 			}
 		}
 
+		// Inject Matrix configuration if MATRIX_ENABLED is set
+		// NOTE: Matrix is now REQUIRED - agents cannot be provisioned without valid Matrix credentials
+		if matrixEnabled := os.Getenv("MATRIX_ENABLED"); matrixEnabled == "true" {
+			req.Container.MatrixEnabled = true
+			req.Container.MatrixHomeserver = os.Getenv("MATRIX_INTERNAL_URL")
+			req.Container.MatrixDomain = os.Getenv("MATRIX_DOMAIN")
+			req.Container.MatrixAdminUser = os.Getenv("MATRIX_ADMIN_USER")
+
+		// Determine matrix username from container name
+		// Use a sanitized version of the agent name as the matrix user
+		matrixUsername := deriveMatrixUsername(req.Container.ContainerName, req.Identity.Name)
+
+		// Both leader and worker agents now dynamically register their own Matrix user
+		// This ensures each agent has a unique identity in Matrix that matches their OpenClaw config
+		if h.matrixClient == nil {
+			h.mu.Unlock()
+			writeJSONError(w, "Matrix is required but MatrixClient is not initialized. Ensure Matrix server is running and MATRIX_ENABLED=true.", http.StatusPreconditionFailed)
+			return
+		}
+		token, err := h.ensureMatrixUserAndGetToken(matrixUsername)
+		if err != nil {
+			h.mu.Unlock()
+			writeJSONError(w, fmt.Sprintf("Matrix is required but failed to setup Matrix user for %s %s: %v", req.RoleKind, req.Container.ContainerName, err), http.StatusPreconditionFailed)
+			return
+		}
+		req.Container.MatrixAccessToken = token
+		log.Printf("Matrix communication enabled for %s %s: homeserver=%s domain=%s user=%s",
+			req.RoleKind, req.Container.ContainerName, req.Container.MatrixHomeserver, req.Container.MatrixDomain, matrixUsername)
+		} else {
+			// Matrix is not enabled - this is now an error condition
+			h.mu.Unlock()
+			writeJSONError(w, "Matrix communication is required. Set MATRIX_ENABLED=true and ensure Matrix server is running.", http.StatusPreconditionFailed)
+			return
+		}
+
 		configPath := filepath.Join(cDir, "openclaw.json")
 		err = writeOpenClawConfig(configPath, req)
 		if err != nil {
@@ -266,15 +302,32 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 			"--health-start-period", "15s",
 			"--health-retries", "3",
 		)
+		// Mount the entire config directory instead of a single file to avoid
+		// EBUSY errors when OpenClaw uses atomic rename() to update the config.
+		// Bind-mounting a single file prevents rename() from working across
+		// filesystem boundaries.
+		configDir := filepath.Dir(configPath) // absCDir itself contains openclaw.json
 		args = append(args,
 			"-v", absCDir+"/workspace:/workspace",
-			"-v", absCDir+"/openclaw.json:/config/openclaw.json:ro",
+			"-v", configDir+":/config",
 			"-v", volumeName+":/state",
 			"-e", "OPENCLAW_CONFIG_PATH=/config/openclaw.json",
 			"-e", "OPENCLAW_STATE_DIR=/state",
 			req.Container.BaseImage,
-			"node", "openclaw.mjs", "gateway", "--allow-unconfigured", "--bind", "lan",
 		)
+
+		// Build the startup command.
+		// With openclaw-matrix image, Matrix plugin is already built-in, no runtime installation needed.
+		// For official ghcr.io/openclaw/openclaw image, Matrix would need runtime install but has
+		// compatibility issues (keyed-async-queue error), so we recommend using openclaw-matrix.
+		var startupCmd string
+		if req.Container.MatrixEnabled {
+			// Enable Matrix plugin at startup via config or CLI flag
+			startupCmd = `exec openclaw gateway --allow-unconfigured --bind lan`
+		} else {
+			startupCmd = `exec openclaw gateway --allow-unconfigured --bind lan`
+		}
+		args = append(args, "sh", "-c", startupCmd)
 		// In bridge mode, no port conflict retry needed since containers have isolated namespaces.
 		// In host mode, retry with alternate ports if user didn't explicitly request a port.
 		startAttemptLimit := 1
@@ -424,6 +477,66 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 			log.Printf("openclaw: failed to save teams after provisioning: %v", err)
 		}
 		h.mu.Unlock()
+
+		// Invite worker to team's Matrix room if MatrixBridge is available
+		if h.matrixBridge != nil && h.matrixClient != nil && h.matrixDomain != "" {
+			// Find the team's actual Matrix room ID
+			var teamMatrixRoomID string
+			var teamIndex int = -1
+			var teamEntry *TeamEntry
+			for i, t := range teams {
+				if t.ID == req.TeamID {
+					teamMatrixRoomID = t.MatrixRoomID
+					teamIndex = i
+					teamEntry = &teams[i]
+					break
+				}
+			}
+
+			// Auto-create Matrix room for teams that don't have one (migration fix)
+			if teamMatrixRoomID == "" && teamEntry != nil {
+				log.Printf("openclaw: team %s has no Matrix room, creating one now...", req.TeamID)
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				roomID, err := h.matrixBridge.CreateRoom(ctx, teamEntry.Name+" Room", teamEntry.ID, nil)
+				cancel()
+				if err != nil {
+					log.Printf("openclaw: failed to auto-create Matrix room for team %s: %v", req.TeamID, err)
+				} else {
+					log.Printf("openclaw: auto-created Matrix room for team %s: %s", req.TeamID, roomID)
+					teamMatrixRoomID = roomID
+					// Update team entry in memory and persist
+					if teamIndex >= 0 {
+						teams[teamIndex].MatrixRoomID = roomID
+						if saveErr := h.saveTeams(teams); saveErr != nil {
+							log.Printf("openclaw: failed to persist team Matrix room ID: %v", saveErr)
+						}
+					}
+					// 注册 Room ID 映射
+					nativeRoomID := defaultRoomIDForTeam(req.TeamID)
+					h.matrixBridge.RegisterRoomMapping(nativeRoomID, roomID)
+					log.Printf("openclaw: registered room mapping: %s -> %s", nativeRoomID, roomID)
+				}
+			}
+
+			if teamMatrixRoomID == "" {
+				log.Printf("openclaw: team %s has no Matrix room ID, cannot invite worker %s", req.TeamID, req.Container.ContainerName)
+			} else {
+				go func(workerName, matrixRoomID, matrixDomain string) {
+					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+
+					// Build Matrix user ID for the worker
+					workerMatrixUserID := fmt.Sprintf("@%s:%s", deriveMatrixUsername(workerName, ""), matrixDomain)
+
+					// Invite worker to the team's Matrix room using the actual room ID
+					if err := h.matrixClient.InviteUser(ctx, matrixRoomID, workerMatrixUserID); err != nil {
+						log.Printf("openclaw: failed to invite worker %s to Matrix room %s: %v", workerName, matrixRoomID, err)
+					} else {
+						log.Printf("openclaw: invited worker %s to Matrix room %s", workerName, matrixRoomID)
+					}
+				}(req.Container.ContainerName, teamMatrixRoomID, h.matrixDomain)
+			}
+		}
 
 		dockerCmd := generateDockerRunCmd(runtimeName, req, absCDir)
 		composeYAML := generateComposeYAML(req, absCDir)

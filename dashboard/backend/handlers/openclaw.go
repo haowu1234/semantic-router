@@ -39,15 +39,16 @@ type ContainerEntry struct {
 }
 
 type TeamEntry struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Vibe        string `json:"vibe,omitempty"`
-	Role        string `json:"role,omitempty"`
-	Principal   string `json:"principal,omitempty"`
-	Description string `json:"description,omitempty"`
-	LeaderID    string `json:"leaderId,omitempty"`
-	CreatedAt   string `json:"createdAt"`
-	UpdatedAt   string `json:"updatedAt"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Vibe          string `json:"vibe,omitempty"`
+	Role          string `json:"role,omitempty"`
+	Principal     string `json:"principal,omitempty"`
+	Description   string `json:"description,omitempty"`
+	LeaderID      string `json:"leaderId,omitempty"`
+	MatrixRoomID  string `json:"matrixRoomId,omitempty"` // Actual Matrix room ID (e.g., !abc123:domain)
+	CreatedAt     string `json:"createdAt"`
+	UpdatedAt     string `json:"updatedAt"`
 }
 
 type OpenClawHandler struct {
@@ -58,10 +59,59 @@ type OpenClawHandler struct {
 	roomSSEClients   sync.Map
 	roomSSELastEvent sync.Map
 	roomAutomationMu sync.Map
+	// Matrix client for registering worker agents (optional, nil if Matrix disabled)
+	matrixClient *MatrixClient
+	matrixDomain string
+	// Matrix bridge for hybrid native/matrix communication (optional, nil if Matrix disabled)
+	matrixBridge *MatrixBridge
 }
 
 func NewOpenClawHandler(dataDir string, readOnly bool) *OpenClawHandler {
 	return &OpenClawHandler{dataDir: dataDir, readOnly: readOnly}
+}
+
+// SetMatrixClient sets the Matrix client for dynamic worker user registration.
+// This should be called when MATRIX_ENABLED=true during initialization.
+func (h *OpenClawHandler) SetMatrixClient(client *MatrixClient, domain string) {
+	h.matrixClient = client
+	h.matrixDomain = domain
+}
+
+// SetMatrixBridge sets the Matrix bridge for Matrix-only communication.
+// NOTE: Native store syncing has been removed - all communication goes through Matrix
+func (h *OpenClawHandler) SetMatrixBridge(bridge *MatrixBridge) {
+	h.matrixBridge = bridge
+	// 初始化已有 Team 的 Room ID 映射
+	h.initRoomIDMappings()
+}
+
+// initRoomIDMappings 从已有的 Team 数据初始化 Room ID 映射
+// 这是为了让 MatrixBridge 知道 native room ID 对应的实际 Matrix room ID
+func (h *OpenClawHandler) initRoomIDMappings() {
+	if h.matrixBridge == nil {
+		return
+	}
+
+	teams, err := h.loadTeams()
+	if err != nil {
+		log.Printf("openclaw: failed to load teams for room ID mapping: %v", err)
+		return
+	}
+
+	for _, team := range teams {
+		if team.MatrixRoomID != "" {
+			// 使用 team ID 作为 native room ID 的基础
+			// 因为 default room 的 ID 通常是 "team-{teamID}" 格式
+			nativeRoomID := defaultRoomIDForTeam(team.ID)
+			h.matrixBridge.RegisterRoomMapping(nativeRoomID, team.MatrixRoomID)
+			log.Printf("openclaw: registered room mapping: %s -> %s", nativeRoomID, team.MatrixRoomID)
+		}
+	}
+}
+
+// GetMatrixBridge returns the Matrix bridge (may be nil if Matrix is disabled)
+func (h *OpenClawHandler) GetMatrixBridge() *MatrixBridge {
+	return h.matrixBridge
 }
 
 func (h *OpenClawHandler) SetRouterConfigPath(configPath string) {
@@ -137,8 +187,28 @@ func (h *OpenClawHandler) saveTeams(entries []TeamEntry) error {
 }
 
 func findTeamByID(entries []TeamEntry, id string) *TeamEntry {
+	// First pass: exact ID match
 	for i := range entries {
 		if entries[i].ID == id {
+			return &entries[i]
+		}
+	}
+	// Second pass: case-insensitive ID match
+	lowerID := strings.ToLower(id)
+	for i := range entries {
+		if strings.ToLower(entries[i].ID) == lowerID {
+			return &entries[i]
+		}
+	}
+	// Third pass: ID prefix match (e.g., "vllm-sr" matches "vllm-sr-lab")
+	for i := range entries {
+		if strings.HasPrefix(strings.ToLower(entries[i].ID), lowerID) {
+			return &entries[i]
+		}
+	}
+	// Fourth pass: case-insensitive name match
+	for i := range entries {
+		if strings.EqualFold(entries[i].Name, id) {
 			return &entries[i]
 		}
 	}
@@ -263,7 +333,10 @@ func defaultOpenClawBaseImage() string {
 	if candidate := strings.TrimSpace(os.Getenv("OPENCLAW_BASE_IMAGE")); candidate != "" {
 		return candidate
 	}
-	return "ghcr.io/openclaw/openclaw:latest"
+	// Default to openclaw-matrix which has Matrix plugin built-in.
+	// This avoids the "keyed-async-queue" module error that occurs when
+	// installing @openclaw/matrix at runtime on the official image.
+	return "openclaw-matrix:latest"
 }
 
 func defaultOpenClawModelBaseURL() string {
@@ -458,26 +531,27 @@ func (h *OpenClawHandler) discoverLocalOpenClawImage() string {
 
 func (h *OpenClawHandler) resolveBaseImage(requested string) string {
 	requested = strings.TrimSpace(requested)
-	if requested != "" && requested != "ghcr.io/openclaw/openclaw:latest" {
+	defaultImg := defaultOpenClawBaseImage() // openclaw-matrix:latest
+
+	// If user explicitly requested a non-default image, use it
+	if requested != "" && requested != defaultImg && requested != "ghcr.io/openclaw/openclaw:latest" {
 		return requested
 	}
 
-	configured := defaultOpenClawBaseImage()
-	if configured != "ghcr.io/openclaw/openclaw:latest" {
-		return configured
+	// Try the configured default (openclaw-matrix:latest)
+	if h.imageExists(defaultImg) {
+		return defaultImg
 	}
 
-	if h.imageExists("ghcr.io/openclaw/openclaw:latest") {
-		return "ghcr.io/openclaw/openclaw:latest"
-	}
-
+	// Fallback: try to discover any local openclaw image
 	discovered := h.discoverLocalOpenClawImage()
 	if discovered != "" {
-		log.Printf("openclaw: auto-selected local image %q (ghcr.io/openclaw/openclaw:latest missing)", discovered)
+		log.Printf("openclaw: auto-selected local image %q (%s missing)", discovered, defaultImg)
 		return discovered
 	}
 
-	return "ghcr.io/openclaw/openclaw:latest"
+	// Last resort: return default and let ensureImageAvailable handle the error
+	return defaultImg
 }
 
 func (h *OpenClawHandler) ensureImageAvailable(image string) error {
@@ -582,6 +656,12 @@ type ContainerConfig struct {
 	BrowserEnabled bool   `json:"browserEnabled"`
 	BaseImage      string `json:"baseImage"`
 	NetworkMode    string `json:"networkMode"`
+	// Matrix communication configuration (injected by dashboard when MATRIX_ENABLED=true)
+	MatrixEnabled     bool   `json:"matrixEnabled,omitempty"`
+	MatrixHomeserver  string `json:"matrixHomeserver,omitempty"`
+	MatrixDomain      string `json:"matrixDomain,omitempty"`
+	MatrixAccessToken string `json:"matrixAccessToken,omitempty"`
+	MatrixAdminUser   string `json:"matrixAdminUser,omitempty"`
 }
 
 type ProvisionRequest struct {
