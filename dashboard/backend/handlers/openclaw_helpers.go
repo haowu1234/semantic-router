@@ -384,11 +384,12 @@ func generateDockerRunCmd(runtime string, req ProvisionRequest, dataDir string) 
 
 	// Build startup command.
 	// With openclaw-matrix image, Matrix plugin is already built-in, no runtime installation needed.
+	// The entrypoint doesn't start gateway automatically, so we can enable plugin first then start gateway.
 	var startupCmd string
 	if req.Container.MatrixEnabled {
-		// Enable Matrix plugin at startup by running doctor --fix first
-		// This applies the matrix configuration and enables the plugin
-		startupCmd = `openclaw doctor --fix && openclaw gateway --allow-unconfigured --bind lan`
+		// Enable Matrix plugin first, then start gateway
+		// Note: "plugins enable" only modifies config, doesn't require gateway to be running
+		startupCmd = `openclaw plugins enable matrix; openclaw gateway --allow-unconfigured --bind lan`
 	} else {
 		startupCmd = `openclaw gateway --allow-unconfigured --bind lan`
 	}
@@ -421,10 +422,10 @@ func generateComposeYAML(req ProvisionRequest, dataDir string) string {
 
 	// Build command based on whether Matrix is enabled
 	// Matrix plugin (@openclaw/matrix) is not bundled in base image; install at startup.
-	// Run doctor --fix to enable matrix plugin before starting gateway.
+	// Use "plugins enable matrix" to explicitly activate the plugin before starting gateway.
 	var commandYAML string
 	if req.Container.MatrixEnabled {
-		commandYAML = `command: ["sh", "-c", "set -e; if ! ls /state/plugins/@openclaw/matrix 2>/dev/null; then echo 'Installing @openclaw/matrix plugin...'; node openclaw.mjs plugins install @openclaw/matrix; fi; node openclaw.mjs doctor --fix; exec node openclaw.mjs gateway --allow-unconfigured --bind lan"]`
+		commandYAML = `command: ["sh", "-c", "set -e; if ! ls /state/plugins/@openclaw/matrix 2>/dev/null; then echo 'Installing @openclaw/matrix plugin...'; node openclaw.mjs plugins install @openclaw/matrix; fi; node openclaw.mjs plugins enable matrix; exec node openclaw.mjs gateway --allow-unconfigured --bind lan"]`
 	} else {
 		commandYAML = `command: ["node", "openclaw.mjs", "gateway", "--allow-unconfigured", "--bind", "lan"]`
 	}
