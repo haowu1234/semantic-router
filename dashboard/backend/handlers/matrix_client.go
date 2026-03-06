@@ -119,8 +119,8 @@ func NewMatrixClient(config MatrixClientConfig) (*MatrixClient, error) {
 func (c *MatrixClient) validateAndUseToken() error {
 	c.accessToken = c.config.SystemAccessToken
 
-	// 调用 whoami 验证 token 有效性
-	resp, err := c.doRequest("GET", "/_matrix/client/v3/account/whoami", nil)
+	// 调用 whoami 验证 token 有效性（必须使用带 token 的请求）
+	resp, err := c.doRequestWithAuth("GET", "/_matrix/client/v3/account/whoami", nil)
 	if err != nil {
 		return fmt.Errorf("token validation failed: %w", err)
 	}
