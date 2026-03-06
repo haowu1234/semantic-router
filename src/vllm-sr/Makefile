@@ -1,4 +1,4 @@
-.PHONY: help build install test clean docker-build docker-run docker-stop dev-setup dev-serve dev-test rebuild-and-test
+.PHONY: help build install test clean docker-build docker-run docker-stop dev-setup dev-serve dev-test rebuild-and-test openclaw-build
 
 # Configuration
 IMAGE_NAME ?= ghcr.io/vllm-project/semantic-router/vllm-sr
@@ -8,6 +8,11 @@ CONFIG_FILE ?= config.yaml
 OUTPUT_DIR ?= .vllm-sr
 PLATFORMS ?= linux/amd64,linux/arm64
 BUILDX_BUILDER ?= vllm-sr-builder
+
+# OpenClaw with built-in Matrix (solves keyed-async-queue error)
+OPENCLAW_IMAGE ?= openclaw-matrix
+OPENCLAW_TAG ?= latest
+OPENCLAW_FULL_IMAGE = $(OPENCLAW_IMAGE):$(OPENCLAW_TAG)
 
 help:
 	@echo "vLLM Semantic Router CLI - Development Commands"
@@ -50,6 +55,14 @@ help:
 	@echo "  CONFIG_FILE=$(CONFIG_FILE)"
 	@echo "  OUTPUT_DIR=$(OUTPUT_DIR)"
 	@echo "  PLATFORMS=$(PLATFORMS)"
+	@echo "  OPENCLAW_IMAGE=$(OPENCLAW_IMAGE)"
+	@echo ""
+	@echo "OpenClaw (with built-in Matrix):"
+	@echo "  make openclaw-build    - Build OpenClaw image with Matrix compiled in"
+	@echo "                           (solves 'keyed-async-queue' error)"
+	@echo ""
+	@echo "  After building, set env var before running vllm-sr:"
+	@echo "    export OPENCLAW_BASE_IMAGE=$(OPENCLAW_FULL_IMAGE)"
 	@echo ""
 
 # Quick development setup
@@ -195,6 +208,26 @@ clean:
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete
 	@echo "Cleaned"
+
+# Build OpenClaw image with Matrix plugin compiled from source
+# This solves the "Cannot find module keyed-async-queue" error
+openclaw-build:
+	@echo "Building OpenClaw with built-in Matrix plugin..."
+	@echo "Image: $(OPENCLAW_FULL_IMAGE)"
+	@echo ""
+	@echo "This builds from johnlanni/openclaw fork with Matrix compiled in,"
+	@echo "solving version incompatibility with official @openclaw/matrix plugin."
+	@echo ""
+	cd ../.. && docker build \
+		-t $(OPENCLAW_FULL_IMAGE) \
+		-f src/vllm-sr/Dockerfile.openclaw \
+		.
+	@echo ""
+	@echo "OpenClaw image built: $(OPENCLAW_FULL_IMAGE)"
+	@echo ""
+	@echo "To use this image, set environment variable before running vllm-sr:"
+	@echo "  export OPENCLAW_BASE_IMAGE=$(OPENCLAW_FULL_IMAGE)"
+	@echo ""
 
 # Check if Docker image exists
 check-image:
