@@ -370,10 +370,11 @@ func Setup(cfg *config.Config) *http.ServeMux {
 						openClawHandler.SetMatrixBridge(matrixBridge)
 						log.Printf("MatrixBridge initialized for Matrix-only communication (mode=matrix, no fallback)")
 
-						// Start MatrixSyncWorker to sync messages from Matrix to native
-						syncWorker := handlers.NewMatrixSyncWorker(matrixClient, matrixBridge, nil)
+						// Start MatrixSyncWorker to sync messages from Matrix to WebSocket clients
+						// 使用 NewMatrixSyncWorkerWithHandler 以便能够广播到 WebSocket/SSE 客户端
+						syncWorker := handlers.NewMatrixSyncWorkerWithHandler(matrixClient, matrixBridge, openClawHandler)
 						go syncWorker.Start(context.Background())
-						log.Printf("MatrixSyncWorker started for message synchronization")
+						log.Printf("MatrixSyncWorker started for real-time message synchronization")
 					}
 				}
 			} else {

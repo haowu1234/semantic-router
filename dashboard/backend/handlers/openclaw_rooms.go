@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -326,20 +327,45 @@ func writeSSE(w http.ResponseWriter, flusher http.Flusher, eventName string, pay
 }
 
 func (h *OpenClawHandler) appendRoomMessage(roomID string, message ClawRoomMessage) error {
-	h.mu.Lock()
-	messages, err := h.loadRoomMessages(roomID)
-	if err != nil {
-		h.mu.Unlock()
-		return err
-	}
-	messages = append(messages, message)
-	if err := h.saveRoomMessages(roomID, messages); err != nil {
-		h.mu.Unlock()
-		return err
-	}
-	h.mu.Unlock()
+	// Matrix-first: 先发送到 Matrix
+	if h.matrixBridge != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
 
-	// Broadcast to WebSocket clients (also handles SSE backward compatibility)
+		// 确保消息有正确的 roomID 和 teamID
+		message.RoomID = roomID
+		if message.TeamID == "" {
+			// 尝试从 room 获取 teamID
+			h.mu.RLock()
+			rooms, _ := h.loadRooms()
+			h.mu.RUnlock()
+			if room := findRoomByID(rooms, roomID); room != nil {
+				message.TeamID = room.TeamID
+			}
+		}
+
+		if err := h.matrixBridge.SendMessage(ctx, &message); err != nil {
+			log.Printf("openclaw: failed to send message to Matrix: %v", err)
+			// Matrix 发送失败，返回错误（不再 fallback 到本地存储）
+			return fmt.Errorf("failed to send message to Matrix: %w", err)
+		}
+	} else {
+		// Matrix 未启用，回退到本地存储（仅用于开发/测试）
+		h.mu.Lock()
+		messages, err := h.loadRoomMessages(roomID)
+		if err != nil {
+			h.mu.Unlock()
+			return err
+		}
+		messages = append(messages, message)
+		if err := h.saveRoomMessages(roomID, messages); err != nil {
+			h.mu.Unlock()
+			return err
+		}
+		h.mu.Unlock()
+	}
+
+	// 广播到 WebSocket 客户端（乐观 UI 更新）
 	h.publishRoomWSEvent(roomID, WSOutboundMessage{
 		Type:    WSTypeNewMessage,
 		Message: &message,
@@ -815,13 +841,35 @@ func (h *OpenClawHandler) roomAutomationLock(roomID string) *sync.Mutex {
 }
 
 func roomMessageAutomationProcessed(message ClawRoomMessage) bool {
+	// 检查内存缓存（Matrix 模式）
+	if message.RoomID != "" && message.ID != "" {
+		cacheKey := message.RoomID + ":" + message.ID
+		if _, ok := processedMessagesCache.Load(cacheKey); ok {
+			return true
+		}
+	}
+
+	// 检查消息 metadata（本地存储模式）
 	if message.Metadata == nil {
 		return false
 	}
 	return strings.TrimSpace(message.Metadata[roomAutomationProcessedAtKey]) != ""
 }
 
+// processedMessagesCache 用于 Matrix 模式下追踪已处理的消息
+// Key: roomID:messageID, Value: timestamp
+var processedMessagesCache = sync.Map{}
+
 func (h *OpenClawHandler) markRoomMessageAutomationProcessed(roomID, messageID string) error {
+	// Matrix 模式：使用内存缓存追踪已处理的消息
+	// 因为 Matrix 消息是不可变的，我们不能直接修改消息的 metadata
+	if h.matrixBridge != nil {
+		cacheKey := roomID + ":" + messageID
+		processedMessagesCache.Store(cacheKey, time.Now().UTC().Format(time.RFC3339Nano))
+		return nil
+	}
+
+	// 本地存储模式：修改消息的 metadata
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -875,8 +923,21 @@ func (h *OpenClawHandler) processRoomUserMessage(roomID string, triggerMessageID
 		rooms, roomErr := h.loadRooms()
 		teams, teamErr := h.loadTeams()
 		entries, entryErr := h.loadRegistry()
-		messages, msgErr := h.loadRoomMessages(roomID)
 		h.mu.RUnlock()
+
+		// 获取消息：Matrix-first
+		var messages []ClawRoomMessage
+		var msgErr error
+		if h.matrixBridge != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			messages, msgErr = h.matrixBridge.GetMessages(ctx, roomID)
+			cancel()
+		} else {
+			h.mu.RLock()
+			messages, msgErr = h.loadRoomMessages(roomID)
+			h.mu.RUnlock()
+		}
+
 		if roomErr != nil || teamErr != nil || entryErr != nil || msgErr != nil {
 			log.Printf(
 				"openclaw: room automation prefetch failed room=%s roomErr=%v teamErr=%v entryErr=%v msgErr=%v",
@@ -1282,14 +1343,9 @@ func (h *OpenClawHandler) handleRoomMessages(w http.ResponseWriter, r *http.Requ
 	case http.MethodGet:
 		h.mu.RLock()
 		rooms, roomErr := h.loadRooms()
-		messages, msgErr := h.loadRoomMessages(roomID)
 		h.mu.RUnlock()
 		if roomErr != nil {
 			writeJSONError(w, fmt.Sprintf("Failed to load rooms: %v", roomErr), http.StatusInternalServerError)
-			return
-		}
-		if msgErr != nil {
-			writeJSONError(w, fmt.Sprintf("Failed to load room messages: %v", msgErr), http.StatusInternalServerError)
 			return
 		}
 		if findRoomByID(rooms, roomID) == nil {
@@ -1306,6 +1362,32 @@ func (h *OpenClawHandler) handleRoomMessages(w http.ResponseWriter, r *http.Requ
 				limit = n
 			}
 		}
+
+		var messages []ClawRoomMessage
+		var msgErr error
+
+		// Matrix-first: 优先从 Matrix 获取消息
+		if h.matrixBridge != nil {
+			ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+			defer cancel()
+			messages, msgErr = h.matrixBridge.GetMessages(ctx, roomID)
+			if msgErr != nil {
+				log.Printf("openclaw: failed to get messages from Matrix for room %s: %v", roomID, msgErr)
+				// Matrix 获取失败，返回错误（不再 fallback 到本地）
+				writeJSONError(w, fmt.Sprintf("Failed to load room messages from Matrix: %v", msgErr), http.StatusInternalServerError)
+				return
+			}
+		} else {
+			// Matrix 未启用，回退到本地存储（仅用于开发/测试）
+			h.mu.RLock()
+			messages, msgErr = h.loadRoomMessages(roomID)
+			h.mu.RUnlock()
+			if msgErr != nil {
+				writeJSONError(w, fmt.Sprintf("Failed to load room messages: %v", msgErr), http.StatusInternalServerError)
+				return
+			}
+		}
+
 		if len(messages) > limit {
 			messages = messages[len(messages)-limit:]
 		}

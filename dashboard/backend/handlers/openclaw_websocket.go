@@ -318,34 +318,10 @@ func (c *WSClient) handleSendMessage(msg WSInboundMessage) {
 }
 
 // appendRoomMessageWS appends a message and broadcasts via WebSocket
+// NOTE: Now uses appendRoomMessage which sends to Matrix first
 func (h *OpenClawHandler) appendRoomMessageWS(roomID string, message ClawRoomMessage) error {
-	h.mu.Lock()
-	messages, err := h.loadRoomMessages(roomID)
-	if err != nil {
-		h.mu.Unlock()
-		return err
-	}
-	messages = append(messages, message)
-	if err := h.saveRoomMessages(roomID, messages); err != nil {
-		h.mu.Unlock()
-		return err
-	}
-	h.mu.Unlock()
-
-	// Broadcast via WebSocket
-	h.publishRoomWSEvent(roomID, WSOutboundMessage{
-		Type:    WSTypeNewMessage,
-		Message: &message,
-	})
-
-	// Also publish to SSE for backward compatibility
-	h.roomSSELastEvent.Store(roomID, clawRoomStreamEvent{
-		Type:    "message",
-		RoomID:  roomID,
-		Message: &message,
-	})
-
-	return nil
+	// Use the unified appendRoomMessage which handles Matrix-first logic
+	return h.appendRoomMessage(roomID, message)
 }
 
 // sendError sends an error message to the client

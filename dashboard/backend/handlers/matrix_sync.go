@@ -11,7 +11,7 @@ import (
 type MatrixSyncWorker struct {
 	client       *MatrixClient
 	bridge       *MatrixBridge
-	nativeHub    *WebSocketHub
+	handler      *OpenClawHandler // 直接引用 handler 以便使用 publishRoomWSEvent
 	stopCh       chan struct{}
 	nextBatch    string
 	pollInterval time.Duration
@@ -19,7 +19,7 @@ type MatrixSyncWorker struct {
 	running      bool
 }
 
-// WebSocketHub WebSocket 广播接口 (需要在 openclaw_websocket.go 中实现)
+// WebSocketHub WebSocket 广播接口 (保留用于向后兼容)
 type WebSocketHub interface {
 	BroadcastToRoom(roomID string, message interface{})
 }
@@ -29,7 +29,17 @@ func NewMatrixSyncWorker(client *MatrixClient, bridge *MatrixBridge, hub *WebSoc
 	return &MatrixSyncWorker{
 		client:       client,
 		bridge:       bridge,
-		nativeHub:    hub,
+		stopCh:       make(chan struct{}),
+		pollInterval: 30 * time.Second, // long-polling timeout
+	}
+}
+
+// NewMatrixSyncWorkerWithHandler 创建同步 Worker（推荐）
+func NewMatrixSyncWorkerWithHandler(client *MatrixClient, bridge *MatrixBridge, handler *OpenClawHandler) *MatrixSyncWorker {
+	return &MatrixSyncWorker{
+		client:       client,
+		bridge:       bridge,
+		handler:      handler,
 		stopCh:       make(chan struct{}),
 		pollInterval: 30 * time.Second, // long-polling timeout
 	}
@@ -160,13 +170,19 @@ func (w *MatrixSyncWorker) handleRoomMessage(roomID string, event *MatrixEvent) 
 	nativeRoomID := w.bridge.UnmapRoomID(roomID)
 	nativeMsg := w.convertToNativeMessage(nativeRoomID, event)
 
-	// NOTE: Native store syncing has been removed - all messages stay in Matrix
-	// Only broadcast to WebSocket clients for real-time updates
+	// NOTE: Matrix 是唯一的消息存储，不再写入本地 JSON
+	// 仅广播到 WebSocket 客户端以实现实时更新
 
-	// 广播到 WebSocket 客户端
-	if w.nativeHub != nil {
-		(*w.nativeHub).BroadcastToRoom(nativeMsg.RoomID, WSOutboundMessage{
+	// 优先使用 handler.publishRoomWSEvent（更完整的广播逻辑）
+	if w.handler != nil {
+		w.handler.publishRoomWSEvent(nativeMsg.RoomID, WSOutboundMessage{
 			Type:    WSTypeNewMessage,
+			RoomID:  nativeMsg.RoomID,
+			Message: nativeMsg,
+		})
+		// 同时更新 SSE 最后事件缓存
+		w.handler.publishRoomEvent(nativeMsg.RoomID, clawRoomStreamEvent{
+			Type:    "message",
 			RoomID:  nativeMsg.RoomID,
 			Message: nativeMsg,
 		})
