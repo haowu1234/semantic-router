@@ -209,10 +209,23 @@ func (b *MatrixBridge) MapRoomID(nativeID string) string {
 
 // UnmapRoomID 反向映射 Room ID (Matrix → native)
 func (b *MatrixBridge) UnmapRoomID(matrixID string) string {
-	// 格式: !<room_id>:<domain> → <room_id>
+	// 如果不是 Matrix 格式，直接返回
 	if !strings.HasPrefix(matrixID, "!") {
 		return matrixID
 	}
+
+	// 优先从已注册的映射中查找反向映射
+	b.mu.RLock()
+	for nativeID, registeredMatrixID := range b.roomIDMapping {
+		if registeredMatrixID == matrixID {
+			b.mu.RUnlock()
+			return nativeID
+		}
+	}
+	b.mu.RUnlock()
+
+	// Fallback: 简单提取（用于向后兼容，但可能不准确）
+	// 格式: !<room_id>:<domain> → <room_id>
 	parts := strings.SplitN(matrixID[1:], ":", 2)
 	if len(parts) == 0 {
 		return matrixID

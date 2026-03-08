@@ -344,6 +344,10 @@ func (h *OpenClawHandler) appendRoomMessage(roomID string, message ClawRoomMessa
 			}
 		}
 
+		// 解析 @leader 等别名为实际的 Worker 名称
+		// 这是因为 Matrix 中没有 @leader 用户，只有 @aaa, @bbb 等实际 Worker 用户
+		message.Mentions = h.resolveMentionAliases(message.TeamID, message.Mentions)
+
 		if err := h.matrixBridge.SendMessage(ctx, &message); err != nil {
 			log.Printf("openclaw: failed to send message to Matrix: %v", err)
 			// Matrix 发送失败，返回错误（不再 fallback 到本地存储）
@@ -412,6 +416,81 @@ func workerAliases(worker ContainerEntry) []string {
 		aliases = append(aliases, alias)
 	}
 	return aliases
+}
+
+// resolveMentionAliases 将消息中的别名（如 @leader, @all）解析为实际的 Worker 名称
+// 这是因为 Matrix 中没有 @leader 用户，只有实际的 Worker 用户（如 @aaa, @bbb）
+// 如果不解析，Worker 的 Matrix Plugin 将收不到 mention 通知
+func (h *OpenClawHandler) resolveMentionAliases(teamID string, mentions []string) []string {
+	if len(mentions) == 0 || teamID == "" {
+		return mentions
+	}
+
+	h.mu.RLock()
+	teams, err := h.loadTeams()
+	if err != nil {
+		h.mu.RUnlock()
+		return mentions
+	}
+	var team *TeamEntry
+	for i := range teams {
+		if teams[i].ID == teamID {
+			team = &teams[i]
+			break
+		}
+	}
+	if team == nil {
+		h.mu.RUnlock()
+		return mentions
+	}
+
+	entries, _ := h.loadRegistry()
+	h.mu.RUnlock()
+
+	workers := teamWorkers(entries, teamID)
+	if len(workers) == 0 {
+		return mentions
+	}
+
+	leader := resolveTeamLeader(*team, workers)
+
+	// 构建解析后的 mentions 列表
+	resolved := make([]string, 0, len(mentions))
+	seen := make(map[string]bool)
+
+	for _, mention := range mentions {
+		token := strings.ToLower(strings.TrimSpace(mention))
+		if token == "" {
+			continue
+		}
+
+		switch token {
+		case "leader":
+			// @leader → 实际 leader 的名称（如 "aaa"）
+			if leader != nil && !seen[leader.Name] {
+				resolved = append(resolved, leader.Name)
+				seen[leader.Name] = true
+				log.Printf("openclaw: resolved @leader -> @%s for team %s", leader.Name, teamID)
+			}
+		case "all":
+			// @all → 所有 Worker 的名称
+			for _, worker := range workers {
+				if !seen[worker.Name] {
+					resolved = append(resolved, worker.Name)
+					seen[worker.Name] = true
+				}
+			}
+			log.Printf("openclaw: resolved @all -> %d workers for team %s", len(workers), teamID)
+		default:
+			// 其他 mentions 保持不变
+			if !seen[token] {
+				resolved = append(resolved, token)
+				seen[token] = true
+			}
+		}
+	}
+
+	return resolved
 }
 
 func resolveMentionTargetsWithFallback(

@@ -198,6 +198,7 @@ func (w *MatrixSyncWorker) convertToNativeMessage(roomID string, event *MatrixEv
 	senderID := ""
 	senderName := w.bridge.UnmapUserID(event.Sender)
 	teamID := ""
+	nativeRoomID := roomID // 使用传入的 roomID 作为默认值
 
 	if meta, ok := event.Content["semantic_router.sender_type"].(string); ok {
 		senderType = meta
@@ -210,6 +211,10 @@ func (w *MatrixSyncWorker) convertToNativeMessage(roomID string, event *MatrixEv
 	}
 	if meta, ok := event.Content["semantic_router.team_id"].(string); ok {
 		teamID = meta
+	}
+	// 优先使用消息元数据中的 native room ID（最可靠）
+	if meta, ok := event.Content["semantic_router.room_id"].(string); ok && meta != "" {
+		nativeRoomID = meta
 	}
 
 	// 提取 mentions
@@ -231,7 +236,7 @@ func (w *MatrixSyncWorker) convertToNativeMessage(roomID string, event *MatrixEv
 
 	return &ClawRoomMessage{
 		ID:         event.EventID,
-		RoomID:     roomID,
+		RoomID:     nativeRoomID,
 		TeamID:     teamID,
 		SenderType: senderType,
 		SenderID:   senderID,
