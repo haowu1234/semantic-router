@@ -81,6 +81,32 @@ func (h *OpenClawHandler) SetMatrixClient(client *MatrixClient, domain string) {
 // NOTE: Native store syncing has been removed - all communication goes through Matrix
 func (h *OpenClawHandler) SetMatrixBridge(bridge *MatrixBridge) {
 	h.matrixBridge = bridge
+	// 初始化已有 Team 的 Room ID 映射
+	h.initRoomIDMappings()
+}
+
+// initRoomIDMappings 从已有的 Team 数据初始化 Room ID 映射
+// 这是为了让 MatrixBridge 知道 native room ID 对应的实际 Matrix room ID
+func (h *OpenClawHandler) initRoomIDMappings() {
+	if h.matrixBridge == nil {
+		return
+	}
+
+	teams, err := h.loadTeams()
+	if err != nil {
+		log.Printf("openclaw: failed to load teams for room ID mapping: %v", err)
+		return
+	}
+
+	for _, team := range teams {
+		if team.MatrixRoomID != "" {
+			// 使用 team ID 作为 native room ID 的基础
+			// 因为 default room 的 ID 通常是 "team-{teamID}" 格式
+			nativeRoomID := defaultRoomIDForTeam(team.ID)
+			h.matrixBridge.RegisterRoomMapping(nativeRoomID, team.MatrixRoomID)
+			log.Printf("openclaw: registered room mapping: %s -> %s", nativeRoomID, team.MatrixRoomID)
+		}
+	}
 }
 
 // GetMatrixBridge returns the Matrix bridge (may be nil if Matrix is disabled)

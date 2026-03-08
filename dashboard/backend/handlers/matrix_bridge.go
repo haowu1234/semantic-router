@@ -35,10 +35,11 @@ type MatrixBridgeConfig struct {
 // MatrixBridge 通信桥接器
 // NOTE: 已移除 nativeStore 和 roomModes，所有通信强制走 Matrix
 type MatrixBridge struct {
-	config       MatrixBridgeConfig
-	matrixClient *MatrixClient
-	dedupCache   *DedupCache
-	mu           sync.RWMutex
+	config        MatrixBridgeConfig
+	matrixClient  *MatrixClient
+	dedupCache    *DedupCache
+	roomIDMapping map[string]string // native room ID → actual Matrix room ID
+	mu            sync.RWMutex
 }
 
 // DedupCache 消息去重缓存
@@ -97,8 +98,9 @@ func NewMatrixBridge(config MatrixBridgeConfig) (*MatrixBridge, error) {
 	config.Mode = ModeMatrix
 
 	bridge := &MatrixBridge{
-		config:     config,
-		dedupCache: NewDedupCache(config.DedupTTL),
+		config:        config,
+		dedupCache:    NewDedupCache(config.DedupTTL),
+		roomIDMapping: make(map[string]string),
 	}
 
 	// Matrix 客户端是必须的，不再可选
@@ -173,9 +175,35 @@ func (b *MatrixBridge) convertToMatrixMessage(msg *ClawRoomMessage) *MatrixMessa
 	}
 }
 
+// RegisterRoomMapping 注册 Room ID 映射 (native ID → actual Matrix room ID)
+// 这个方法应该在 Team 创建或加载时调用，将 native room ID 映射到实际的 Matrix room ID
+func (b *MatrixBridge) RegisterRoomMapping(nativeID, matrixRoomID string) {
+	if nativeID == "" || matrixRoomID == "" {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.roomIDMapping[nativeID] = matrixRoomID
+}
+
 // MapRoomID 映射 Room ID (native → Matrix)
+// 优先使用已注册的映射，如果没有找到则使用 fallback（用于向后兼容）
 func (b *MatrixBridge) MapRoomID(nativeID string) string {
-	// 格式: !<room_id>:<domain>
+	// 如果已经是 Matrix 格式 (!xxx:domain)，直接返回
+	if strings.HasPrefix(nativeID, "!") {
+		return nativeID
+	}
+
+	// 优先查找已注册的映射
+	b.mu.RLock()
+	if matrixID, ok := b.roomIDMapping[nativeID]; ok {
+		b.mu.RUnlock()
+		return matrixID
+	}
+	b.mu.RUnlock()
+
+	// Fallback: 动态拼接（用于向后兼容，但会产生警告）
+	// 注意：这个 fallback 可能会失败，因为 Matrix 创建房间时返回的是随机 ID
 	return fmt.Sprintf("!%s:%s", nativeID, b.config.ServerDomain)
 }
 

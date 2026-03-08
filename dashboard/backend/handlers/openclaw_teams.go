@@ -187,6 +187,11 @@ func (h *OpenClawHandler) TeamsHandler() http.HandlerFunc {
 			if err := h.saveTeams(teams); err != nil {
 				log.Printf("openclaw: failed to save team with Matrix room ID: %v", err)
 			}
+
+			// 注册 Room ID 映射，让 MatrixBridge 知道 native room ID 对应的实际 Matrix room ID
+			nativeRoomID := defaultRoomIDForTeam(created.ID)
+			h.matrixBridge.RegisterRoomMapping(nativeRoomID, matrixRoomID)
+			log.Printf("openclaw: registered room mapping: %s -> %s", nativeRoomID, matrixRoomID)
 		}
 
 			w.Header().Set("Content-Type", "application/json")
@@ -509,7 +514,10 @@ func (h *OpenClawHandler) TeamRepairMatrixHandler() http.HandlerFunc {
 			log.Printf("openclaw: failed to save team after repair: %v", err)
 		}
 
-		log.Printf("openclaw: repaired Matrix room for team %s: %s", teamID, matrixRoomID)
+		// 注册 Room ID 映射
+		nativeRoomID := defaultRoomIDForTeam(teamID)
+		h.matrixBridge.RegisterRoomMapping(nativeRoomID, matrixRoomID)
+		log.Printf("openclaw: repaired Matrix room for team %s: %s (mapping: %s -> %s)", teamID, matrixRoomID, nativeRoomID, matrixRoomID)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{

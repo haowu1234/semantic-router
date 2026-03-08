@@ -524,6 +524,10 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 							log.Printf("openclaw: failed to persist team Matrix room ID: %v", saveErr)
 						}
 					}
+					// 注册 Room ID 映射
+					nativeRoomID := defaultRoomIDForTeam(req.TeamID)
+					h.matrixBridge.RegisterRoomMapping(nativeRoomID, roomID)
+					log.Printf("openclaw: registered room mapping: %s -> %s", nativeRoomID, roomID)
 				}
 			}
 
