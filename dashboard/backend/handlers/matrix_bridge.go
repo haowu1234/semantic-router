@@ -160,18 +160,30 @@ func (b *MatrixBridge) convertToMatrixMessage(msg *ClawRoomMessage) *MatrixMessa
 		mentions.UserIDs = append(mentions.UserIDs, userID)
 	}
 
+	// 构建基础 metadata
+	metadata := map[string]interface{}{
+		"semantic_router.sender_type": msg.SenderType,
+		"semantic_router.sender_id":   msg.SenderID,
+		"semantic_router.sender_name": msg.SenderName,
+		"semantic_router.room_id":     msg.RoomID,
+		"semantic_router.team_id":     msg.TeamID,
+	}
+
+	// 🆕 合并 ClawRoomMessage 中的额外 Metadata（如团队上下文信息）
+	// 这些字段会被发送到 Matrix，Worker 的 Plugin 可以读取
+	for k, v := range msg.Metadata {
+		// 只处理 semantic_router 前缀的字段，避免污染
+		if strings.HasPrefix(k, "semantic_router.") {
+			metadata[k] = v
+		}
+	}
+
 	return &MatrixMessage{
 		RoomID:   matrixRoomID,
 		MsgType:  "m.text",
 		Body:     msg.Content,
 		Mentions: mentions,
-		Metadata: map[string]interface{}{
-			"semantic_router.sender_type": msg.SenderType,
-			"semantic_router.sender_id":   msg.SenderID,
-			"semantic_router.sender_name": msg.SenderName,
-			"semantic_router.room_id":     msg.RoomID,
-			"semantic_router.team_id":     msg.TeamID,
-		},
+		Metadata: metadata,
 	}
 }
 

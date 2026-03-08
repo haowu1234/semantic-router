@@ -342,6 +342,20 @@ func writeOpenClawConfig(path string, req ProvisionRequest) error {
 			}
 		}
 
+		// 构建团队协作 SystemPrompt
+		// 这个 prompt 教 AI 如何解读 [Team Context] 以及如何与队友协作
+		teamSystemPrompt := `You are a collaborative AI agent in a team environment.
+
+When you see [Team Context] in a message, it contains:
+- Who the team Leader is (you can mention them with @leader alias)
+- List of team members and their roles/responsibilities
+
+You can @mention teammates to collaborate on tasks. For example:
+- @leader for coordination or decisions
+- @<name> to delegate or request help from a specific teammate
+
+Always be helpful and coordinate effectively with your team.`
+
 		matrixChannel := map[string]interface{}{
 			"enabled":    true,
 			"homeserver": req.Container.MatrixHomeserver,
@@ -362,6 +376,7 @@ func writeOpenClawConfig(path string, req ProvisionRequest) error {
 				"*": map[string]interface{}{
 					"allow":          true,
 					"requireMention": true,
+					"systemPrompt":   teamSystemPrompt,
 				},
 			},
 		}
