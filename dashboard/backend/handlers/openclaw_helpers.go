@@ -374,6 +374,13 @@ func writeOpenClawConfig(path string, req ProvisionRequest) error {
 		cfg["channels"] = map[string]interface{}{
 			"matrix": matrixChannel,
 		}
+
+		// 添加 behavior 配置，让 Worker 的 Matrix Plugin 正确工作
+		cfg["behavior"] = map[string]interface{}{
+			"autoJoinInvitedRooms":     true,  // 自动加入被邀请的房间
+			"acknowledgeMessages":      true,  // 确认收到消息
+			"onlyRespondWhenMentioned": true,  // 只在被 @mention 时响应
+		}
 	}
 
 	data, err := json.MarshalIndent(cfg, "", "  ")

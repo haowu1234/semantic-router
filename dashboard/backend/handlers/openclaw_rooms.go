@@ -901,6 +901,15 @@ func (h *OpenClawHandler) markRoomMessageAutomationProcessed(roomID, messageID s
 }
 
 func (h *OpenClawHandler) processRoomUserMessage(roomID string, triggerMessageID string) {
+	// Matrix-Only 模式：当 Matrix 启用时，不主动调用 Worker
+	// Worker 的 Matrix Plugin 会自己监听 @mention 并响应
+	// Dashboard 只负责发送消息到 Matrix，不负责触发 Worker
+	if h.matrixBridge != nil {
+		log.Printf("openclaw: Matrix-Only mode - skipping processRoomUserMessage, Worker will respond via Matrix Plugin (room=%s, msg=%s)", roomID, triggerMessageID)
+		return
+	}
+
+	// 以下是 Matrix 未启用时的本地处理逻辑（仅用于开发/测试）
 	lock := h.roomAutomationLock(roomID)
 	lock.Lock()
 	defer lock.Unlock()
