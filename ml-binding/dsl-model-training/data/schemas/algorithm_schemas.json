@@ -1,0 +1,536 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Algorithm DSL 各算法类型的字段 Schema 定义",
+  "algorithm_types": [
+    "confidence",
+    "ratings",
+    "remom",
+    "static",
+    "elo",
+    "router_dc",
+    "automix",
+    "hybrid",
+    "rl_driven",
+    "gmtrouter",
+    "latency_aware",
+    "knn",
+    "kmeans",
+    "svm"
+  ],
+  "schemas": {
+    "confidence": {
+      "description": "置信度级联算法 - 先尝试小模型，置信度低时升级到大模型",
+      "required": {},
+      "optional": {
+        "confidence_method": {
+          "type": "enum",
+          "values": ["avg_logprob", "margin", "hybrid", "self_verify"],
+          "default": "hybrid",
+          "description": "置信度评估方法"
+        },
+        "threshold": {
+          "type": "float",
+          "min": -10.0,
+          "max": 1.0,
+          "default": -1.0,
+          "description": "置信度升级阈值"
+        },
+        "on_error": {
+          "type": "enum",
+          "values": ["skip", "fail"],
+          "default": "skip",
+          "description": "错误处理方式"
+        },
+        "escalation_order": {
+          "type": "enum",
+          "values": ["size", "cost", "automix"],
+          "default": "size",
+          "description": "模型升级顺序"
+        },
+        "cost_quality_tradeoff": {
+          "type": "float",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.3,
+          "description": "成本质量权衡 (0=质量优先, 1=成本优先)"
+        },
+        "hybrid_weights": {
+          "type": "object",
+          "properties": {
+            "logprob_weight": {"type": "float", "min": 0.0, "max": 1.0},
+            "margin_weight": {"type": "float", "min": 0.0, "max": 1.0}
+          },
+          "description": "混合方法权重"
+        }
+      },
+      "examples": [
+        {
+          "confidence_method": "hybrid",
+          "threshold": 0.5,
+          "on_error": "skip"
+        },
+        {
+          "confidence_method": "hybrid",
+          "threshold": -0.8,
+          "hybrid_weights": {"logprob_weight": 0.6, "margin_weight": 0.4}
+        }
+      ]
+    },
+    "ratings": {
+      "description": "评分算法 - 并发执行所有模型并返回多个选择供比较",
+      "required": {},
+      "optional": {
+        "max_concurrent": {
+          "type": "integer",
+          "min": 0,
+          "max": 100,
+          "default": 0,
+          "description": "最大并发数 (0=无限制)"
+        },
+        "on_error": {
+          "type": "enum",
+          "values": ["skip", "fail"],
+          "default": "skip",
+          "description": "错误处理方式"
+        }
+      },
+      "examples": [
+        {
+          "max_concurrent": 4,
+          "on_error": "skip"
+        }
+      ]
+    },
+    "remom": {
+      "description": "ReMoM算法 - 多轮并行推理与智能合成",
+      "required": {
+        "breadth_schedule": {
+          "type": "integer_array",
+          "min_items": 1,
+          "max_items": 5,
+          "description": "每轮并行调用数"
+        }
+      },
+      "optional": {
+        "model_distribution": {
+          "type": "enum",
+          "values": ["weighted", "equal", "first_only"],
+          "default": "weighted",
+          "description": "模型分布策略"
+        },
+        "temperature": {
+          "type": "float",
+          "min": 0.0,
+          "max": 2.0,
+          "default": 1.0,
+          "description": "采样温度"
+        },
+        "include_reasoning": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否包含推理内容"
+        },
+        "compaction_strategy": {
+          "type": "enum",
+          "values": ["full", "last_n_tokens"],
+          "default": "full",
+          "description": "压缩策略"
+        },
+        "compaction_tokens": {
+          "type": "integer",
+          "min": 100,
+          "max": 10000,
+          "default": 1000,
+          "description": "last_n_tokens策略保留token数"
+        },
+        "max_concurrent": {
+          "type": "integer",
+          "min": 0,
+          "max": 100,
+          "default": 0,
+          "description": "最大并发数"
+        },
+        "on_error": {
+          "type": "enum",
+          "values": ["skip", "fail"],
+          "default": "skip",
+          "description": "错误处理方式"
+        },
+        "include_intermediate_responses": {
+          "type": "boolean",
+          "default": false,
+          "description": "是否保存中间响应"
+        }
+      },
+      "examples": [
+        {
+          "breadth_schedule": [8, 2],
+          "model_distribution": "weighted",
+          "temperature": 1.0,
+          "include_reasoning": true,
+          "on_error": "skip"
+        },
+        {
+          "breadth_schedule": [32],
+          "max_concurrent": 16
+        }
+      ]
+    },
+    "static": {
+      "description": "静态评分算法 - 使用配置中的静态分数",
+      "required": {},
+      "optional": {},
+      "examples": [{}]
+    },
+    "elo": {
+      "description": "Elo评分算法 - 使用Bradley-Terry模型进行模型选择",
+      "required": {},
+      "optional": {
+        "initial_rating": {
+          "type": "integer",
+          "min": 1000,
+          "max": 3000,
+          "default": 1500,
+          "description": "初始评分"
+        },
+        "k_factor": {
+          "type": "integer",
+          "min": 1,
+          "max": 128,
+          "default": 32,
+          "description": "评分波动系数"
+        },
+        "category_weighted": {
+          "type": "boolean",
+          "default": false,
+          "description": "是否按类别加权"
+        },
+        "decay_factor": {
+          "type": "float",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.0,
+          "description": "时间衰减因子"
+        },
+        "min_comparisons": {
+          "type": "integer",
+          "min": 1,
+          "max": 100,
+          "default": 5,
+          "description": "最小比较次数"
+        },
+        "cost_scaling_factor": {
+          "type": "float",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.0,
+          "description": "成本缩放因子"
+        },
+        "storage_path": {
+          "type": "string",
+          "default": "/tmp/elo",
+          "description": "评分存储路径"
+        }
+      },
+      "examples": [
+        {
+          "initial_rating": 1500,
+          "k_factor": 32
+        },
+        {
+          "initial_rating": 1600,
+          "category_weighted": true,
+          "decay_factor": 0.1
+        }
+      ]
+    },
+    "router_dc": {
+      "description": "RouterDC算法 - 双对比学习进行查询-模型匹配",
+      "required": {},
+      "optional": {
+        "temperature": {
+          "type": "float",
+          "min": 0.01,
+          "max": 1.0,
+          "default": 0.07,
+          "description": "Softmax温度"
+        },
+        "dimension_size": {
+          "type": "integer",
+          "min": 128,
+          "max": 4096,
+          "default": 768,
+          "description": "嵌入维度"
+        },
+        "min_similarity": {
+          "type": "float",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.3,
+          "description": "最小相似度"
+        },
+        "use_query_contrastive": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否使用查询对比"
+        },
+        "use_model_contrastive": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否使用模型对比"
+        }
+      },
+      "examples": [
+        {
+          "temperature": 0.07,
+          "dimension_size": 768
+        },
+        {
+          "min_similarity": 0.5,
+          "use_query_contrastive": true,
+          "use_model_contrastive": false
+        }
+      ]
+    },
+    "automix": {
+      "description": "AutoMix算法 - 基于POMDP的成本-质量优化",
+      "required": {},
+      "optional": {
+        "verification_threshold": {
+          "type": "float",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.7,
+          "description": "验证阈值"
+        },
+        "max_escalations": {
+          "type": "integer",
+          "min": 1,
+          "max": 10,
+          "default": 2,
+          "description": "最大升级次数"
+        },
+        "cost_aware_routing": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否成本感知"
+        },
+        "cost_quality_tradeoff": {
+          "type": "float",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.3,
+          "description": "成本质量权衡"
+        },
+        "discount_factor": {
+          "type": "float",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.95,
+          "description": "POMDP折扣因子"
+        }
+      },
+      "examples": [
+        {
+          "verification_threshold": 0.7,
+          "max_escalations": 2,
+          "cost_aware_routing": true
+        }
+      ]
+    },
+    "hybrid": {
+      "description": "混合算法 - 组合多种选择方法",
+      "required": {},
+      "optional": {
+        "elo_weight": {
+          "type": "float",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.3,
+          "description": "Elo权重"
+        },
+        "router_dc_weight": {
+          "type": "float",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.3,
+          "description": "RouterDC权重"
+        },
+        "automix_weight": {
+          "type": "float",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.2,
+          "description": "AutoMix权重"
+        },
+        "cost_weight": {
+          "type": "float",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.2,
+          "description": "成本权重"
+        },
+        "quality_gap_threshold": {
+          "type": "float",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.1,
+          "description": "质量差距阈值"
+        },
+        "normalize_scores": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否归一化分数"
+        }
+      },
+      "examples": [
+        {
+          "elo_weight": 0.3,
+          "router_dc_weight": 0.3,
+          "automix_weight": 0.2,
+          "cost_weight": 0.2
+        }
+      ]
+    },
+    "rl_driven": {
+      "description": "强化学习算法 - Thompson采样驱动",
+      "required": {},
+      "optional": {
+        "exploration_rate": {
+          "type": "float",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.3,
+          "description": "探索率"
+        },
+        "use_thompson_sampling": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否使用Thompson采样"
+        },
+        "enable_personalization": {
+          "type": "boolean",
+          "default": false,
+          "description": "是否启用个性化"
+        },
+        "personalization_blend": {
+          "type": "float",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.3,
+          "description": "全局与用户特定的混合比例"
+        },
+        "cost_awareness": {
+          "type": "boolean",
+          "default": false,
+          "description": "是否成本感知"
+        }
+      },
+      "examples": [
+        {
+          "exploration_rate": 0.3,
+          "use_thompson_sampling": true
+        },
+        {
+          "enable_personalization": true,
+          "personalization_blend": 0.5
+        }
+      ]
+    },
+    "gmtrouter": {
+      "description": "GMTRouter算法 - 异构图学习进行个性化路由",
+      "required": {},
+      "optional": {
+        "enable_personalization": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否启用个性化"
+        },
+        "history_sample_size": {
+          "type": "integer",
+          "min": 1,
+          "max": 50,
+          "default": 5,
+          "description": "历史采样大小"
+        },
+        "min_interactions_for_personalization": {
+          "type": "integer",
+          "min": 1,
+          "max": 100,
+          "default": 10,
+          "description": "个性化最小交互数"
+        },
+        "max_interactions_per_user": {
+          "type": "integer",
+          "min": 10,
+          "max": 1000,
+          "default": 100,
+          "description": "每用户最大交互数"
+        },
+        "model_path": {
+          "type": "string",
+          "default": "/models/gmt",
+          "description": "模型路径"
+        }
+      },
+      "examples": [
+        {
+          "enable_personalization": true,
+          "history_sample_size": 5
+        }
+      ]
+    },
+    "latency_aware": {
+      "description": "延迟感知算法 - 基于TPOT/TTFT百分位阈值",
+      "required": {
+        "tpot_percentile": {
+          "type": "integer",
+          "min": 1,
+          "max": 100,
+          "description": "每输出Token时间百分位"
+        },
+        "ttft_percentile": {
+          "type": "integer",
+          "min": 1,
+          "max": 100,
+          "description": "首Token时间百分位"
+        }
+      },
+      "optional": {
+        "description": {
+          "type": "string",
+          "description": "描述"
+        }
+      },
+      "examples": [
+        {
+          "tpot_percentile": 20,
+          "ttft_percentile": 20
+        },
+        {
+          "tpot_percentile": 50,
+          "ttft_percentile": 30,
+          "description": "Balanced latency routing"
+        }
+      ]
+    },
+    "knn": {
+      "description": "KNN算法 - K近邻进行基于查询的模型选择",
+      "required": {},
+      "optional": {},
+      "examples": [{}]
+    },
+    "kmeans": {
+      "description": "KMeans算法 - 聚类进行模型选择",
+      "required": {},
+      "optional": {},
+      "examples": [{}]
+    },
+    "svm": {
+      "description": "SVM算法 - 支持向量机进行模型分类",
+      "required": {},
+      "optional": {},
+      "examples": [{}]
+    }
+  }
+}

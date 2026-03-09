@@ -1,0 +1,470 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Signal DSL 各信号类型的字段 Schema 定义，用于 CFG 生成器",
+  "signal_types": [
+    "keyword",
+    "embedding",
+    "domain",
+    "fact_check",
+    "user_feedback",
+    "preference",
+    "language",
+    "context",
+    "complexity",
+    "modality",
+    "authz",
+    "jailbreak",
+    "pii"
+  ],
+  "schemas": {
+    "keyword": {
+      "description": "关键词匹配信号",
+      "required": {
+        "operator": {
+          "type": "enum",
+          "values": ["any", "all", "OR", "AND"],
+          "description": "关键词匹配模式"
+        },
+        "keywords": {
+          "type": "string_array",
+          "min_items": 1,
+          "max_items": 20,
+          "description": "匹配关键词列表"
+        }
+      },
+      "optional": {
+        "method": {
+          "type": "enum",
+          "values": ["regex", "bm25", "ngram"],
+          "default": "regex",
+          "description": "匹配算法"
+        },
+        "case_sensitive": {
+          "type": "boolean",
+          "default": false,
+          "description": "是否区分大小写"
+        },
+        "fuzzy_match": {
+          "type": "boolean",
+          "default": false,
+          "description": "是否启用模糊匹配"
+        },
+        "fuzzy_threshold": {
+          "type": "integer",
+          "min": 1,
+          "max": 10,
+          "default": 2,
+          "description": "模糊匹配编辑距离阈值"
+        },
+        "bm25_threshold": {
+          "type": "float",
+          "min": 0.0,
+          "max": 1.0,
+          "description": "BM25分数阈值"
+        },
+        "ngram_threshold": {
+          "type": "float",
+          "min": 0.0,
+          "max": 1.0,
+          "description": "N-gram相似度阈值"
+        },
+        "ngram_arity": {
+          "type": "integer",
+          "min": 1,
+          "max": 5,
+          "default": 3,
+          "description": "N-gram的N值"
+        }
+      },
+      "examples": [
+        {
+          "operator": "any",
+          "keywords": ["urgent", "asap", "emergency"],
+          "method": "regex",
+          "case_sensitive": false
+        },
+        {
+          "operator": "all",
+          "keywords": ["code", "review"],
+          "fuzzy_match": true,
+          "fuzzy_threshold": 2
+        }
+      ]
+    },
+    "embedding": {
+      "description": "语义嵌入相似度信号",
+      "required": {
+        "threshold": {
+          "type": "float",
+          "min": 0.0,
+          "max": 1.0,
+          "description": "相似度阈值"
+        },
+        "candidates": {
+          "type": "string_array",
+          "min_items": 1,
+          "max_items": 50,
+          "description": "候选文本列表"
+        }
+      },
+      "optional": {
+        "aggregation_method": {
+          "type": "enum",
+          "values": ["mean", "max", "any"],
+          "default": "max",
+          "description": "多候选聚合方式"
+        }
+      },
+      "examples": [
+        {
+          "threshold": 0.75,
+          "candidates": ["machine learning", "neural network", "deep learning"],
+          "aggregation_method": "max"
+        },
+        {
+          "threshold": 0.8,
+          "candidates": ["code optimization", "performance tuning"],
+          "aggregation_method": "any"
+        }
+      ]
+    },
+    "domain": {
+      "description": "领域分类信号",
+      "required": {
+        "description": {
+          "type": "string",
+          "description": "领域描述"
+        }
+      },
+      "optional": {
+        "mmlu_categories": {
+          "type": "string_array",
+          "values": [
+            "math", "physics", "chemistry", "biology", "computer_science",
+            "engineering", "medicine", "law", "economics", "history",
+            "philosophy", "psychology", "sociology", "political_science",
+            "other"
+          ],
+          "description": "MMLU评估类别"
+        },
+        "model_scores": {
+          "type": "object",
+          "description": "模型在该领域的评分"
+        }
+      },
+      "examples": [
+        {
+          "description": "Mathematics and quantitative reasoning",
+          "mmlu_categories": ["math"]
+        },
+        {
+          "description": "Legal documents and contracts",
+          "mmlu_categories": ["law"]
+        }
+      ]
+    },
+    "fact_check": {
+      "description": "事实核查信号",
+      "required": {
+        "description": {
+          "type": "string",
+          "description": "事实核查场景描述"
+        }
+      },
+      "optional": {},
+      "examples": [
+        {
+          "description": "Verify historical facts"
+        },
+        {
+          "description": "Check scientific claims"
+        }
+      ]
+    },
+    "user_feedback": {
+      "description": "用户反馈信号",
+      "required": {
+        "description": {
+          "type": "string",
+          "description": "反馈场景描述"
+        }
+      },
+      "optional": {},
+      "examples": [
+        {
+          "description": "User satisfaction signals"
+        }
+      ]
+    },
+    "preference": {
+      "description": "用户偏好信号",
+      "required": {
+        "description": {
+          "type": "string",
+          "description": "偏好描述"
+        }
+      },
+      "optional": {},
+      "examples": [
+        {
+          "description": "User prefers concise answers"
+        }
+      ]
+    },
+    "language": {
+      "description": "语言检测信号",
+      "required": {},
+      "optional": {
+        "description": {
+          "type": "string",
+          "description": "语言描述"
+        }
+      },
+      "examples": [
+        {
+          "description": "Chinese language detection"
+        },
+        {
+          "description": "Multi-language support"
+        }
+      ]
+    },
+    "context": {
+      "description": "上下文长度信号",
+      "required": {
+        "min_tokens": {
+          "type": "enum",
+          "values": ["1K", "2K", "4K", "8K", "16K", "32K"],
+          "description": "最小token数"
+        },
+        "max_tokens": {
+          "type": "enum",
+          "values": ["4K", "8K", "16K", "32K", "64K", "128K"],
+          "description": "最大token数"
+        }
+      },
+      "optional": {
+        "description": {
+          "type": "string",
+          "description": "上下文场景描述"
+        }
+      },
+      "examples": [
+        {
+          "min_tokens": "4K",
+          "max_tokens": "32K",
+          "description": "Long context tasks"
+        },
+        {
+          "min_tokens": "1K",
+          "max_tokens": "4K"
+        }
+      ]
+    },
+    "complexity": {
+      "description": "任务复杂度信号",
+      "required": {
+        "threshold": {
+          "type": "float",
+          "min": 0.0,
+          "max": 1.0,
+          "description": "复杂度阈值"
+        }
+      },
+      "optional": {
+        "hard": {
+          "type": "object",
+          "properties": {
+            "candidates": {
+              "type": "string_array",
+              "description": "困难任务示例"
+            }
+          },
+          "description": "困难任务定义"
+        },
+        "easy": {
+          "type": "object",
+          "properties": {
+            "candidates": {
+              "type": "string_array",
+              "description": "简单任务示例"
+            }
+          },
+          "description": "简单任务定义"
+        },
+        "description": {
+          "type": "string",
+          "description": "复杂度描述"
+        },
+        "composer": {
+          "type": "string",
+          "description": "复杂度计算器"
+        }
+      },
+      "examples": [
+        {
+          "threshold": 0.7,
+          "hard": {
+            "candidates": ["implement distributed system", "design compiler"]
+          },
+          "easy": {
+            "candidates": ["print hello world", "add two numbers"]
+          }
+        }
+      ]
+    },
+    "modality": {
+      "description": "多模态信号",
+      "required": {},
+      "optional": {
+        "description": {
+          "type": "string",
+          "description": "模态描述"
+        }
+      },
+      "examples": [
+        {
+          "description": "Image input detection"
+        },
+        {
+          "description": "Audio transcription"
+        }
+      ]
+    },
+    "authz": {
+      "description": "授权/RBAC信号",
+      "required": {
+        "role": {
+          "type": "string",
+          "description": "角色名称"
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "enum",
+                "values": ["User", "Group", "ServiceAccount"]
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          },
+          "description": "主体列表"
+        }
+      },
+      "optional": {
+        "description": {
+          "type": "string",
+          "description": "授权描述"
+        }
+      },
+      "examples": [
+        {
+          "role": "admin",
+          "subjects": [
+            {"kind": "User", "name": "admin@example.com"}
+          ]
+        },
+        {
+          "role": "premium_tier",
+          "subjects": [
+            {"kind": "Group", "name": "premium-users"}
+          ],
+          "description": "Premium user access"
+        }
+      ]
+    },
+    "jailbreak": {
+      "description": "越狱检测信号",
+      "required": {
+        "threshold": {
+          "type": "float",
+          "min": 0.0,
+          "max": 1.0,
+          "description": "检测阈值"
+        }
+      },
+      "optional": {
+        "method": {
+          "type": "enum",
+          "values": ["classifier", "contrastive"],
+          "default": "classifier",
+          "description": "检测算法"
+        },
+        "include_history": {
+          "type": "boolean",
+          "default": false,
+          "description": "是否包含对话历史"
+        },
+        "description": {
+          "type": "string",
+          "description": "检测描述"
+        },
+        "jailbreak_patterns": {
+          "type": "string_array",
+          "description": "越狱示例（对比学习用）"
+        },
+        "benign_patterns": {
+          "type": "string_array",
+          "description": "正常示例（对比学习用）"
+        }
+      },
+      "examples": [
+        {
+          "threshold": 0.9,
+          "method": "classifier"
+        },
+        {
+          "threshold": 0.85,
+          "method": "contrastive",
+          "jailbreak_patterns": ["ignore previous instructions"],
+          "benign_patterns": ["help me write code"]
+        }
+      ]
+    },
+    "pii": {
+      "description": "个人身份信息检测信号",
+      "required": {
+        "threshold": {
+          "type": "float",
+          "min": 0.0,
+          "max": 1.0,
+          "description": "检测阈值"
+        }
+      },
+      "optional": {
+        "pii_types_allowed": {
+          "type": "string_array",
+          "values": [
+            "EMAIL_ADDRESS", "PHONE_NUMBER", "CREDIT_CARD", "SSN",
+            "IP_ADDRESS", "LOCATION", "PERSON_NAME", "DATE_OF_BIRTH"
+          ],
+          "description": "允许通过的PII类型"
+        },
+        "include_history": {
+          "type": "boolean",
+          "default": false,
+          "description": "是否包含对话历史"
+        },
+        "description": {
+          "type": "string",
+          "description": "PII检测描述"
+        }
+      },
+      "examples": [
+        {
+          "threshold": 0.8,
+          "pii_types_allowed": []
+        },
+        {
+          "threshold": 0.7,
+          "pii_types_allowed": ["EMAIL_ADDRESS"],
+          "description": "Block all PII except emails"
+        }
+      ]
+    }
+  }
+}

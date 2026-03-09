@@ -1,0 +1,345 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Plugin DSL 各插件类型的字段 Schema 定义",
+  "plugin_types": [
+    "semantic_cache",
+    "memory",
+    "system_prompt",
+    "header_mutation",
+    "hallucination",
+    "router_replay",
+    "rag",
+    "image_gen",
+    "fast_response"
+  ],
+  "schemas": {
+    "semantic_cache": {
+      "description": "语义缓存插件 - 缓存语义相似的查询以减少延迟和成本",
+      "required": {},
+      "optional": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否启用"
+        },
+        "similarity_threshold": {
+          "type": "float",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.95,
+          "description": "缓存命中的相似度阈值"
+        }
+      },
+      "examples": [
+        {
+          "enabled": true,
+          "similarity_threshold": 0.95
+        },
+        {
+          "enabled": true,
+          "similarity_threshold": 0.80
+        }
+      ]
+    },
+    "memory": {
+      "description": "记忆插件 - 持久化对话记忆与向量检索",
+      "required": {},
+      "optional": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否启用"
+        },
+        "retrieval_limit": {
+          "type": "integer",
+          "min": 1,
+          "max": 50,
+          "default": 5,
+          "description": "检索记忆数量上限"
+        },
+        "similarity_threshold": {
+          "type": "float",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.7,
+          "description": "记忆检索相似度阈值"
+        },
+        "auto_store": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否自动存储对话轮次"
+        }
+      },
+      "examples": [
+        {
+          "enabled": true,
+          "retrieval_limit": 5,
+          "similarity_threshold": 0.7
+        },
+        {
+          "enabled": true,
+          "retrieval_limit": 10,
+          "auto_store": false
+        }
+      ]
+    },
+    "system_prompt": {
+      "description": "系统提示词插件 - 注入或替换模型的系统提示词",
+      "required": {
+        "system_prompt": {
+          "type": "string",
+          "description": "系统提示词内容"
+        }
+      },
+      "optional": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否启用"
+        },
+        "mode": {
+          "type": "enum",
+          "values": ["replace", "insert"],
+          "default": "replace",
+          "description": "替换或插入模式"
+        }
+      },
+      "examples": [
+        {
+          "system_prompt": "You are a helpful math expert.",
+          "enabled": true
+        },
+        {
+          "system_prompt": "You must respond in JSON format.",
+          "mode": "insert"
+        }
+      ]
+    },
+    "header_mutation": {
+      "description": "HTTP头部变更插件 - 添加、更新或删除请求/响应头",
+      "required": {},
+      "optional": {
+        "add": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {"type": "string"},
+              "value": {"type": "string"}
+            }
+          },
+          "description": "要添加的头部"
+        },
+        "update": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {"type": "string"},
+              "value": {"type": "string"}
+            }
+          },
+          "description": "要更新的头部"
+        },
+        "delete": {
+          "type": "string_array",
+          "description": "要删除的头部名称"
+        }
+      },
+      "examples": [
+        {
+          "add": [
+            {"name": "X-Custom-Header", "value": "custom-value"}
+          ]
+        },
+        {
+          "delete": ["X-Debug-Info"]
+        }
+      ]
+    },
+    "hallucination": {
+      "description": "幻觉检测插件 - 使用NLI或其他方法检测幻觉内容",
+      "required": {},
+      "optional": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否启用"
+        },
+        "use_nli": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否使用自然语言推理进行检测"
+        },
+        "hallucination_action": {
+          "type": "enum",
+          "values": ["header", "body", "none"],
+          "default": "header",
+          "description": "检测到幻觉时的处理方式"
+        }
+      },
+      "examples": [
+        {
+          "enabled": true,
+          "use_nli": true
+        },
+        {
+          "enabled": true,
+          "hallucination_action": "body"
+        }
+      ]
+    },
+    "router_replay": {
+      "description": "路由回放插件 - 记录请求/响应对用于回放和调试",
+      "required": {},
+      "optional": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否启用"
+        },
+        "max_records": {
+          "type": "integer",
+          "min": 100,
+          "max": 100000,
+          "default": 10000,
+          "description": "最大记录数"
+        },
+        "capture_request_body": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否捕获请求体"
+        },
+        "capture_response_body": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否捕获响应体"
+        },
+        "max_body_bytes": {
+          "type": "integer",
+          "min": 1024,
+          "max": 1048576,
+          "default": 4096,
+          "description": "最大body字节数"
+        }
+      },
+      "examples": [
+        {
+          "enabled": true,
+          "max_records": 10000
+        },
+        {
+          "enabled": true,
+          "capture_request_body": true,
+          "capture_response_body": false,
+          "max_body_bytes": 8192
+        }
+      ]
+    },
+    "rag": {
+      "description": "RAG插件 - 检索增强生成，将检索到的上下文注入提示词",
+      "required": {
+        "backend": {
+          "type": "string",
+          "description": "检索后端名称"
+        }
+      },
+      "optional": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否启用"
+        },
+        "top_k": {
+          "type": "integer",
+          "min": 1,
+          "max": 50,
+          "default": 5,
+          "description": "检索文档数量"
+        },
+        "similarity_threshold": {
+          "type": "float",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.7,
+          "description": "相似度阈值"
+        },
+        "injection_mode": {
+          "type": "enum",
+          "values": ["system", "user", "context"],
+          "default": "system",
+          "description": "上下文注入位置"
+        },
+        "on_failure": {
+          "type": "enum",
+          "values": ["skip", "fail"],
+          "default": "skip",
+          "description": "检索失败时的处理"
+        }
+      },
+      "examples": [
+        {
+          "backend": "my_vector_store",
+          "top_k": 5,
+          "similarity_threshold": 0.7
+        },
+        {
+          "backend": "knowledge_base",
+          "top_k": 10,
+          "injection_mode": "context",
+          "on_failure": "skip"
+        }
+      ]
+    },
+    "image_gen": {
+      "description": "图像生成插件 - 路由到图像生成后端",
+      "required": {
+        "backend": {
+          "type": "string",
+          "description": "图像生成后端名称"
+        }
+      },
+      "optional": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否启用"
+        }
+      },
+      "examples": [
+        {
+          "backend": "dalle_backend",
+          "enabled": true
+        },
+        {
+          "backend": "sd_backend"
+        }
+      ]
+    },
+    "fast_response": {
+      "description": "快速响应插件 - 短路并返回固定响应，不调用上游模型",
+      "required": {
+        "message": {
+          "type": "string",
+          "description": "直接返回给客户端的响应消息"
+        }
+      },
+      "optional": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否启用"
+        }
+      },
+      "examples": [
+        {
+          "message": "I cannot help with that request."
+        },
+        {
+          "message": "Request blocked for safety reasons.",
+          "enabled": true
+        }
+      ]
+    }
+  }
+}
