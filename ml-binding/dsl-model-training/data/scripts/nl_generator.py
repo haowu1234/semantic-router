@@ -37,10 +37,67 @@ import json
 import os
 import time
 import hashlib
+import signal
+import sys
 from pathlib import Path
 from typing import Generator
-from dataclasses import dataclass
+from dataclasses import dataclass, field, asdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+
+
+# 全局中断标志
+interrupted = False
+
+
+def signal_handler(signum, frame):
+    """处理 Ctrl+C 中断"""
+    global interrupted
+    if interrupted:
+        print("\n强制退出...")
+        sys.exit(1)
+    print("\n\n⚠️  收到中断信号，正在优雅退出...")
+    print("   (再次按 Ctrl+C 强制退出)")
+    interrupted = True
+
+
+# 注册信号处理
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+
+
+@dataclass
+class CheckpointState:
+    """断点检查点状态"""
+    processed_ids: list = field(default_factory=list)
+    failed_ids: list = field(default_factory=list)
+    total_processed: int = 0
+    total_failed: int = 0
+    total_skipped: int = 0
+    last_update: str = ""
+    api: str = ""
+    model: str = ""
+    vllm_url: str = ""
+    start_time: str = ""
+    
+    def save(self, path: Path):
+        """保存检查点"""
+        self.last_update = datetime.now().isoformat()
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(asdict(self), f, indent=2, ensure_ascii=False)
+    
+    @classmethod
+    def load(cls, path: Path) -> 'CheckpointState':
+        """加载检查点"""
+        if not path.exists():
+            return cls()
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+        except Exception as e:
+            print(f"Warning: Failed to load checkpoint: {e}")
+            return cls()
 
 
 def detect_vllm_model(vllm_url: str) -> str | None:
@@ -61,24 +118,57 @@ def detect_vllm_model(vllm_url: str) -> str | None:
     return None
 
 
-def get_processed_ids(output_dir: Path) -> set:
-    """获取已处理的样本 ID（用于断点续传）"""
-    processed = set()
-    if not output_dir.exists():
-        return processed
+def get_processed_ids(output_dir: Path, checkpoint: CheckpointState = None) -> set:
+    """获取已处理的样本 ID（用于断点续传）
     
-    for jsonl_file in output_dir.glob('*.jsonl'):
+    优先从检查点加载，然后从 JSONL 文件补充
+    """
+    processed = set()
+    
+    # 从检查点加载
+    if checkpoint and checkpoint.processed_ids:
+        processed.update(checkpoint.processed_ids)
+    
+    # 从输出文件补充
+    if output_dir.exists():
+        for jsonl_file in output_dir.glob('*.jsonl'):
+            try:
+                with open(jsonl_file, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if line.strip():
+                            data = json.loads(line)
+                            source_id = data.get('source_id')
+                            if source_id:
+                                processed.add(source_id)
+            except Exception:
+                pass
+    
+    return processed
+
+
+def get_failed_ids(output_dir: Path, checkpoint: CheckpointState = None) -> set:
+    """获取失败的样本 ID（用于重试）"""
+    failed = set()
+    
+    # 从检查点加载
+    if checkpoint and checkpoint.failed_ids:
+        failed.update(checkpoint.failed_ids)
+    
+    # 从失败记录文件加载
+    failed_file = output_dir / 'failed_samples.jsonl'
+    if failed_file.exists():
         try:
-            with open(jsonl_file, 'r', encoding='utf-8') as f:
+            with open(failed_file, 'r', encoding='utf-8') as f:
                 for line in f:
                     if line.strip():
                         data = json.loads(line)
-                        source_id = data.get('source_id')
-                        if source_id:
-                            processed.add(source_id)
+                        sample_id = data.get('id')
+                        if sample_id:
+                            failed.add(sample_id)
         except Exception:
             pass
-    return processed
+    
+    return failed
 
 
 # NL 生成提示词模板
@@ -397,7 +487,11 @@ def main():
     parser.add_argument('--workers', type=int, default=1,
                         help='Number of parallel workers (for vLLM, default: 1)')
     parser.add_argument('--resume', action='store_true',
-                        help='Resume from existing output files')
+                        help='Resume from existing output files and checkpoint')
+    parser.add_argument('--retry-failed', action='store_true',
+                        help='Retry previously failed samples')
+    parser.add_argument('--checkpoint-interval', type=int, default=50,
+                        help='Save checkpoint every N samples (default: 50)')
     args = parser.parse_args()
     
     if args.dry_run:
@@ -437,11 +531,32 @@ def main():
     # 确保输出目录存在
     args.output.mkdir(parents=True, exist_ok=True)
     
+    # 检查点文件路径
+    checkpoint_file = args.output / '.checkpoint.json'
+    failed_file = args.output / 'failed_samples.jsonl'
+    
+    # 加载或创建检查点
+    checkpoint = CheckpointState()
+    if args.resume:
+        checkpoint = CheckpointState.load(checkpoint_file)
+        if checkpoint.total_processed > 0:
+            print(f"📂 恢复检查点: 已处理 {checkpoint.total_processed}, 失败 {checkpoint.total_failed}")
+    
     # 断点续传: 获取已处理的 ID
     processed_ids = set()
+    failed_ids = set()
     if args.resume:
-        processed_ids = get_processed_ids(args.output)
-        print(f"Resume mode: found {len(processed_ids)} already processed samples")
+        processed_ids = get_processed_ids(args.output, checkpoint)
+        failed_ids = get_failed_ids(args.output, checkpoint)
+        print(f"📊 Resume mode: {len(processed_ids)} processed, {len(failed_ids)} failed")
+    
+    # 如果要重试失败的样本，从已处理列表中移除
+    if args.retry_failed and failed_ids:
+        print(f"🔄 Retry mode: will retry {len(failed_ids)} failed samples")
+        processed_ids -= failed_ids
+        # 清空失败记录
+        if failed_file.exists():
+            failed_file.unlink()
     
     # 按风格分类的输出文件 (追加模式用于断点续传)
     file_mode = 'a' if args.resume else 'w'
@@ -454,88 +569,238 @@ def main():
         'ambiguous': open(args.output / 'ambiguous.jsonl', file_mode, encoding='utf-8'),
     }
     
+    # 失败样本记录文件
+    failed_samples_file = open(failed_file, 'a', encoding='utf-8')
+    
     # 统计
     processed = 0
     skipped = 0
     failed = 0
     start_time = time.time()
     
+    # 记录新处理的 ID (用于检查点)
+    new_processed_ids = []
+    new_failed_ids = []
+    
+    # 文件写入锁 (用于并发写入)
+    import threading
+    write_lock = threading.Lock()
+    stats_lock = threading.Lock()
+    
+    def save_checkpoint():
+        """保存检查点"""
+        checkpoint.processed_ids = list(processed_ids) + new_processed_ids
+        checkpoint.failed_ids = new_failed_ids
+        checkpoint.total_processed = len(processed_ids) + processed
+        checkpoint.total_failed = failed
+        checkpoint.total_skipped = skipped
+        checkpoint.api = args.api
+        checkpoint.model = args.model
+        checkpoint.vllm_url = args.vllm_url if args.api == 'vllm' else ''
+        checkpoint.save(checkpoint_file)
+    
+    def process_single_sample(sample_tuple):
+        """处理单个样本 (用于并发)"""
+        global interrupted
+        if interrupted:
+            return ('interrupted', None, None, None)
+        
+        i, sample = sample_tuple
+        sample_id = sample.get('id', f'sample_{i}')
+        dsl = sample.get('dsl', '')
+        
+        # 跳过无效样本
+        if not dsl or not sample.get('valid', True):
+            return ('invalid', sample_id, None, sample)
+        
+        # 跳过已处理的样本
+        if sample_id in processed_ids:
+            return ('skipped', sample_id, None, sample)
+        
+        # 生成 NL 描述
+        nl_descriptions = generate_fn(dsl)
+        
+        if nl_descriptions is None:
+            return ('failed', sample_id, None, sample)
+        
+        return ('success', sample_id, nl_descriptions, sample)
+    
+    checkpoint.start_time = datetime.now().isoformat()
+    
     try:
         samples = list(load_dsl_samples(args.input))
         total = min(len(samples), args.limit) if args.limit else len(samples)
         print(f"Total samples to process: {total}")
+        print(f"Using {args.workers} parallel workers")
+        print(f"Checkpoint interval: every {args.checkpoint_interval} samples")
+        print(f"Press Ctrl+C to gracefully stop and save progress\n")
         
+        # 过滤要处理的样本
+        samples_to_process = []
         for i, sample in enumerate(samples):
-            if args.limit and processed >= args.limit:
+            if args.limit and len(samples_to_process) >= args.limit:
                 break
-            
             sample_id = sample.get('id', f'sample_{i}')
             dsl = sample.get('dsl', '')
-            
-            # 跳过无效或已处理的样本
             if not dsl or not sample.get('valid', True):
                 continue
-            
             if sample_id in processed_ids:
                 skipped += 1
                 continue
-            
-            # 生成 NL 描述
-            nl_descriptions = generate_fn(dsl)
-            
-            if nl_descriptions is None:
-                failed += 1
-                print(f"[{processed + failed}/{total}] FAILED: {sample_id}")
-                continue
-            
-            # 创建并保存配对
-            for style in style_files:
-                if style in nl_descriptions:
-                    pair = create_nl_pairs(sample, nl_descriptions, style)
-                    style_files[style].write(json.dumps(pair, ensure_ascii=False) + '\n')
-            
-            processed += 1
-            
-            # 进度显示
-            if processed % 10 == 0 or processed == 1:
-                elapsed = time.time() - start_time
-                rate = processed / elapsed if elapsed > 0 else 0
-                eta = (total - processed - skipped) / rate if rate > 0 else 0
-                print(f"[{processed}/{total}] Processed: {processed}, Skipped: {skipped}, Failed: {failed}, "
-                      f"Rate: {rate:.1f}/s, ETA: {eta/60:.1f}min")
-            
-            # 定期刷新
-            if processed % args.batch_size == 0:
-                for f in style_files.values():
-                    f.flush()
-            
-            # Rate limiting (vLLM 本地不需要太多延迟)
-            if args.api != 'local':
-                time.sleep(config.rate_limit_delay)
+            samples_to_process.append((i, sample))
+        
+        print(f"Samples to process (after filtering): {len(samples_to_process)}, Already done: {skipped}")
+        
+        if args.workers > 1:
+            # 并发处理
+            with ThreadPoolExecutor(max_workers=args.workers) as executor:
+                futures = {executor.submit(process_single_sample, s): s for s in samples_to_process}
+                
+                for future in as_completed(futures):
+                    if interrupted:
+                        print("\n⏸️  正在停止并发任务...")
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        break
+                    
+                    try:
+                        status, sample_id, nl_descriptions, sample = future.result()
+                        
+                        if status == 'interrupted':
+                            continue
+                        elif status == 'success':
+                            with write_lock:
+                                for style in style_files:
+                                    if style in nl_descriptions:
+                                        pair = create_nl_pairs(sample, nl_descriptions, style)
+                                        style_files[style].write(json.dumps(pair, ensure_ascii=False) + '\n')
+                            with stats_lock:
+                                processed += 1
+                                new_processed_ids.append(sample_id)
+                                # 进度显示
+                                if processed % 10 == 0 or processed == 1:
+                                    elapsed = time.time() - start_time
+                                    rate = processed / elapsed if elapsed > 0 else 0
+                                    remaining = len(samples_to_process) - processed - failed
+                                    eta = remaining / rate if rate > 0 else 0
+                                    print(f"[{processed}/{len(samples_to_process)}] ✅ {processed} | ❌ {failed} | "
+                                          f"⚡ {rate:.1f}/s | ⏱️ ETA: {eta/60:.1f}min")
+                        elif status == 'failed':
+                            with stats_lock:
+                                failed += 1
+                                new_failed_ids.append(sample_id)
+                                # 记录失败样本
+                                with write_lock:
+                                    failed_samples_file.write(json.dumps({
+                                        'id': sample_id,
+                                        'dsl': sample.get('dsl', '')[:200],
+                                        'timestamp': datetime.now().isoformat()
+                                    }, ensure_ascii=False) + '\n')
+                                if failed % 5 == 0:
+                                    print(f"❌ FAILED: {sample_id} (total: {failed})")
+                        
+                        # 定期保存检查点
+                        if (processed + failed) % args.checkpoint_interval == 0:
+                            with write_lock:
+                                for f in style_files.values():
+                                    f.flush()
+                                failed_samples_file.flush()
+                            save_checkpoint()
+                    
+                    except Exception as e:
+                        print(f"Error processing sample: {e}")
+                        with stats_lock:
+                            failed += 1
+        else:
+            # 单线程处理 (原有逻辑)
+            for i, sample in samples_to_process:
+                if interrupted:
+                    print("\n⏸️  检测到中断，停止处理...")
+                    break
+                
+                sample_id = sample.get('id', f'sample_{i}')
+                dsl = sample.get('dsl', '')
+                
+                # 生成 NL 描述
+                nl_descriptions = generate_fn(dsl)
+                
+                if nl_descriptions is None:
+                    failed += 1
+                    new_failed_ids.append(sample_id)
+                    failed_samples_file.write(json.dumps({
+                        'id': sample_id,
+                        'dsl': dsl[:200],
+                        'timestamp': datetime.now().isoformat()
+                    }, ensure_ascii=False) + '\n')
+                    print(f"[{processed + failed}/{len(samples_to_process)}] ❌ FAILED: {sample_id}")
+                    continue
+                
+                # 创建并保存配对
+                for style in style_files:
+                    if style in nl_descriptions:
+                        pair = create_nl_pairs(sample, nl_descriptions, style)
+                        style_files[style].write(json.dumps(pair, ensure_ascii=False) + '\n')
+                
+                processed += 1
+                new_processed_ids.append(sample_id)
+                
+                # 进度显示
+                if processed % 10 == 0 or processed == 1:
+                    elapsed = time.time() - start_time
+                    rate = processed / elapsed if elapsed > 0 else 0
+                    eta = (len(samples_to_process) - processed) / rate if rate > 0 else 0
+                    print(f"[{processed}/{len(samples_to_process)}] ✅ {processed} | ❌ {failed} | "
+                          f"⚡ {rate:.1f}/s | ⏱️ ETA: {eta/60:.1f}min")
+                
+                # 定期保存检查点
+                if processed % args.checkpoint_interval == 0:
+                    for f in style_files.values():
+                        f.flush()
+                    failed_samples_file.flush()
+                    save_checkpoint()
+                
+                # Rate limiting
+                if args.api != 'local':
+                    time.sleep(config.rate_limit_delay)
     
     finally:
         # 关闭所有文件
         for f in style_files.values():
+            f.flush()
             f.close()
+        failed_samples_file.flush()
+        failed_samples_file.close()
+        
+        # 保存最终检查点
+        save_checkpoint()
+        print(f"\n💾 检查点已保存: {checkpoint_file}")
     
     # 最终统计
     elapsed = time.time() - start_time
+    status_emoji = "⏸️ 已暂停" if interrupted else "✅ 完成"
+    
     print(f"\n{'='*50}")
-    print(f"=== Generation Complete ===")
+    print(f"=== {status_emoji} Generation {'Paused' if interrupted else 'Complete'} ===")
     print(f"{'='*50}")
     print(f"API:             {args.api}")
     print(f"Model:           {args.model}")
-    print(f"Total processed: {processed}")
-    print(f"Skipped:         {skipped}")
+    print(f"Total processed: {processed} (this run)")
+    print(f"Already done:    {skipped}")
     print(f"Failed:          {failed}")
+    print(f"Cumulative:      {len(processed_ids) + processed} total")
     print(f"Time elapsed:    {elapsed/60:.1f} minutes")
     print(f"Average rate:    {processed/elapsed:.2f} samples/sec" if elapsed > 0 else "N/A")
     print(f"Output dir:      {args.output}")
     print(f"Total NL pairs:  {processed * 6}")
     
+    if interrupted:
+        print(f"\n💡 继续生成: python {sys.argv[0]} --resume [其他参数...]")
+        print(f"💡 重试失败: python {sys.argv[0]} --resume --retry-failed [其他参数...]")
+    
     # 保存统计
     stats = {
+        'status': 'paused' if interrupted else 'complete',
         'total_processed': processed,
+        'cumulative_processed': len(processed_ids) + processed,
         'skipped': skipped,
         'failed': failed,
         'api': args.api,
@@ -545,6 +810,8 @@ def main():
         'total_pairs': processed * 6,
         'time_elapsed_seconds': elapsed,
         'rate_per_second': processed / elapsed if elapsed > 0 else 0,
+        'checkpoint_file': str(checkpoint_file),
+        'timestamp': datetime.now().isoformat(),
     }
     with open(args.output / 'generation_stats.json', 'w', encoding='utf-8') as f:
         json.dump(stats, f, indent=2, ensure_ascii=False)
