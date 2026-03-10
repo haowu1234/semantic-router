@@ -174,7 +174,7 @@ def get_failed_ids(output_dir: Path, checkpoint: CheckpointState = None) -> set:
 # NL 生成提示词模板
 NL_GENERATION_PROMPT = '''You are an expert at describing Signal DSL router configurations in natural language.
 
-Given this DSL configuration, generate 6 different natural language descriptions that a user might say to request this configuration. Each description should be self-contained and provide enough detail to recreate the DSL.
+Given this DSL configuration, generate 6 CONCISE natural language descriptions. Each description should capture the CORE INTENT without listing every parameter.
 
 DSL Configuration:
 ```
@@ -183,22 +183,23 @@ DSL Configuration:
 
 Generate exactly 6 descriptions in JSON format:
 {{
-  "en_formal": "Formal English - Technical documentation style, precise and complete",
-  "en_casual": "Casual English - Conversational style, like talking to a colleague",
-  "en_technical": "Technical English - Engineer style, using DSL terminology",
-  "zh_formal": "正式中文 - 技术文档风格，精确完整",
-  "zh_casual": "口语中文 - 对话风格，像和同事聊天",
-  "ambiguous": "Intentionally underspecified - Missing some details that require inference"
+  "en_formal": "Formal English - Brief technical summary (2-3 sentences max)",
+  "en_casual": "Casual English - Conversational (1-2 sentences)",
+  "en_technical": "Technical English - Key DSL elements only",
+  "zh_formal": "正式中文 - 简要技术描述",
+  "zh_casual": "口语中文 - 简短对话",
+  "ambiguous": "Underspecified - Missing some details"
 }}
 
-Rules:
-1. Each description should capture the INTENT of the configuration
-2. Include key parameters like model names, thresholds, signal types
-3. The ambiguous description should be missing 1-2 key details
-4. Chinese descriptions should use natural Chinese expressions, not word-by-word translation
-5. Keep descriptions concise but sufficient to recreate the DSL
+CRITICAL RULES:
+1. Keep each description under 200 characters
+2. Focus on: signal TYPES (not all names), routing LOGIC, model SELECTION strategy
+3. Do NOT enumerate every signal/parameter - summarize instead (e.g., "5 keyword signals" not listing all 5)
+4. Chinese: natural expressions, not word-by-word translation
+5. Output ONLY valid JSON, no markdown, no explanation
 
-Output JSON only, no markdown code blocks.'''
+Example good response:
+{{"en_formal": "Configure routing with jailbreak detection and keyword filtering. Route high-risk requests to GPT-4, others to Qwen with weighted selection.", "en_casual": "Set up a router that catches jailbreak attempts and routes them to GPT-4, everything else goes to a mix of models.", "en_technical": "2 SIGNAL (jailbreak, keyword), 2 ROUTE with WHEN conditions, MODEL selection via weighted algorithm.", "zh_formal": "配置包含越狱检测和关键词过滤的路由器，高风险请求路由至GPT-4。", "zh_casual": "搞个路由，检测越狱就用GPT-4，其他随机选模型。", "ambiguous": "Route requests based on content safety, use multiple models."}}'''
 
 # 简化版提示词 (用于 dry-run 或低成本测试)
 NL_SIMPLE_PROMPT = '''Describe this DSL configuration in one sentence:
@@ -212,9 +213,9 @@ Output a single English sentence describing what this configuration does.'''
 class NLGenerationConfig:
     """NL 生成配置"""
     model: str = 'gpt-4o'
-    temperature: float = 0.8
-    max_tokens: int = 2000
-    timeout: int = 120
+    temperature: float = 0.7  # 略低温度提高格式一致性
+    max_tokens: int = 4000    # 增加 token 限制防止截断
+    timeout: int = 180        # 增加超时
     retry_count: int = 3
     retry_delay: float = 2.0
     rate_limit_delay: float = 0.1  # 请求间隔 (vLLM 本地可以更快)
@@ -250,6 +251,7 @@ def generate_nl_vllm(dsl: str, config: NLGenerationConfig) -> dict | None:
         "stream": False,
     }
     
+    content = ""
     for attempt in range(config.retry_count):
         try:
             response = requests.post(
@@ -263,13 +265,30 @@ def generate_nl_vllm(dsl: str, config: NLGenerationConfig) -> dict | None:
             result = response.json()
             content = result['choices'][0]['message']['content']
             
+            # 检查是否因 max_tokens 截断
+            finish_reason = result['choices'][0].get('finish_reason', '')
+            if finish_reason == 'length':
+                print(f"Warning: Response truncated (attempt {attempt + 1})")
+            
             # 尝试提取 JSON (模型可能返回 markdown 包裹的 JSON)
-            content = extract_json_from_response(content)
-            return json.loads(content)
+            extracted = extract_json_from_response(content)
+            
+            try:
+                return json.loads(extracted)
+            except json.JSONDecodeError:
+                # JSON 解析失败，尝试修复
+                repaired = repair_truncated_json(content)
+                if repaired:
+                    print(f"Repaired truncated JSON (attempt {attempt + 1})")
+                    return repaired
+                raise
             
         except json.JSONDecodeError as e:
             print(f"JSON parse error (attempt {attempt + 1}): {e}")
-            print(f"Raw response: {content[:500]}...")
+            if content:
+                print(f"Raw response: {content[:500]}...")
+            if attempt < config.retry_count - 1:
+                time.sleep(config.retry_delay)
         except requests.exceptions.RequestException as e:
             print(f"HTTP error (attempt {attempt + 1}): {e}")
             if attempt < config.retry_count - 1:
@@ -290,6 +309,7 @@ def extract_json_from_response(content: str) -> str:
     - ```json ... ``` 包裹
     - ``` ... ``` 包裹
     - 前后有额外文本
+    - 截断的 JSON (尝试修复)
     """
     content = content.strip()
     
@@ -316,7 +336,62 @@ def extract_json_from_response(content: str) -> str:
     if start_idx != -1 and end_idx > start_idx:
         return content[start_idx:end_idx + 1]
     
+    # 处理截断的 JSON - 尝试闭合
+    if start_idx != -1 and end_idx == -1:
+        # JSON 被截断，尝试找到最后一个完整的键值对
+        partial = content[start_idx:]
+        # 找到最后一个完整的引号闭合
+        last_quote = partial.rfind('"')
+        if last_quote > 0:
+            # 检查是否在值中被截断
+            before_quote = partial[:last_quote]
+            if before_quote.count('"') % 2 == 1:
+                # 奇数个引号，说明最后一个引号是值的开始，需要闭合
+                partial = partial[:last_quote] + '..."}'
+            else:
+                # 偶数个引号，最后一个键值对可能完整
+                partial = partial[:last_quote + 1] + '}'
+        return partial
+    
     return content
+
+
+def repair_truncated_json(content: str) -> dict | None:
+    """尝试修复截断的 JSON
+    
+    当 JSON 被截断时，尝试提取已完成的键值对
+    """
+    import re
+    
+    # 必需的字段
+    required_fields = ['en_formal', 'en_casual', 'en_technical', 'zh_formal', 'zh_casual', 'ambiguous']
+    
+    result = {}
+    
+    # 尝试逐个提取字段
+    for field in required_fields:
+        # 匹配 "field": "value" 或 "field": "value...
+        pattern = rf'"{field}"\s*:\s*"([^"]*(?:"[^}},]*)?)'
+        match = re.search(pattern, content, re.DOTALL)
+        if match:
+            value = match.group(1)
+            # 清理截断的值
+            if not value.endswith('"'):
+                value = value.rstrip('.,。，') + '...'
+            result[field] = value
+    
+    # 至少需要 3 个字段才算有效
+    if len(result) >= 3:
+        # 填充缺失字段
+        for field in required_fields:
+            if field not in result:
+                if 'zh' in field:
+                    result[field] = result.get('zh_formal', result.get('en_formal', '配置路由器'))
+                else:
+                    result[field] = result.get('en_formal', 'Configure router')
+        return result
+    
+    return None
 
 
 def generate_nl_openai(dsl: str, config: NLGenerationConfig) -> dict | None:
