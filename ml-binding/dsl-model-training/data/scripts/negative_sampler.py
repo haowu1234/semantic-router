@@ -9,6 +9,9 @@
 2. reference_error: 引用错误 (WHEN 引用未定义信号)
 3. constraint_violation: 约束违反 (threshold: 1.5)
 4. schema_mismatch: Schema 不匹配 (字段用错类型)
+5. bool_expr_error: 布尔表达式错误 (AND/OR/NOT 嵌套组合错误)
+6. model_error: MODEL 声明错误 (多模型语法、属性重复)
+7. structural_error: 结构错误 (缺失必要块、块顺序错误)
 
 用法:
     python negative_sampler.py --input synthetic/ --output negative/
@@ -216,6 +219,244 @@ def mutate_schema_invalid_enum(dsl: str) -> str:
     return dsl
 
 
+# ============== 布尔表达式错误 ==============
+
+def mutate_bool_paren_mismatch(dsl: str) -> str:
+    """括号不匹配: 删除 WHEN 表达式中的一个括号"""
+    # 找到 WHEN 子句
+    when_pattern = r'(WHEN\s+)(.+?)(\n\s*\n|\n\s*MODEL)'
+    match = re.search(when_pattern, dsl, re.DOTALL)
+    if match:
+        when_expr = match.group(2)
+        # 找到括号位置
+        open_parens = [i for i, c in enumerate(when_expr) if c == '(']
+        close_parens = [i for i, c in enumerate(when_expr) if c == ')']
+        
+        # 删除一个闭合括号（制造不匹配）
+        if close_parens:
+            pos = random.choice(close_parens)
+            new_expr = when_expr[:pos] + when_expr[pos+1:]
+            return dsl[:match.start(2)] + new_expr + dsl[match.end(2):]
+        # 或删除一个开括号
+        elif open_parens:
+            pos = random.choice(open_parens)
+            new_expr = when_expr[:pos] + when_expr[pos+1:]
+            return dsl[:match.start(2)] + new_expr + dsl[match.end(2):]
+    return dsl
+
+
+def mutate_bool_missing_operand(dsl: str) -> str:
+    """操作数缺失: a AND b → a AND"""
+    # 找到 AND 或 OR 后面跟着的操作数，删除它
+    pattern = r'(\b(?:AND|OR)\s+)(\w+\("[^"]+"\))'
+    matches = list(re.finditer(pattern, dsl))
+    if matches:
+        match = random.choice(matches)
+        # 只保留操作符，删除右操作数
+        return dsl[:match.start(2)] + dsl[match.end():]
+    return dsl
+
+
+def mutate_bool_double_operator(dsl: str) -> str:
+    """重复操作符: a AND b → a AND AND b"""
+    ops = ['AND', 'OR']
+    for op in ops:
+        pattern = rf'(\s+{op}\s+)'
+        match = re.search(pattern, dsl)
+        if match:
+            # 重复操作符
+            return dsl[:match.end()] + f'{op} ' + dsl[match.end():]
+    return dsl
+
+
+def mutate_bool_invalid_nesting(dsl: str) -> str:
+    """非法嵌套: NOT NOT a, 或 AND OR b"""
+    # 找到 NOT 表达式，变成 NOT NOT
+    not_pattern = r'(NOT\s+)(\w+\("[^"]+"\))'
+    match = re.search(not_pattern, dsl)
+    if match:
+        return dsl[:match.start()] + f'NOT NOT {match.group(2)}' + dsl[match.end():]
+    
+    # 找到 AND，变成 AND OR
+    and_pattern = r'(\bAND\s+)'
+    match = re.search(and_pattern, dsl)
+    if match:
+        return dsl[:match.start()] + 'AND OR ' + dsl[match.end():]
+    
+    return dsl
+
+
+def mutate_bool_wrong_precedence(dsl: str) -> str:
+    """优先级混淆: 移除必要的括号导致语义歧义"""
+    # 找到 (a OR b) AND c 形式，去掉括号变成 a OR b AND c
+    pattern = r'\((\w+\("[^"]+"\)\s+OR\s+\w+\("[^"]+"\))\)\s+AND'
+    match = re.search(pattern, dsl)
+    if match:
+        # 去掉括号
+        inner = match.group(1)
+        return dsl[:match.start()] + inner + ' AND' + dsl[match.end():]
+    return dsl
+
+
+def mutate_bool_empty_expr(dsl: str) -> str:
+    """空表达式: WHEN 后面没有条件"""
+    when_pattern = r'(WHEN\s+)(\w+\("[^"]+"\))'
+    match = re.search(when_pattern, dsl)
+    if match:
+        # 删除条件，只留 WHEN
+        return dsl[:match.end(1)] + dsl[match.end():]
+    return dsl
+
+
+# ============== MODEL 错误 ==============
+
+def mutate_model_trailing_comma(dsl: str) -> str:
+    """尾逗号: MODEL "a", "b", → 多余逗号"""
+    # 找到 MODEL 声明的最后一个模型
+    model_pattern = r'(MODEL\s+"[^"]+")(\s*\(.*?\))?(\s*\n)'
+    match = re.search(model_pattern, dsl, re.DOTALL)
+    if match:
+        # 在末尾加逗号
+        end_part = match.group(2) or ''
+        return dsl[:match.end(1)] + end_part + ',' + match.group(3) + dsl[match.end():]
+    return dsl
+
+
+def mutate_model_duplicate_attr(dsl: str) -> str:
+    """重复属性: MODEL "m" (reasoning=true, reasoning=false)"""
+    # 找到模型属性
+    model_attr_pattern = r'(MODEL\s+"[^"]+"\s*\()([^)]+)(\))'
+    match = re.search(model_attr_pattern, dsl)
+    if match:
+        attrs = match.group(2)
+        # 找到一个属性并重复它
+        attr_match = re.search(r'(\w+\s*=\s*\w+)', attrs)
+        if attr_match:
+            dup_attr = attr_match.group(1)
+            new_attrs = attrs + ', ' + dup_attr
+            return dsl[:match.start(2)] + new_attrs + dsl[match.end(2):]
+    return dsl
+
+
+def mutate_model_invalid_attr(dsl: str) -> str:
+    """无效属性: MODEL "m" (unknown_attr = true)"""
+    model_pattern = r'(MODEL\s+"[^"]+")(\s*\([^)]*\))?'
+    match = re.search(model_pattern, dsl)
+    if match:
+        if match.group(2):
+            # 已有属性，添加无效属性
+            attrs = match.group(2).rstrip(')')
+            return dsl[:match.end(1)] + attrs + ', invalid_attr = "bad"' + ')' + dsl[match.end():]
+        else:
+            # 没有属性，添加无效属性
+            return dsl[:match.end(1)] + ' (invalid_attr = "bad")' + dsl[match.end():]
+    return dsl
+
+
+def mutate_model_empty_name(dsl: str) -> str:
+    """空模型名: MODEL "" """
+    model_pattern = r'(MODEL\s+)"([^"]+)"'
+    match = re.search(model_pattern, dsl)
+    if match:
+        return dsl[:match.start(2)] + dsl[match.end(2):]
+    return dsl
+
+
+def mutate_model_missing_quotes(dsl: str) -> str:
+    """缺少引号: MODEL gpt-4o 而不是 MODEL "gpt-4o" """
+    model_pattern = r'(MODEL\s+)"([^"]+)"'
+    match = re.search(model_pattern, dsl)
+    if match:
+        model_name = match.group(2)
+        return dsl[:match.end(1)] + model_name + dsl[match.end():]
+    return dsl
+
+
+# ============== 结构错误 ==============
+
+def mutate_struct_route_missing_model(dsl: str) -> str:
+    """路由缺少 MODEL 声明"""
+    # 找到 ROUTE 块中的 MODEL 行，删除它
+    route_pattern = r'(ROUTE\s+\w+[^{]*\{[^}]*?)(MODEL\s+[^\n]+\n)([^}]*\})'
+    match = re.search(route_pattern, dsl, re.DOTALL)
+    if match:
+        return dsl[:match.start(2)] + dsl[match.end(2):]
+    return dsl
+
+
+def mutate_struct_route_missing_priority(dsl: str) -> str:
+    """路由缺少 PRIORITY 声明"""
+    priority_pattern = r'(\s+PRIORITY\s+\d+\s*\n)'
+    match = re.search(priority_pattern, dsl)
+    if match:
+        return dsl[:match.start()] + '\n' + dsl[match.end():]
+    return dsl
+
+
+def mutate_struct_signal_after_route(dsl: str) -> str:
+    """SIGNAL 声明在 ROUTE 之后（顺序错误）"""
+    # 找到第一个 SIGNAL 声明
+    signal_pattern = r'(SIGNAL\s+\w+\s+\w+\s*\{[^}]*\}\n*)'
+    signal_match = re.search(signal_pattern, dsl)
+    if not signal_match:
+        return dsl
+    
+    # 找到最后一个 ROUTE 块的结束位置
+    route_pattern = r'(ROUTE\s+\w+[^{]*\{[^}]*\}\n*)'
+    route_matches = list(re.finditer(route_pattern, dsl, re.DOTALL))
+    if not route_matches:
+        return dsl
+    
+    last_route = route_matches[-1]
+    signal_text = signal_match.group(1)
+    
+    # 删除原 SIGNAL，在 ROUTE 后插入
+    new_dsl = dsl[:signal_match.start()] + dsl[signal_match.end():]
+    # 重新找到 ROUTE 位置（因为删除 SIGNAL 后位置变了）
+    route_matches = list(re.finditer(route_pattern, new_dsl, re.DOTALL))
+    if route_matches:
+        last_route = route_matches[-1]
+        new_dsl = new_dsl[:last_route.end()] + '\n' + signal_text + new_dsl[last_route.end():]
+    
+    return new_dsl
+
+
+def mutate_struct_duplicate_route_name(dsl: str) -> str:
+    """重复的路由名称"""
+    route_pattern = r'ROUTE\s+(\w+)'
+    matches = list(re.finditer(route_pattern, dsl))
+    if len(matches) >= 2:
+        # 把第二个路由名改成和第一个一样
+        first_name = matches[0].group(1)
+        second_match = matches[1]
+        return dsl[:second_match.start(1)] + first_name + dsl[second_match.end(1):]
+    return dsl
+
+
+def mutate_struct_algorithm_single_model(dsl: str) -> str:
+    """单 MODEL 却配置了 ALGORITHM（语义错误）"""
+    # 找到只有单个 MODEL 的 ROUTE，给它加 ALGORITHM
+    route_pattern = r'(ROUTE\s+\w+[^{]*\{[^}]*?MODEL\s+"[^"]+"\s*(?:\([^)]*\))?\s*\n)(\s*\})'
+    match = re.search(route_pattern, dsl, re.DOTALL)
+    if match:
+        # 检查是否只有单个 MODEL（没有逗号分隔的多模型）
+        route_content = match.group(1)
+        if route_content.count('MODEL') == 1 and ',' not in route_content.split('MODEL')[1].split('\n')[0]:
+            algo_block = '\n  ALGORITHM confidence {\n    threshold: 0.8\n  }\n'
+            return dsl[:match.start(2)] + algo_block + match.group(2) + dsl[match.end():]
+    return dsl
+
+
+def mutate_struct_nested_route(dsl: str) -> str:
+    """嵌套的 ROUTE（不允许）"""
+    route_pattern = r'(ROUTE\s+\w+[^{]*\{[^}]*?)(\n\s*\})'
+    match = re.search(route_pattern, dsl, re.DOTALL)
+    if match:
+        nested_route = '\n  ROUTE nested_invalid {\n    PRIORITY 99\n    MODEL "test:1b"\n  }'
+        return dsl[:match.start(2)] + nested_route + match.group(2) + dsl[match.end():]
+    return dsl
+
+
 # 变异类型注册
 MUTATION_TYPES: dict[str, list[MutationType]] = {
     'syntax_error': [
@@ -238,6 +479,29 @@ MUTATION_TYPES: dict[str, list[MutationType]] = {
         MutationType('wrong_field_type', 'Wrong field value type', mutate_schema_wrong_field_type),
         MutationType('wrong_field_for_type', 'Field not valid for signal type', mutate_schema_wrong_field_for_type),
         MutationType('invalid_enum', 'Invalid enum value', mutate_schema_invalid_enum),
+    ],
+    'bool_expr_error': [
+        MutationType('paren_mismatch', 'Mismatched parentheses in boolean expression', mutate_bool_paren_mismatch),
+        MutationType('missing_operand', 'Missing operand after AND/OR operator', mutate_bool_missing_operand),
+        MutationType('double_operator', 'Duplicate boolean operator (AND AND)', mutate_bool_double_operator),
+        MutationType('invalid_nesting', 'Invalid nesting (NOT NOT, AND OR)', mutate_bool_invalid_nesting),
+        MutationType('wrong_precedence', 'Missing parentheses causing precedence issues', mutate_bool_wrong_precedence),
+        MutationType('empty_expr', 'Empty WHEN expression', mutate_bool_empty_expr),
+    ],
+    'model_error': [
+        MutationType('trailing_comma', 'Trailing comma after last model', mutate_model_trailing_comma),
+        MutationType('duplicate_attr', 'Duplicate model attribute', mutate_model_duplicate_attr),
+        MutationType('invalid_attr', 'Invalid model attribute name', mutate_model_invalid_attr),
+        MutationType('empty_name', 'Empty model name string', mutate_model_empty_name),
+        MutationType('missing_quotes', 'Model name without quotes', mutate_model_missing_quotes),
+    ],
+    'structural_error': [
+        MutationType('route_missing_model', 'ROUTE without MODEL declaration', mutate_struct_route_missing_model),
+        MutationType('route_missing_priority', 'ROUTE without PRIORITY', mutate_struct_route_missing_priority),
+        MutationType('signal_after_route', 'SIGNAL declared after ROUTE (wrong order)', mutate_struct_signal_after_route),
+        MutationType('duplicate_route_name', 'Duplicate route names', mutate_struct_duplicate_route_name),
+        MutationType('algorithm_single_model', 'ALGORITHM with single MODEL (semantic error)', mutate_struct_algorithm_single_model),
+        MutationType('nested_route', 'Nested ROUTE declaration (not allowed)', mutate_struct_nested_route),
     ],
 }
 
