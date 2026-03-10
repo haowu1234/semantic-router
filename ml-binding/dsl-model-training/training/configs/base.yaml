@@ -1,0 +1,101 @@
+# Base configuration for DSL model training
+# Override specific settings in stage-specific configs
+
+# Model settings
+model:
+  name: "Qwen/Qwen2.5-3B"
+  revision: "main"
+  trust_remote_code: true
+  torch_dtype: "bfloat16"
+  attn_implementation: "flash_attention_2"  # or "sdpa" for non-flash
+  max_length: 2048
+
+# Tokenizer settings
+tokenizer:
+  padding_side: "right"
+  add_eos_token: true
+  add_bos_token: false
+
+# LoRA settings (PEFT)
+lora:
+  enabled: true
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+  bias: "none"
+  task_type: "CAUSAL_LM"
+
+# Training settings
+training:
+  output_dir: "./checkpoints"
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 8
+  gradient_accumulation_steps: 4
+  learning_rate: 2.0e-5
+  weight_decay: 0.01
+  num_train_epochs: 3
+  max_steps: -1  # -1 means use num_train_epochs
+  warmup_ratio: 0.1
+  lr_scheduler_type: "cosine"
+  
+  # Optimization
+  optim: "adamw_torch"
+  max_grad_norm: 1.0
+  
+  # Logging & Checkpointing
+  logging_steps: 10
+  save_steps: 500
+  save_total_limit: 3
+  eval_steps: 500
+  eval_strategy: "steps"
+  
+  # Precision
+  bf16: true
+  fp16: false
+  
+  # Reproducibility
+  seed: 42
+  data_seed: 42
+
+# Data settings
+data:
+  train_split: "train"
+  eval_split: "validation"
+  max_train_samples: null  # null means use all
+  max_eval_samples: 1000
+  preprocessing_num_workers: 4
+  
+# Wandb settings
+wandb:
+  enabled: true
+  project: "dsl-model-training"
+  entity: null  # set your wandb entity
+  name: null    # auto-generated if null
+  tags: ["dsl", "router"]
+
+# Hardware settings
+hardware:
+  gradient_checkpointing: true
+  use_flash_attention: true
+  
+# Evaluation settings
+evaluation:
+  metrics:
+    - "syntax_accuracy"
+    - "semantic_accuracy"
+    - "compile_success"
+    - "bleu"
+    - "exact_match"
+  num_beams: 1
+  do_sample: false
+  temperature: 1.0
+  top_p: 1.0
+  max_new_tokens: 1024

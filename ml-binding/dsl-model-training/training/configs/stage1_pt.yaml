@@ -1,0 +1,46 @@
+# Stage 1: Syntax Pre-training Configuration
+# Goal: Learn DSL syntax structure through causal language modeling
+
+defaults:
+  - base
+
+stage: "stage1_syntax_pt"
+description: "Pre-train on DSL syntax to learn grammar patterns"
+
+# Override model settings for pre-training
+model:
+  max_length: 2048
+
+# Stage-specific training settings
+training:
+  output_dir: "./checkpoints/stage1_pt"
+  num_train_epochs: 2
+  learning_rate: 5.0e-5  # Higher LR for pre-training
+  per_device_train_batch_size: 8
+  gradient_accumulation_steps: 2
+  warmup_ratio: 0.05
+  
+  # Save best model
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_loss"
+  greater_is_better: false
+
+# Data settings for Stage 1
+data:
+  train_file: "stage1_syntax_pt.jsonl"
+  eval_file: "stage1_syntax_pt_eval.jsonl"
+  
+  # Data format: completion only (no instruction)
+  format: "completion"
+  
+  # Template for pre-training
+  template: |
+    <|im_start|>system
+    You are a Signal DSL configuration generator.<|im_end|>
+    <|im_start|>assistant
+    {dsl}<|im_end|>
+
+# Wandb
+wandb:
+  name: "dsl-stage1-syntax-pt"
+  tags: ["dsl", "stage1", "pretraining", "syntax"]

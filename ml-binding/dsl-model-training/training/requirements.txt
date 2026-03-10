@@ -1,0 +1,37 @@
+# DSL Model Training Dependencies
+
+# Core ML
+torch>=2.1.0
+transformers>=4.40.0
+datasets>=2.18.0
+accelerate>=0.28.0
+peft>=0.10.0
+trl>=0.8.0
+
+# DPO Training
+trl[dpo]>=0.8.0
+
+# Evaluation
+evaluate>=0.4.0
+rouge-score>=0.1.2
+sacrebleu>=2.4.0
+
+# Utilities
+pyyaml>=6.0
+omegaconf>=2.3.0
+wandb>=0.16.0
+tensorboard>=2.16.0
+
+# Data Processing
+jsonlines>=4.0.0
+pandas>=2.2.0
+
+# Progress & Logging
+tqdm>=4.66.0
+rich>=13.7.0
+
+# Optional: Flash Attention (for faster training)
+# flash-attn>=2.5.0
+
+# Optional: bitsandbytes (for quantization)
+# bitsandbytes>=0.43.0

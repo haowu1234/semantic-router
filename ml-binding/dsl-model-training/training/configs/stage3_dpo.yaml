@@ -1,0 +1,76 @@
+# Stage 3: Direct Preference Optimization Configuration
+# Goal: Align model to prefer valid DSL over common errors
+
+defaults:
+  - base
+
+stage: "stage3_dpo"
+description: "DPO training to avoid common DSL errors"
+
+# Model settings
+model:
+  max_length: 2048
+  # Load from Stage 2 checkpoint
+  pretrained_path: null  # Set to stage2 checkpoint path
+
+# DPO-specific settings
+dpo:
+  beta: 0.1  # KL penalty coefficient
+  loss_type: "sigmoid"  # sigmoid, hinge, ipo
+  label_smoothing: 0.0
+  
+  # Reference model
+  reference_free: false  # If true, don't use reference model (not recommended)
+
+# Stage-specific training settings
+training:
+  output_dir: "./checkpoints/stage3_dpo"
+  num_train_epochs: 1  # DPO typically needs fewer epochs
+  learning_rate: 5.0e-6  # Lower LR for DPO
+  per_device_train_batch_size: 2
+  gradient_accumulation_steps: 8
+  warmup_ratio: 0.1
+  
+  # DPO doesn't typically need eval during training
+  eval_strategy: "epoch"
+  
+  # Save best model
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_loss"
+  greater_is_better: false
+
+# Data settings for Stage 3
+data:
+  train_file: "stage3_dpo.jsonl"
+  eval_file: "stage3_dpo_eval.jsonl"
+  
+  # Data format: preference pairs
+  format: "preference"
+  
+  # DPO template
+  prompt_template: |
+    <|im_start|>system
+    You are a Signal DSL configuration generator. Generate valid Signal DSL configurations.<|im_end|>
+    <|im_start|>user
+    {prompt}<|im_end|>
+    <|im_start|>assistant
+  
+  # Fields in data
+  prompt_field: "prompt"
+  chosen_field: "chosen"
+  rejected_field: "rejected"
+
+# Wandb
+wandb:
+  name: "dsl-stage3-dpo"
+  tags: ["dsl", "stage3", "dpo", "preference"]
+
+# Error categories to focus on (for analysis)
+error_categories:
+  - "syntax_error"
+  - "reference_error"
+  - "constraint_violation"
+  - "schema_mismatch"
+  - "bool_expr_error"
+  - "model_error"
+  - "structural_error"

@@ -1,0 +1,58 @@
+# Stage 2: Supervised Fine-Tuning Configuration
+# Goal: Learn NL → DSL mapping
+
+defaults:
+  - base
+
+stage: "stage2_sft"
+description: "Fine-tune on NL→DSL pairs for instruction following"
+
+# Model settings
+model:
+  max_length: 2048
+  # Load from Stage 1 checkpoint
+  pretrained_path: null  # Set to stage1 checkpoint path, or null to start fresh
+
+# Stage-specific training settings
+training:
+  output_dir: "./checkpoints/stage2_sft"
+  num_train_epochs: 3
+  learning_rate: 2.0e-5
+  per_device_train_batch_size: 4
+  gradient_accumulation_steps: 4
+  warmup_ratio: 0.1
+  
+  # Save best model
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_loss"
+  greater_is_better: false
+
+# Data settings for Stage 2
+data:
+  train_file: "stage2_sft.jsonl"
+  eval_file: "stage2_sft_eval.jsonl"
+  
+  # Data format: instruction-input-output
+  format: "instruction"
+  
+  # Chat template for SFT
+  template: |
+    <|im_start|>system
+    You are a Signal DSL configuration generator. Convert natural language descriptions into valid Signal DSL configurations.<|im_end|>
+    <|im_start|>user
+    {instruction}
+    
+    {input}<|im_end|>
+    <|im_start|>assistant
+    {output}<|im_end|>
+  
+  # System prompt
+  system_prompt: "You are a Signal DSL configuration generator. Convert natural language descriptions into valid Signal DSL configurations."
+  
+  # Default instruction if not provided
+  default_instruction: "Convert the following natural language description into Signal DSL configuration."
+
+# Wandb
+wandb:
+  name: "dsl-stage2-sft"
+  tags: ["dsl", "stage2", "sft", "nl2dsl"]
