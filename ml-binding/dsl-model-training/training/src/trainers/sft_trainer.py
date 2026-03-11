@@ -123,12 +123,20 @@ class DSLSFTTrainer:
         """Build trl SFTTrainer."""
         data_config = self.config.get('data', {})
         
+        # Create data collator for proper padding
+        data_collator = SFTDataCollator(
+            tokenizer=self.tokenizer,
+            padding=True,
+            max_length=self.config.get('model', {}).get('max_length', 2048),
+        )
+        
         trainer = SFTTrainer(
             model=self.model,
             args=self.training_args,
             train_dataset=self.train_dataset,
             eval_dataset=self.eval_dataset,
             tokenizer=self.tokenizer,
+            data_collator=data_collator,
             compute_metrics=self.compute_metrics,
         )
         
