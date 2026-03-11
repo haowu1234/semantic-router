@@ -12,6 +12,10 @@
 5. bool_expr_error: 布尔表达式错误 (AND/OR/NOT 嵌套组合错误)
 6. model_error: MODEL 声明错误 (多模型语法、属性重复)
 7. structural_error: 结构错误 (缺失必要块、块顺序错误)
+8. semantic_error: 语义/逻辑错误 (死代码、路由冲突、优先级碰撞)
+9. global_error: GLOBAL 配置错误 (缺失、重复、无效默认值)
+10. backend_error: BACKEND 配置错误 (缺失字段、无效配置)
+11. encoding_error: 编码/格式错误 (混合缩进、特殊字符)
 
 用法:
     python negative_sampler.py --input synthetic/ --output negative/
@@ -457,6 +461,305 @@ def mutate_struct_nested_route(dsl: str) -> str:
     return dsl
 
 
+# ============== 语义/逻辑错误 (新增) ==============
+
+def mutate_semantic_conflicting_routes(dsl: str) -> str:
+    """相同条件但不同模型的路由冲突"""
+    # 找到 ROUTE 块
+    route_pattern = r'(ROUTE\s+(\w+)[^{]*\{[^}]*WHEN\s+([^\n]+)[^}]*MODEL\s+"([^"]+)"[^}]*\})'
+    matches = list(re.finditer(route_pattern, dsl, re.DOTALL))
+    if matches:
+        match = matches[0]
+        route_name = match.group(2)
+        when_clause = match.group(3)
+        model_name = match.group(4)
+        # 添加一个冲突路由（相同 WHEN，不同 MODEL，相同 PRIORITY）
+        conflict_route = f'\n\nROUTE {route_name}_conflict {{\n  PRIORITY 100\n  WHEN {when_clause}\n  MODEL "conflicting-model:7b"\n}}'
+        return dsl + conflict_route
+    return dsl
+
+
+def mutate_semantic_dead_when(dsl: str) -> str:
+    """创建永假的 WHEN 条件 (死代码)"""
+    # 找到 WHEN 子句，改成 a AND NOT a
+    when_pattern = r'(WHEN\s+)(\w+\("[^"]+"\))'
+    match = re.search(when_pattern, dsl)
+    if match:
+        condition = match.group(2)
+        # 创建永假条件: condition AND NOT condition
+        dead_condition = f'{condition} AND NOT {condition}'
+        return dsl[:match.start(2)] + dead_condition + dsl[match.end():]
+    return dsl
+
+
+def mutate_semantic_priority_collision(dsl: str) -> str:
+    """多个路由相同优先级（歧义）"""
+    # 找到所有 PRIORITY
+    priority_pattern = r'PRIORITY\s+(\d+)'
+    matches = list(re.finditer(priority_pattern, dsl))
+    if len(matches) >= 2:
+        # 把第二个优先级改成和第一个一样
+        first_priority = matches[0].group(1)
+        second_match = matches[1]
+        return dsl[:second_match.start(1)] + first_priority + dsl[second_match.end(1):]
+    return dsl
+
+
+def mutate_semantic_unreachable_route(dsl: str) -> str:
+    """创建永远不会被匹配到的路由（被更高优先级完全覆盖）"""
+    # 找到 ROUTE 块
+    route_pattern = r'(ROUTE\s+\w+[^{]*\{[^}]*PRIORITY\s+\d+[^}]*\})'
+    match = re.search(route_pattern, dsl, re.DOTALL)
+    if match:
+        # 添加一个极低优先级的 catch-all 路由
+        unreachable = '\n\nROUTE unreachable_route {\n  PRIORITY 1\n  WHEN keyword("*")  # This will never match after catch-all\n  MODEL "unused:1b"\n}'
+        # 同时添加一个高优先级的 catch-all
+        catchall = '\n\nROUTE catch_all {\n  PRIORITY 999\n  MODEL "default:7b"  # No WHEN = catch all\n}'
+        return dsl + catchall + unreachable
+    return dsl
+
+
+def mutate_semantic_circular_plugin(dsl: str) -> str:
+    """插件循环引用或自引用"""
+    # 找到 PLUGIN 声明
+    plugin_pattern = r'(PLUGIN\s+(\w+)\s*\{[^}]*)(})'
+    match = re.search(plugin_pattern, dsl, re.DOTALL)
+    if match:
+        plugin_name = match.group(2)
+        # 添加自引用配置
+        self_ref = f'\n  depends_on: "{plugin_name}"  # Circular reference'
+        return dsl[:match.end(1)] + self_ref + '\n' + match.group(3) + dsl[match.end():]
+    return dsl
+
+
+def mutate_semantic_tautology_when(dsl: str) -> str:
+    """创建永真的 WHEN 条件 (总是匹配，可能不是期望行为)"""
+    when_pattern = r'(WHEN\s+)(\w+\("[^"]+"\))'
+    match = re.search(when_pattern, dsl)
+    if match:
+        condition = match.group(2)
+        # 创建永真条件: condition OR NOT condition
+        tautology = f'{condition} OR NOT {condition}'
+        return dsl[:match.start(2)] + tautology + dsl[match.end():]
+    return dsl
+
+
+# ============== GLOBAL 配置错误 (新增) ==============
+
+def mutate_global_duplicate(dsl: str) -> str:
+    """重复的 GLOBAL 块"""
+    global_pattern = r'(GLOBAL\s*\{[^}]*\})'
+    match = re.search(global_pattern, dsl, re.DOTALL)
+    if match:
+        # 添加重复的 GLOBAL 块
+        dup_global = '\n\nGLOBAL {\n  default_timeout: 60\n}'
+        return dsl + dup_global
+    else:
+        # 如果没有 GLOBAL，添加两个
+        two_globals = 'GLOBAL {\n  default_model: "gpt-4o"\n}\n\nGLOBAL {\n  default_model: "claude-3"\n}\n\n'
+        return two_globals + dsl
+    return dsl
+
+
+def mutate_global_invalid_default_model(dsl: str) -> str:
+    """GLOBAL 中引用不存在的默认模型"""
+    global_pattern = r'(GLOBAL\s*\{[^}]*)(})'
+    match = re.search(global_pattern, dsl, re.DOTALL)
+    if match:
+        invalid_default = '\n  default_model: "nonexistent-model-xyz:999b"'
+        return dsl[:match.end(1)] + invalid_default + '\n' + match.group(2) + dsl[match.end():]
+    else:
+        # 添加带无效默认模型的 GLOBAL
+        invalid_global = 'GLOBAL {\n  default_model: "nonexistent-model-xyz:999b"\n}\n\n'
+        return invalid_global + dsl
+    return dsl
+
+
+def mutate_global_conflicting_settings(dsl: str) -> str:
+    """GLOBAL 中的冲突配置"""
+    global_pattern = r'(GLOBAL\s*\{[^}]*)(})'
+    match = re.search(global_pattern, dsl, re.DOTALL)
+    if match:
+        # 添加冲突设置
+        conflicts = '\n  timeout: 30\n  timeout: 60  # Duplicate conflicting timeout'
+        return dsl[:match.end(1)] + conflicts + '\n' + match.group(2) + dsl[match.end():]
+    return dsl
+
+
+def mutate_global_invalid_field(dsl: str) -> str:
+    """GLOBAL 中使用无效字段"""
+    global_pattern = r'(GLOBAL\s*\{[^}]*)(})'
+    match = re.search(global_pattern, dsl, re.DOTALL)
+    if match:
+        invalid_field = '\n  not_a_valid_global_field: "something"'
+        return dsl[:match.end(1)] + invalid_field + '\n' + match.group(2) + dsl[match.end():]
+    else:
+        invalid_global = 'GLOBAL {\n  not_a_valid_global_field: "something"\n}\n\n'
+        return invalid_global + dsl
+    return dsl
+
+
+# ============== BACKEND 配置错误 (新增) ==============
+
+def mutate_backend_missing_host(dsl: str) -> str:
+    """BACKEND 缺少必要的 host 字段"""
+    # 找到 BACKEND 块
+    backend_pattern = r'(BACKEND\s+(\w+)\s*\{)([^}]*)(})'
+    match = re.search(backend_pattern, dsl, re.DOTALL)
+    if match:
+        content = match.group(3)
+        # 删除 host 行
+        new_content = re.sub(r'\s*host:\s*"[^"]*"\s*\n?', '\n', content)
+        if new_content != content:
+            return dsl[:match.start(3)] + new_content + dsl[match.end(3):]
+    else:
+        # 添加一个缺少 host 的 BACKEND
+        bad_backend = '\n\nBACKEND incomplete_backend {\n  port: 8080\n  # Missing required host field\n}'
+        return dsl + bad_backend
+    return dsl
+
+
+def mutate_backend_invalid_port(dsl: str) -> str:
+    """BACKEND 端口配置无效"""
+    backend_pattern = r'(BACKEND\s+\w+\s*\{[^}]*port:\s*)(\d+)([^}]*\})'
+    match = re.search(backend_pattern, dsl, re.DOTALL)
+    if match:
+        # 设置无效端口
+        bad_port = random.choice(['0', '-1', '65536', '99999', '"not_a_number"'])
+        return dsl[:match.start(2)] + bad_port + dsl[match.end(2):]
+    else:
+        # 添加带无效端口的 BACKEND
+        bad_backend = '\n\nBACKEND bad_port_backend {\n  host: "localhost"\n  port: 99999\n}'
+        return dsl + bad_backend
+    return dsl
+
+
+def mutate_backend_ssl_mismatch(dsl: str) -> str:
+    """SSL 配置和端口不匹配 (port: 443 but ssl: false)"""
+    backend_pattern = r'(BACKEND\s+\w+\s*\{[^}]*)(})'
+    match = re.search(backend_pattern, dsl, re.DOTALL)
+    if match:
+        content = match.group(1)
+        # 检查是否有 port: 443，如果有添加 ssl: false
+        if 'port: 443' in content or 'port: 8443' in content:
+            mismatch = '\n  ssl: false  # Mismatch: HTTPS port but SSL disabled'
+            return dsl[:match.end(1)] + mismatch + '\n' + match.group(2) + dsl[match.end():]
+        else:
+            # 添加不匹配的配置
+            mismatch = '\n  port: 443\n  ssl: false  # Mismatch'
+            return dsl[:match.end(1)] + mismatch + '\n' + match.group(2) + dsl[match.end():]
+    else:
+        bad_backend = '\n\nBACKEND ssl_mismatch {\n  host: "api.example.com"\n  port: 443\n  ssl: false\n}'
+        return dsl + bad_backend
+    return dsl
+
+
+def mutate_backend_duplicate_name(dsl: str) -> str:
+    """重复的 BACKEND 名称"""
+    backend_pattern = r'BACKEND\s+(\w+)'
+    matches = list(re.finditer(backend_pattern, dsl))
+    if matches:
+        first_name = matches[0].group(1)
+        # 添加同名 BACKEND
+        dup_backend = f'\n\nBACKEND {first_name} {{\n  host: "duplicate.example.com"\n  port: 8080\n}}'
+        return dsl + dup_backend
+    return dsl
+
+
+def mutate_backend_invalid_timeout(dsl: str) -> str:
+    """BACKEND 超时配置无效"""
+    backend_pattern = r'(BACKEND\s+\w+\s*\{[^}]*)(})'
+    match = re.search(backend_pattern, dsl, re.DOTALL)
+    if match:
+        bad_timeout = random.choice([
+            '\n  timeout: -1',
+            '\n  timeout: "slow"',
+            '\n  timeout: 0',
+            '\n  connect_timeout: -100',
+        ])
+        return dsl[:match.end(1)] + bad_timeout + '\n' + match.group(2) + dsl[match.end():]
+    else:
+        bad_backend = '\n\nBACKEND bad_timeout {\n  host: "api.example.com"\n  port: 8080\n  timeout: -1\n}'
+        return dsl + bad_backend
+    return dsl
+
+
+# ============== 编码/格式错误 (新增) ==============
+
+def mutate_encoding_mixed_indent(dsl: str) -> str:
+    """混合使用 tab 和 space 缩进"""
+    # 找到用空格缩进的行，替换部分为 tab
+    lines = dsl.split('\n')
+    new_lines = []
+    for i, line in enumerate(lines):
+        if line.startswith('  ') and random.random() < 0.3:
+            # 将空格替换为 tab
+            new_lines.append('\t' + line.lstrip())
+        else:
+            new_lines.append(line)
+    result = '\n'.join(new_lines)
+    return result if result != dsl else dsl
+
+
+def mutate_encoding_chinese_colon(dsl: str) -> str:
+    """使用中文冒号代替英文冒号"""
+    # 找到 field: value 模式，替换冒号
+    colon_pattern = r'(\s+\w+):\s*'
+    matches = list(re.finditer(colon_pattern, dsl))
+    if matches:
+        match = random.choice(matches)
+        # 使用中文冒号
+        return dsl[:match.end(1)] + '：' + dsl[match.end(1)+1:]
+    return dsl
+
+
+def mutate_encoding_chinese_quotes(dsl: str) -> str:
+    """使用中文引号代替英文引号"""
+    # 找到字符串，替换引号
+    string_pattern = r'"([^"]*)"'
+    matches = list(re.finditer(string_pattern, dsl))
+    if matches:
+        match = random.choice(matches)
+        content = match.group(1)
+        # 使用中文引号
+        return dsl[:match.start()] + f'"{content}"' + dsl[match.end():]
+    return dsl
+
+
+def mutate_encoding_invisible_char(dsl: str) -> str:
+    """插入不可见字符 (零宽字符)"""
+    # 在关键字中插入零宽空格
+    keywords = ['SIGNAL', 'ROUTE', 'PLUGIN', 'BACKEND', 'MODEL', 'WHEN', 'PRIORITY']
+    for kw in keywords:
+        if kw in dsl:
+            # 在关键字中间插入零宽空格 U+200B
+            pos = len(kw) // 2
+            corrupted = kw[:pos] + '\u200b' + kw[pos:]
+            return dsl.replace(kw, corrupted, 1)
+    return dsl
+
+
+def mutate_encoding_trailing_whitespace(dsl: str) -> str:
+    """添加行尾空白字符"""
+    lines = dsl.split('\n')
+    new_lines = []
+    for i, line in enumerate(lines):
+        if line.strip() and random.random() < 0.3:
+            # 添加随机数量的尾部空格
+            trailing = ' ' * random.randint(1, 5)
+            new_lines.append(line + trailing)
+        else:
+            new_lines.append(line)
+    result = '\n'.join(new_lines)
+    return result if result != dsl else dsl
+
+
+def mutate_encoding_bom(dsl: str) -> str:
+    """在文件开头添加 BOM"""
+    # 添加 UTF-8 BOM
+    return '\ufeff' + dsl
+
+
 # 变异类型注册
 MUTATION_TYPES: dict[str, list[MutationType]] = {
     'syntax_error': [
@@ -502,6 +805,36 @@ MUTATION_TYPES: dict[str, list[MutationType]] = {
         MutationType('duplicate_route_name', 'Duplicate route names', mutate_struct_duplicate_route_name),
         MutationType('algorithm_single_model', 'ALGORITHM with single MODEL (semantic error)', mutate_struct_algorithm_single_model),
         MutationType('nested_route', 'Nested ROUTE declaration (not allowed)', mutate_struct_nested_route),
+    ],
+    # ============== 新增变异类别 ==============
+    'semantic_error': [
+        MutationType('conflicting_routes', 'Routes with same condition but different models', mutate_semantic_conflicting_routes),
+        MutationType('dead_when', 'WHEN condition that is always false (dead code)', mutate_semantic_dead_when),
+        MutationType('priority_collision', 'Multiple routes with identical priority', mutate_semantic_priority_collision),
+        MutationType('unreachable_route', 'Route that can never be matched', mutate_semantic_unreachable_route),
+        MutationType('circular_plugin', 'Plugin with circular/self reference', mutate_semantic_circular_plugin),
+        MutationType('tautology_when', 'WHEN condition that is always true', mutate_semantic_tautology_when),
+    ],
+    'global_error': [
+        MutationType('duplicate_global', 'Multiple GLOBAL blocks', mutate_global_duplicate),
+        MutationType('invalid_default_model', 'GLOBAL references non-existent default model', mutate_global_invalid_default_model),
+        MutationType('conflicting_settings', 'Conflicting settings in GLOBAL', mutate_global_conflicting_settings),
+        MutationType('invalid_field', 'Invalid field in GLOBAL block', mutate_global_invalid_field),
+    ],
+    'backend_error': [
+        MutationType('missing_host', 'BACKEND without required host field', mutate_backend_missing_host),
+        MutationType('invalid_port', 'BACKEND with invalid port value', mutate_backend_invalid_port),
+        MutationType('ssl_mismatch', 'SSL config mismatched with port (443 but ssl:false)', mutate_backend_ssl_mismatch),
+        MutationType('duplicate_name', 'Duplicate BACKEND names', mutate_backend_duplicate_name),
+        MutationType('invalid_timeout', 'BACKEND with invalid timeout value', mutate_backend_invalid_timeout),
+    ],
+    'encoding_error': [
+        MutationType('mixed_indent', 'Mixed tabs and spaces indentation', mutate_encoding_mixed_indent),
+        MutationType('chinese_colon', 'Chinese colon instead of ASCII colon', mutate_encoding_chinese_colon),
+        MutationType('chinese_quotes', 'Chinese quotes instead of ASCII quotes', mutate_encoding_chinese_quotes),
+        MutationType('invisible_char', 'Invisible zero-width characters in keywords', mutate_encoding_invisible_char),
+        MutationType('trailing_whitespace', 'Trailing whitespace in lines', mutate_encoding_trailing_whitespace),
+        MutationType('bom', 'UTF-8 BOM at file start', mutate_encoding_bom),
     ],
 }
 

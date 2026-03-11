@@ -129,6 +129,79 @@ def classify_complexity(dsl: str) -> str:
 | `wrong_field_for_type` | 字段不属于该类型 | keyword 信号添加 `mmlu_categories` |
 | `invalid_enum` | 无效枚举值 | `method: "invalid_method"` |
 
+### 6.5 布尔表达式错误 (`bool_expr_error`)
+
+| 变异类型 | 描述 | 示例 |
+|:---|:---|:---|
+| `paren_mismatch` | 括号不匹配 | `WHEN (a OR b AND c` |
+| `missing_operand` | 缺少操作数 | `WHEN a AND` |
+| `double_operator` | 重复操作符 | `WHEN a AND AND b` |
+| `invalid_nesting` | 非法嵌套 | `WHEN NOT NOT a` 或 `AND OR b` |
+| `wrong_precedence` | 优先级错误 | 去掉必要括号 `a OR b AND c` |
+| `empty_expr` | 空表达式 | `WHEN ` |
+
+### 6.6 MODEL 错误 (`model_error`)
+
+| 变异类型 | 描述 | 示例 |
+|:---|:---|:---|
+| `trailing_comma` | 尾逗号 | `MODEL "gpt-4o",` |
+| `duplicate_attr` | 重复属性 | `(reasoning=true, reasoning=false)` |
+| `invalid_attr` | 无效属性 | `(unknown_attr="bad")` |
+| `empty_name` | 空模型名 | `MODEL ""` |
+| `missing_quotes` | 缺少引号 | `MODEL gpt-4o` |
+
+### 6.7 结构错误 (`structural_error`)
+
+| 变异类型 | 描述 | 示例 |
+|:---|:---|:---|
+| `route_missing_model` | 路由缺 MODEL | ROUTE 块无 MODEL 声明 |
+| `route_missing_priority` | 路由缺 PRIORITY | ROUTE 块无 PRIORITY |
+| `signal_after_route` | 信号声明顺序错误 | SIGNAL 出现在 ROUTE 之后 |
+| `duplicate_route_name` | 重复路由名 | 两个 ROUTE 同名 |
+| `algorithm_single_model` | 单模型配 ALGORITHM | 单 MODEL 却有 ALGORITHM 块 |
+| `nested_route` | 嵌套路由 | ROUTE 内部嵌套 ROUTE |
+
+### 6.8 语义/逻辑错误 (`semantic_error`) ⭐ 新增
+
+| 变异类型 | 描述 | 示例 |
+|:---|:---|:---|
+| `conflicting_routes` | 路由冲突 | 相同 WHEN 条件但不同 MODEL |
+| `dead_when` | 死代码 | `WHEN a AND NOT a` (永假) |
+| `priority_collision` | 优先级碰撞 | 多个路由相同 PRIORITY |
+| `unreachable_route` | 不可达路由 | 被 catch-all 完全覆盖 |
+| `circular_plugin` | 循环引用 | 插件自引用 `depends_on: self` |
+| `tautology_when` | 永真条件 | `WHEN a OR NOT a` (总是匹配) |
+
+### 6.9 GLOBAL 配置错误 (`global_error`) ⭐ 新增
+
+| 变异类型 | 描述 | 示例 |
+|:---|:---|:---|
+| `duplicate_global` | 重复 GLOBAL 块 | 多个 GLOBAL 声明 |
+| `invalid_default_model` | 无效默认模型 | 引用不存在的模型 |
+| `conflicting_settings` | 冲突配置 | `timeout: 30` + `timeout: 60` |
+| `invalid_field` | 无效字段 | GLOBAL 中使用未知字段 |
+
+### 6.10 BACKEND 配置错误 (`backend_error`) ⭐ 新增
+
+| 变异类型 | 描述 | 示例 |
+|:---|:---|:---|
+| `missing_host` | 缺少 host | BACKEND 无 host 字段 |
+| `invalid_port` | 无效端口 | `port: 99999` 或 `port: -1` |
+| `ssl_mismatch` | SSL 不匹配 | `port: 443` + `ssl: false` |
+| `duplicate_name` | 重复名称 | 两个 BACKEND 同名 |
+| `invalid_timeout` | 无效超时 | `timeout: -1` 或 `timeout: "slow"` |
+
+### 6.11 编码/格式错误 (`encoding_error`) ⭐ 新增
+
+| 变异类型 | 描述 | 示例 |
+|:---|:---|:---|
+| `mixed_indent` | 混合缩进 | Tab 和空格混用 |
+| `chinese_colon` | 中文冒号 | `description：` 而不是 `description:` |
+| `chinese_quotes` | 中文引号 | `"test"` 而不是 `"test"` |
+| `invisible_char` | 不可见字符 | 关键字中插入零宽空格 |
+| `trailing_whitespace` | 行尾空白 | 行末有多余空格 |
+| `bom` | UTF-8 BOM | 文件开头有 BOM 标记 |
+
 ## 7. 数据格式规范
 
 ### 7.1 Stage 1: 语法预训练
