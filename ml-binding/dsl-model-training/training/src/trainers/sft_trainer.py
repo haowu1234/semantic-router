@@ -13,7 +13,7 @@ from transformers import PreTrainedModel, PreTrainedTokenizer, TrainingArguments
 from torch.utils.data import Dataset
 from trl import SFTTrainer, SFTConfig
 
-from ..data.collator import SFTDataCollator
+from data.collator import SFTDataCollator
 
 
 class DSLSFTTrainer:

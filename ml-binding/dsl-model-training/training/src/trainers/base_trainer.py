@@ -18,7 +18,7 @@ from transformers import (
 )
 from torch.utils.data import Dataset
 
-from ..data.collator import DSLDataCollator
+from data.collator import DSLDataCollator
 
 
 class DSLTrainer:
