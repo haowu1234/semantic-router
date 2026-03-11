@@ -8,8 +8,8 @@ model:
   revision: "main"
   trust_remote_code: true
   torch_dtype: "bfloat16"
-  # ROCm: use "sdpa" (PyTorch native), flash_attention_2 requires special ROCm build
-  attn_implementation: "sdpa"
+  # ROCm: use "eager" - SDPA has NaN gradient bug with padding on ROCm
+  attn_implementation: "eager"
   max_length: 2048
 
 # Tokenizer settings
