@@ -1,9 +1,4 @@
-"""Evaluation utilities"""
-
-from .metrics import DSLMetrics
+# Evaluation module
 from .evaluator import DSLEvaluator
 
-__all__ = [
-    "DSLMetrics",
-    "DSLEvaluator",
-]
+__all__ = ['DSLEvaluator']
