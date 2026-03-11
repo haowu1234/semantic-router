@@ -57,3 +57,7 @@ data:
 wandb:
   name: "dsl-stage2-sft"
   tags: ["dsl", "stage2", "sft", "nl2dsl"]
+
+# Hardware settings - override base
+hardware:
+  gradient_checkpointing: false  # 禁用：bf16+checkpointing+长序列在ROCm上导致NaN梯度
