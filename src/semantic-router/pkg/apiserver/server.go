@@ -78,7 +78,6 @@ func Init(configPath string, port int, enableSystemPromptAPI bool) error {
 	apiServer := &ClassificationAPIServer{
 		classificationSvc:     liveClassificationSvc,
 		config:                cfg,
-		runtimeConfig:         newLiveRuntimeConfig(cfg, config.Get, liveClassificationSvc.UpdateConfig),
 		configPath:            configPath,
 		memoryStore:           memoryStore,
 		enableSystemPromptAPI: enableSystemPromptAPI,
@@ -224,10 +223,7 @@ func (s *ClassificationAPIServer) registerConfigRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /config/deploy", s.handleConfigDeploy)
 	mux.HandleFunc("POST /config/rollback", s.handleConfigRollback)
 	mux.HandleFunc("GET /config/versions", s.handleConfigVersions)
-	s.registerOptionalSystemPromptRoutes(mux)
-}
 
-func (s *ClassificationAPIServer) registerMemoryRoutes(mux *http.ServeMux) {
 	// Memory management endpoints
 	mux.HandleFunc("GET /v1/memory/{id}", s.handleGetMemory)
 	mux.HandleFunc("GET /v1/memory", s.handleListMemories)

@@ -139,14 +139,33 @@ func configureReplayRecorder(
 	)
 }
 
-func buildReplayRoutingRecord(
-	ctx *RequestContext,
-	originalModel string,
-	selectedModel string,
-	decisionName string,
-) routerreplay.RoutingRecord {
-	guardrailsEnabled, jailbreakEnabled, piiEnabled, hallucinationEnabled := replayGuardrailState(ctx)
-	record := routerreplay.RoutingRecord{
+	reasoningMode := ctx.VSRReasoningMode
+	if reasoningMode == "" {
+		reasoningMode = "off"
+	}
+
+	modelForRecord := selectedModel
+	if modelForRecord == "" {
+		modelForRecord = originalModel
+	}
+
+	// Determine guardrail status from decision's rules tree (whether signals are configured),
+	// not from whether they actually fired. This preserves the "configured = enabled" semantics
+	// so replay records can distinguish "not configured" from "configured but not triggered".
+	var jailbreakEnabled, piiEnabled, hallucinationEnabled bool
+	if ctx.VSRSelectedDecision != nil {
+		jailbreakEnabled = ctx.VSRSelectedDecision.HasSignalType("jailbreak")
+		piiEnabled = ctx.VSRSelectedDecision.HasSignalType("pii")
+		if hallucinationCfg := ctx.VSRSelectedDecision.GetHallucinationConfig(); hallucinationCfg != nil {
+			hallucinationEnabled = hallucinationCfg.Enabled
+		}
+	}
+	guardrailsEnabled := jailbreakEnabled || piiEnabled
+
+	// Determine RAG status from context
+	ragEnabled := ctx.RAGRetrievedContext != ""
+
+	rec := routerreplay.RoutingRecord{
 		RequestID:       ctx.RequestID,
 		Decision:        decisionName,
 		Category:        ctx.VSRSelectedCategory,
