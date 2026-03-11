@@ -101,7 +101,7 @@ class DSLDPOTrainer:
             seed=training_config.get('seed', 42),
             
             # Gradient checkpointing
-            gradient_checkpointing=self.config.get('hardware', {}).get('gradient_checkpointing', True),
+            gradient_checkpointing=self.config.get('hardware', {}).get('gradient_checkpointing', False),
             
             # Max length
             max_length=self.config.get('model', {}).get('max_length', 2048),

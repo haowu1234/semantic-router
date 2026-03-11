@@ -119,7 +119,7 @@ class DSLTrainer:
             data_seed=training_config.get('data_seed', 42),
             
             # Gradient checkpointing
-            gradient_checkpointing=self.config.get('hardware', {}).get('gradient_checkpointing', True),
+            gradient_checkpointing=self.config.get('hardware', {}).get('gradient_checkpointing', False),
             
             # Wandb
             report_to=['wandb'] if wandb_config.get('enabled', False) else ['tensorboard'],

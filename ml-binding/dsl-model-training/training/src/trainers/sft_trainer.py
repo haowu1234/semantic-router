@@ -106,8 +106,8 @@ class DSLSFTTrainer:
             seed=training_config.get('seed', 42),
             data_seed=training_config.get('data_seed', 42),
             
-            # Gradient checkpointing
-            gradient_checkpointing=self.config.get('hardware', {}).get('gradient_checkpointing', True),
+            # Gradient checkpointing - 默认禁用，bf16+checkpointing+长序列在ROCm上会导致NaN
+            gradient_checkpointing=self.config.get('hardware', {}).get('gradient_checkpointing', False),
             
             # SFT specific
             max_seq_length=self.config.get('model', {}).get('max_length', 2048),

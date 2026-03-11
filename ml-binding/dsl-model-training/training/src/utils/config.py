@@ -95,6 +95,6 @@ def get_training_args_from_config(config: DictConfig) -> dict:
     
     # Add hardware args
     if 'hardware' in config:
-        training['gradient_checkpointing'] = config.hardware.get('gradient_checkpointing', True)
+        training['gradient_checkpointing'] = config.hardware.get('gradient_checkpointing', False)
     
     return training
