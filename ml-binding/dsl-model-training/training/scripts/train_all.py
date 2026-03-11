@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import torch
 from omegaconf import OmegaConf
 
-from utils.config import load_config, merge_configs
+from utils.config import load_config, merge_configs, config_to_dict
 from utils.logger import setup_logger, TrainingLogger
 from models.dsl_model import load_model_and_tokenizer, create_peft_model, merge_and_save
 from data.dataset import DSLDataset, SFTDataset, DPODataset
@@ -45,7 +45,7 @@ def train_stage1(
     
     # Load stage config
     stage_config = load_config(Path(__file__).parent.parent / "configs" / "stage1_pt.yaml")
-    config = merge_configs(dict(config), dict(stage_config))
+    config = merge_configs(config_to_dict(config), config_to_dict(stage_config))
     
     # Update output dir
     stage_output = output_dir / "stage1_pt"
@@ -107,7 +107,7 @@ def train_stage2(
     
     # Load stage config
     stage_config = load_config(Path(__file__).parent.parent / "configs" / "stage2_sft.yaml")
-    config = merge_configs(dict(config), dict(stage_config))
+    config = merge_configs(config_to_dict(config), config_to_dict(stage_config))
     
     # Update output dir
     stage_output = output_dir / "stage2_sft"
@@ -172,7 +172,7 @@ def train_stage3(
     
     # Load stage config
     stage_config = load_config(Path(__file__).parent.parent / "configs" / "stage3_dpo.yaml")
-    config = merge_configs(dict(config), dict(stage_config))
+    config = merge_configs(config_to_dict(config), config_to_dict(stage_config))
     
     # Update output dir
     stage_output = output_dir / "stage3_dpo"
@@ -294,7 +294,7 @@ def main():
     config_path = Path(__file__).parent.parent / args.config
     config = load_config(config_path)
     
-    logger.log_config(dict(config))
+    logger.log_config(config_to_dict(config))
     
     # Parse stages
     stages = [int(s.strip()) for s in args.stages.split(',')]
