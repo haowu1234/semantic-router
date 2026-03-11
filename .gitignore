@@ -80,6 +80,8 @@ tools/bin/
 models
 # Exception for Go models package in dashboard backend
 !dashboard/backend/models/
+# Exception for DSL training source code
+!ml-binding/dsl-model-training/training/src/models/
 
 # Training data
 wikipedia_data/
