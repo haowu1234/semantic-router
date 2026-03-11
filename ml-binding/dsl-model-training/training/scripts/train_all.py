@@ -317,6 +317,19 @@ def main():
                         help='Skip final evaluation')
     parser.add_argument('--log-dir', type=Path, default=Path('./logs'),
                         help='Directory for log files')
+    
+    # Training hyperparameters (override config)
+    parser.add_argument('--batch-size', type=int, default=None,
+                        help='Per-device train batch size (overrides config)')
+    parser.add_argument('--grad-accum', type=int, default=None,
+                        help='Gradient accumulation steps (overrides config)')
+    parser.add_argument('--learning-rate', type=float, default=None,
+                        help='Learning rate (overrides config)')
+    parser.add_argument('--max-steps', type=int, default=None,
+                        help='Max training steps, -1 for full epochs (overrides config)')
+    parser.add_argument('--save-steps', type=int, default=None,
+                        help='Save checkpoint every N steps (overrides config)')
+    
     args = parser.parse_args()
     
     # Setup logging
@@ -329,6 +342,31 @@ def main():
     # Load config
     config_path = Path(__file__).parent.parent / args.config
     config = load_config(config_path)
+    
+    # Apply command-line overrides
+    config_dict = config_to_dict(config)
+    if 'training' not in config_dict:
+        config_dict['training'] = {}
+    
+    if args.batch_size is not None:
+        config_dict['training']['per_device_train_batch_size'] = args.batch_size
+        base_logger.info(f"Override: batch_size = {args.batch_size}")
+    if args.grad_accum is not None:
+        config_dict['training']['gradient_accumulation_steps'] = args.grad_accum
+        base_logger.info(f"Override: gradient_accumulation_steps = {args.grad_accum}")
+    if args.learning_rate is not None:
+        config_dict['training']['learning_rate'] = args.learning_rate
+        base_logger.info(f"Override: learning_rate = {args.learning_rate}")
+    if args.max_steps is not None:
+        config_dict['training']['max_steps'] = args.max_steps
+        base_logger.info(f"Override: max_steps = {args.max_steps}")
+    if args.save_steps is not None:
+        config_dict['training']['save_steps'] = args.save_steps
+        config_dict['training']['eval_steps'] = args.save_steps  # Keep eval aligned
+        base_logger.info(f"Override: save_steps = {args.save_steps}")
+    
+    # Convert back to OmegaConf
+    config = OmegaConf.create(config_dict)
     
     logger.log_config(config_to_dict(config))
     
