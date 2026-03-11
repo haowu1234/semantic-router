@@ -9,7 +9,7 @@
  * then deterministically converted to DSL by intentToDsl.ts.
  */
 
-import { defaultRegistry, type NLSchemaRegistry } from './nlSchemaRegistry'
+import { defaultRegistry, type NLSchemaRegistry, type NLSchemaEntry } from './nlSchemaRegistry'
 
 // ─────────────────────────────────────────────
 // System Prompt
@@ -18,12 +18,22 @@ import { defaultRegistry, type NLSchemaRegistry } from './nlSchemaRegistry'
 /**
  * Build the full system prompt for Intent IR generation.
  * Registry is injected for testability; defaults to the singleton.
+ *
+ * @param registry - NL Schema Registry
+ * @param relevantTypes - If provided, only include these types in the prompt (dynamic pruning)
  */
-export function buildSystemPrompt(registry: NLSchemaRegistry = defaultRegistry): string {
-  const typeSection = registry.buildSystemPromptSection()
+export function buildSystemPrompt(
+  registry: NLSchemaRegistry = defaultRegistry,
+  relevantTypes?: NLSchemaEntry[],
+): string {
+  // Use dynamic type section if relevantTypes provided, otherwise full section
+  const typeSection = relevantTypes && relevantTypes.length > 0
+    ? buildDynamicTypeSection(relevantTypes)
+    : registry.buildSystemPromptSection()
+
   return `${SYSTEM_PROMPT_HEADER}
 
-## DSL Type System (complete reference)
+## DSL Type System${relevantTypes ? ' (relevant subset)' : ' (complete reference)'}
 
 ${typeSection}
 
@@ -34,6 +44,147 @@ ${INTENT_IR_SCHEMA}
 ## Rules
 
 ${RULES_SECTION}`.trim()
+}
+
+/**
+ * Build a dynamic system prompt based on detected relevant types from user input.
+ * This significantly reduces token usage for simple requests.
+ */
+export function buildDynamicSystemPrompt(
+  userInput: string,
+  registry: NLSchemaRegistry = defaultRegistry,
+): string {
+  // Extract words from user input
+  const words = userInput.toLowerCase().split(/[\s,;.!?]+/).filter(w => w.length > 2)
+
+  // Find relevant types using trigger matching
+  const relevantTypes = registry.findByTriggers(words)
+
+  // If we found specific types, use them; otherwise fall back to full prompt
+  // But always include at least some base types
+  if (relevantTypes.length > 0 && relevantTypes.length < 10) {
+    // Add commonly needed types that might not be explicitly mentioned
+    const baseTypes = ensureBaseTypes(relevantTypes, registry)
+    return buildSystemPrompt(registry, baseTypes)
+  }
+
+  // Fall back to full prompt for complex or unclear requests
+  return buildSystemPrompt(registry)
+}
+
+/**
+ * Ensure base types are included for common operations.
+ */
+function ensureBaseTypes(
+  types: NLSchemaEntry[],
+  registry: NLSchemaRegistry,
+): NLSchemaEntry[] {
+  const typeSet = new Set(types.map(t => `${t.construct}:${t.type_name}`))
+  const result = [...types]
+
+  // Always include provider_profile backend (needed for most configs)
+  if (!typeSet.has('backend:provider_profile')) {
+    const providerProfile = registry.get('backend', 'provider_profile')
+    if (providerProfile) result.push(providerProfile)
+  }
+
+  // If we have signals but no algorithms, add static algorithm
+  const hasSignals = types.some(t => t.construct === 'signal')
+  const hasAlgorithms = types.some(t => t.construct === 'algorithm')
+  if (hasSignals && !hasAlgorithms) {
+    const staticAlgo = registry.get('algorithm', 'static')
+    if (staticAlgo) result.push(staticAlgo)
+  }
+
+  return result
+}
+
+/**
+ * Build type section for only the relevant types.
+ */
+function buildDynamicTypeSection(types: NLSchemaEntry[]): string {
+  const sections: string[] = []
+
+  // Helper: format field with enum values if available
+  const formatField = (f: { key: string; type: string; required?: boolean; options?: string[] }): string => {
+    let s = f.key
+    if (f.options && f.options.length > 0) {
+      s += ` (${f.options.map(o => `"${o}"`).join(' | ')})`
+    } else {
+      s += ` (${f.type})`
+    }
+    return s
+  }
+
+  // Group by construct
+  const byConstruct = {
+    signal: types.filter(t => t.construct === 'signal'),
+    plugin: types.filter(t => t.construct === 'plugin'),
+    algorithm: types.filter(t => t.construct === 'algorithm'),
+    backend: types.filter(t => t.construct === 'backend'),
+  }
+
+  // Signal types
+  if (byConstruct.signal.length > 0) {
+    const validNames = byConstruct.signal.map(s => s.type_name).join(', ')
+    sections.push(`### Signal Types\nValid signal_type values: ${validNames}`)
+    for (const s of byConstruct.signal) {
+      const requiredFields = s.fields.filter(f => f.required).map(formatField)
+      const optionalFields = s.fields.filter(f => !f.required).map(formatField)
+      let line = `- **${s.type_name}**: ${s.nl_description}`
+      if (requiredFields.length > 0) {
+        line += `\n  Required: ${requiredFields.join(', ')}`
+      }
+      if (optionalFields.length > 0) {
+        line += `\n  Optional: ${optionalFields.join(', ')}`
+      }
+      sections.push(line)
+    }
+  }
+
+  // Plugin types
+  if (byConstruct.plugin.length > 0) {
+    const validNames = byConstruct.plugin.map(p => p.type_name).join(', ')
+    sections.push(`\n### Plugin Types\nValid plugin_type values: ${validNames}`)
+    for (const p of byConstruct.plugin) {
+      const requiredFields = p.fields.filter(f => f.required).map(formatField)
+      let line = `- **${p.type_name}**: ${p.nl_description}`
+      if (requiredFields.length > 0) {
+        line += `\n  Required: ${requiredFields.join(', ')}`
+      }
+      sections.push(line)
+    }
+  }
+
+  // Algorithm types
+  if (byConstruct.algorithm.length > 0) {
+    const validNames = byConstruct.algorithm.map(a => a.type_name).join(', ')
+    sections.push(`\n### Algorithm Types\nValid algo_type values: ${validNames}`)
+    for (const a of byConstruct.algorithm) {
+      const fields = a.fields.map(formatField).join(', ')
+      let line = `- **${a.type_name}**: ${a.nl_description}`
+      if (fields) {
+        line += `\n  Params: ${fields}`
+      }
+      sections.push(line)
+    }
+  }
+
+  // Backend types
+  if (byConstruct.backend.length > 0) {
+    const validNames = byConstruct.backend.map(b => b.type_name).join(', ')
+    sections.push(`\n### Backend Types\nValid backend_type values: ${validNames}`)
+    for (const b of byConstruct.backend) {
+      const requiredFields = b.fields.filter(f => f.required).map(formatField)
+      let line = `- **${b.type_name}**: ${b.nl_description}`
+      if (requiredFields.length > 0) {
+        line += `\n  Required: ${requiredFields.join(', ')}`
+      }
+      sections.push(line)
+    }
+  }
+
+  return sections.join('\n')
 }
 
 // ─────────────────────────────────────────────
@@ -59,6 +210,18 @@ export interface NLPromptContext {
   diagnostics?: Array<{ level: string; message: string }>
   /** Pre-extracted suggested types from NL Schema Registry trigger matching */
   suggestedTypes?: Array<{ construct: string; type_name: string }>
+  /** Conversation history for multi-turn context */
+  conversationHistory?: ConversationTurn[]
+}
+
+/** A single turn in the conversation history */
+export interface ConversationTurn {
+  /** User's input */
+  userInput: string
+  /** Summary of what was generated (for compact context) */
+  summary: string
+  /** Whether the result was accepted */
+  accepted: boolean
 }
 
 /**
@@ -67,9 +230,22 @@ export interface NLPromptContext {
 export function buildUserPrompt(context: NLPromptContext): string {
   const parts: string[] = []
 
-  // Few-shot examples
-  parts.push(FEW_SHOT_EXAMPLES)
+  // Few-shot examples (select relevant ones based on mode)
+  parts.push(selectRelevantExamples(context))
   parts.push('')
+
+  // Conversation history for multi-turn context
+  if (context.conversationHistory && context.conversationHistory.length > 0) {
+    parts.push('Previous conversation (for context):')
+    // Only include last 3 turns to save tokens
+    const recentTurns = context.conversationHistory.slice(-3)
+    for (const turn of recentTurns) {
+      const status = turn.accepted ? '✓ accepted' : '✗ rejected'
+      parts.push(`- User: "${turn.userInput.slice(0, 100)}${turn.userInput.length > 100 ? '...' : ''}"`)
+      parts.push(`  Result: ${turn.summary} (${status})`)
+    }
+    parts.push('')
+  }
 
   // Pre-extracted type hints (from trigger matching)
   if (context.suggestedTypes && context.suggestedTypes.length > 0) {
@@ -128,6 +304,55 @@ export function buildUserPrompt(context: NLPromptContext): string {
   parts.push('Generate the Intent IR JSON:')
 
   return parts.join('\n')
+}
+
+/**
+ * Select relevant few-shot examples based on the context.
+ * This reduces token usage by only including examples similar to the request.
+ */
+function selectRelevantExamples(context: NLPromptContext): string {
+  const input = context.userInput.toLowerCase()
+  const examples: string[] = []
+
+  // Always include basic routing example
+  if (input.includes('route') || input.includes('routing')) {
+    examples.push(FEW_SHOT_EXAMPLE_1)
+  }
+
+  // Safety/jailbreak example
+  if (input.includes('jailbreak') || input.includes('safety') || input.includes('block') || input.includes('tier')) {
+    examples.push(FEW_SHOT_EXAMPLE_2)
+  }
+
+  // Modify example
+  if (context.mode === 'modify' || input.includes('add') || input.includes('change') || input.includes('update')) {
+    examples.push(FEW_SHOT_EXAMPLE_3)
+  }
+
+  // Semantic/embedding example
+  if (input.includes('semantic') || input.includes('cache') || input.includes('embedding') || input.includes('similar')) {
+    examples.push(FEW_SHOT_EXAMPLE_4)
+  }
+
+  // AND/OR condition example
+  if (input.includes(' and ') || input.includes(' or ') || input.includes('both') || input.includes('either')) {
+    examples.push(FEW_SHOT_EXAMPLE_5)
+  }
+
+  // NOT/algorithm example
+  if (input.includes('not ') || input.includes('except') || input.includes('cascade') || input.includes('weight')) {
+    examples.push(FEW_SHOT_EXAMPLE_6)
+  }
+
+  // If no specific matches, include 2 basic examples
+  if (examples.length === 0) {
+    examples.push(FEW_SHOT_EXAMPLE_1, FEW_SHOT_EXAMPLE_2)
+  }
+
+  // Limit to 3 examples max
+  const selected = examples.slice(0, 3)
+
+  return `## Examples\n\n${selected.join('\n\n')}`
 }
 
 // ─────────────────────────────────────────────
@@ -293,9 +518,11 @@ const RULES_SECTION = `1. EVERY signal referenced in a route condition MUST have
 9. ONLY use type names listed in the "DSL Type System" section above. Do NOT invent new signal_type, plugin_type, backend_type, or algo_type values. For example, "jailbreak" and "pii" are signal types, NOT plugin types.
 10. When a field has enumerated options listed (e.g., method: "regex" | "bm25" | "ngram"), you MUST choose from those options only.`
 
-const FEW_SHOT_EXAMPLES = `## Examples
+// ─────────────────────────────────────────────
+// Individual Few-Shot Examples (for dynamic selection)
+// ─────────────────────────────────────────────
 
-### Example 1: Basic routing
+const FEW_SHOT_EXAMPLE_1 = `### Example 1: Basic routing
 User: "Route math questions to GPT-4o and coding questions to DeepSeek"
 \`\`\`json
 {
@@ -310,9 +537,9 @@ User: "Route math questions to GPT-4o and coding questions to DeepSeek"
     { "type": "global", "fields": { "default_model": "gpt-4o-mini", "strategy": "priority" } }
   ]
 }
-\`\`\`
+\`\`\``
 
-### Example 2: Complex routing with safety
+const FEW_SHOT_EXAMPLE_2 = `### Example 2: Complex routing with safety
 User: "Set up a 3-tier system: simple questions to qwen2.5:3b, complex ones to qwen3:70b with reasoning, and block jailbreak attempts"
 \`\`\`json
 {
@@ -330,9 +557,9 @@ User: "Set up a 3-tier system: simple questions to qwen2.5:3b, complex ones to q
     { "type": "global", "fields": { "default_model": "qwen2.5:3b", "strategy": "priority" } }
   ]
 }
-\`\`\`
+\`\`\``
 
-### Example 3: Modify existing config (note: pii is a SIGNAL type, not a plugin type)
+const FEW_SHOT_EXAMPLE_3 = `### Example 3: Modify existing config (note: pii is a SIGNAL type, not a plugin type)
 User: "Add hallucination detection to the math_route and increase priority to 50"
 \`\`\`json
 {
@@ -344,9 +571,9 @@ User: "Add hallucination detection to the math_route and increase priority to 50
     { "type": "modify", "action": "update", "target_construct": "route", "target_name": "math_route", "changes": { "priority": 50, "plugins": [{ "name": "verify_output" }] } }
   ]
 }
-\`\`\`
+\`\`\``
 
-### Example 4: Semantic matching with cache
+const FEW_SHOT_EXAMPLE_4 = `### Example 4: Semantic matching with cache
 User: "Route AI-related queries to GPT-4o with semantic caching"
 \`\`\`json
 {
@@ -361,9 +588,9 @@ User: "Route AI-related queries to GPT-4o with semantic caching"
     { "type": "global", "fields": { "default_model": "gpt-4o-mini", "strategy": "priority" } }
   ]
 }
-\`\`\`
+\`\`\``
 
-### Example 5: Multi-condition with AND/OR
+const FEW_SHOT_EXAMPLE_5 = `### Example 5: Multi-condition with AND/OR
 User: "Route urgent math questions to GPT-4o, but if it's either physics or chemistry, route to Claude"
 \`\`\`json
 {
@@ -381,9 +608,9 @@ User: "Route urgent math questions to GPT-4o, but if it's either physics or chem
     { "type": "global", "fields": { "default_model": "gpt-4o-mini", "strategy": "priority" } }
   ]
 }
-\`\`\`
+\`\`\``
 
-### Example 6: NOT condition with algorithm and weighted models
+const FEW_SHOT_EXAMPLE_6 = `### Example 6: NOT condition with algorithm and weighted models
 User: "For non-jailbreak queries, use confidence-based cascade with 70% weight on GPT-4o and 30% on GPT-4o-mini"
 \`\`\`json
 {

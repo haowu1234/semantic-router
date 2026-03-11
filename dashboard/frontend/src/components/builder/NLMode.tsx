@@ -6,6 +6,12 @@
  * WASM validation and self-repair. Users can accept/reject generated DSL
  * before it's applied to the editor.
  *
+ * Optimizations:
+ *   - Streaming output for real-time feedback
+ *   - Semantic caching to avoid redundant LLM calls
+ *   - Dynamic prompt pruning for token savings
+ *   - Multi-turn conversation context
+ *
  * Layout:
  *   ┌────────────────────────────────────────┐
  *   │  Settings bar (endpoint, model, reset) │
@@ -26,8 +32,10 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useNLStore } from '@/stores/nlStore'
 import type { NLMessage } from '@/stores/nlStore'
 import type { NLProgressStep } from '@/lib/nlPipeline'
+import { getNLCacheStats } from '@/lib/nlCache'
 import { useDSLStore } from '@/stores/dslStore'
 import { wasmBridge } from '@/lib/wasm'
+import PartialAcceptPanel from './PartialAcceptPanel'
 import styles from './NLMode.module.css'
 
 // ─────────────────────────────────────────────
@@ -49,6 +57,9 @@ const NLMode: React.FC = () => {
     hasServerEndpoint,
     hasServerKey,
     configLoaded,
+    streamingText,
+    streamingEnabled,
+    isPartialAcceptMode,
     setInputText,
     generate,
     acceptResult,
@@ -58,7 +69,10 @@ const NLMode: React.FC = () => {
     setApiKey,
     setModelName,
     setShowSettings,
+    setStreamingEnabled,
     fetchConfig,
+    enterPartialAcceptMode,
+    exitPartialAcceptMode,
   } = useNLStore()
 
   const {
@@ -72,6 +86,7 @@ const NLMode: React.FC = () => {
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const [showCacheStats, setShowCacheStats] = useState(false)
 
   // Fetch NL config from backend on mount (auto-detect endpoint/model)
   useEffect(() => {
@@ -136,6 +151,35 @@ const NLMode: React.FC = () => {
     // Re-focus input for retry
     textareaRef.current?.focus()
   }, [rejectResult])
+
+  // Partial accept handlers
+  const handleEnterPartialAccept = useCallback(() => {
+    if (!wasmReady) return
+    enterPartialAcceptMode(wasmBridge, dslSource, symbols)
+  }, [enterPartialAcceptMode, wasmReady, dslSource, symbols])
+
+  const handlePartialAcceptApply = useCallback((result: { dsl: string }) => {
+    // Push DSL to the editor store
+    setDslSource(result.dsl)
+    // Trigger compile
+    setTimeout(() => compile(), 50)
+  }, [setDslSource, compile])
+
+  const handlePartialAcceptCancel = useCallback(() => {
+    exitPartialAcceptMode()
+  }, [exitPartialAcceptMode])
+
+  // If in partial accept mode, show the panel
+  if (isPartialAcceptMode) {
+    return (
+      <div className={styles.container}>
+        <PartialAcceptPanel
+          onApply={handlePartialAcceptApply}
+          onCancel={handlePartialAcceptCancel}
+        />
+      </div>
+    )
+  }
 
   return (
     <div className={styles.container}>
@@ -226,6 +270,25 @@ const NLMode: React.FC = () => {
               />
             )}
           </div>
+          <div className={styles.settingsField}>
+            <label className={styles.checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={streamingEnabled}
+                onChange={e => setStreamingEnabled(e.target.checked)}
+              />
+              Enable streaming output
+            </label>
+          </div>
+          <div className={styles.settingsField}>
+            <button
+              className={styles.cacheStatsBtn}
+              onClick={() => setShowCacheStats(!showCacheStats)}
+            >
+              {showCacheStats ? '▾ Hide Cache Stats' : '▸ Show Cache Stats'}
+            </button>
+            {showCacheStats && <CacheStatsDisplay />}
+          </div>
         </div>
       )}
 
@@ -282,14 +345,36 @@ const NLMode: React.FC = () => {
                   {pendingResult.retries} repair{pendingResult.retries > 1 ? 's' : ''}
                 </span>
               )}
+              {pendingResult.fromCache && (
+                <span className={styles.cacheBadge}>⚡ Cached</span>
+              )}
+              {pendingResult.usedDynamicPrompt && (
+                <span className={styles.optimizedBadge}>🎯 Optimized</span>
+              )}
+              {pendingResult.intentIR.intents.length > 1 && (
+                <span className={styles.intentTag} style={{ marginLeft: 'auto' }}>
+                  {pendingResult.intentIR.intents.length} items
+                </span>
+              )}
             </div>
             <div className={styles.acceptRejectBtns}>
               <button className={styles.acceptBtn} onClick={handleAccept}>
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M3 8.5l3 3 7-7" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
-                Apply to Editor
+                Apply All
               </button>
+              {pendingResult.intentIR.intents.length > 1 && (
+                <button className={styles.partialBtn} onClick={handleEnterPartialAccept}>
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <rect x="2" y="2" width="5" height="5" rx="1" />
+                    <rect x="9" y="2" width="5" height="5" rx="1" />
+                    <rect x="2" y="9" width="5" height="5" rx="1" />
+                    <rect x="9" y="9" width="5" height="5" rx="1" strokeDasharray="2 1" />
+                  </svg>
+                  Partial...
+                </button>
+              )}
               <button className={styles.rejectBtn} onClick={handleReject}>
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M4 4l8 8M12 4l-8 8" strokeLinecap="round" />
@@ -303,6 +388,14 @@ const NLMode: React.FC = () => {
         {/* Progress indicator */}
         {isGenerating && progress && (
           <ProgressIndicator step={progress} />
+        )}
+
+        {/* Streaming text preview */}
+        {isGenerating && streamingText && (
+          <div className={styles.streamingPreview}>
+            <div className={styles.streamingLabel}>Generating...</div>
+            <pre className={styles.streamingText}>{streamingText}</pre>
+          </div>
         )}
 
         <div ref={messagesEndRef} />
@@ -484,6 +577,42 @@ const ProgressIndicator: React.FC<{ step: NLProgressStep }> = ({ step }) => {
       <span className={styles.progressLabel}>
         {labels[step.stage] || 'Processing...'}
       </span>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────
+// Cache Stats Display
+// ─────────────────────────────────────────────
+
+const CacheStatsDisplay: React.FC = () => {
+  const stats = getNLCacheStats()
+  const hitRate = stats.hits + stats.misses > 0
+    ? Math.round((stats.hits / (stats.hits + stats.misses)) * 100)
+    : 0
+
+  return (
+    <div className={styles.cacheStats}>
+      <div className={styles.cacheStatRow}>
+        <span>Cached entries:</span>
+        <span>{stats.size}</span>
+      </div>
+      <div className={styles.cacheStatRow}>
+        <span>Cache hits:</span>
+        <span>{stats.hits}</span>
+      </div>
+      <div className={styles.cacheStatRow}>
+        <span>Cache misses:</span>
+        <span>{stats.misses}</span>
+      </div>
+      <div className={styles.cacheStatRow}>
+        <span>Fuzzy hits:</span>
+        <span>{stats.fuzzyHits}</span>
+      </div>
+      <div className={styles.cacheStatRow}>
+        <span>Hit rate:</span>
+        <span>{hitRate}%</span>
+      </div>
     </div>
   )
 }

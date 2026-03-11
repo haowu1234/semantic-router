@@ -6,6 +6,12 @@
  *   Stage 2: LLM → Intent IR → DSL codegen
  *   Stage 3: WASM validation + self-repair loop (max 3 retries)
  *
+ * Optimizations:
+ *   - Semantic caching to avoid redundant LLM calls
+ *   - Dynamic prompt pruning based on user input
+ *   - Intent IR validation with auto-repair
+ *   - Multi-turn conversation context
+ *
  * This module is the single entry point for the NL Mode UI component.
  * All dependencies (WASM, LLM) are injected for testability.
  */
@@ -18,9 +24,11 @@ import type { ValidationResult } from './nlValidation'
 import { hasQuickFixes as hasQuickFixesAvailable } from './nlValidation'
 import { repairDSL } from './nlRepair'
 import type { LLMClient } from './nlRepair'
-import { buildSystemPrompt, buildUserPrompt } from './nlPromptBuilder'
-import type { NLPromptContext } from './nlPromptBuilder'
+import { buildSystemPrompt, buildDynamicSystemPrompt, buildUserPrompt } from './nlPromptBuilder'
+import type { NLPromptContext, ConversationTurn } from './nlPromptBuilder'
 import { defaultRegistry } from './nlSchemaRegistry'
+import { nlCache } from './nlCache'
+import { validateIntentIR, repairIntentIR, semanticValidation } from './nlIRValidator'
 
 // ─────────────────────────────────────────────
 // Configuration
@@ -40,6 +48,12 @@ export interface NLContext {
   symbols?: SymbolTable
   /** Current diagnostics (for fix mode) */
   diagnostics?: Diagnostic[]
+  /** Conversation history for multi-turn context */
+  conversationHistory?: ConversationTurn[]
+  /** Whether to use dynamic prompt pruning (reduces tokens) */
+  useDynamicPrompt?: boolean
+  /** Whether to skip cache lookup */
+  skipCache?: boolean
 }
 
 /** Progress callback for UI updates */
@@ -71,6 +85,10 @@ export interface NLGenerateResult {
   retries: number
   /** Natural language explanation of what was generated */
   explanation: string
+  /** Whether result was served from cache */
+  fromCache?: boolean
+  /** Whether dynamic prompt was used (token savings) */
+  usedDynamicPrompt?: boolean
 }
 
 /** Session turn for multi-turn conversation support */
@@ -114,15 +132,28 @@ export async function nlToDSL(
   llmClient: LLMClient,
   onProgress?: NLProgressCallback,
 ): Promise<NLGenerateResult> {
+  // ── Check cache first ──────────────────────────
+  if (!context.skipCache) {
+    const cached = nlCache.get(nlInput, context)
+    if (cached) {
+      onProgress?.({ stage: 'done', isValid: cached.isValid })
+      return { ...cached, fromCache: true }
+    }
+  }
+
   // ── Stage 1: Classify & extract context ──────────
   onProgress?.({ stage: 'classifying' })
 
   const mode = classifyOperation(nlInput, context)
+  const useDynamicPrompt = context.useDynamicPrompt !== false // Default true
 
   // ── Stage 2: LLM → Intent IR → DSL ──────────────
   onProgress?.({ stage: 'generating', message: 'Building prompts...' })
 
-  const systemPrompt = buildSystemPrompt()
+  // Use dynamic prompt for token savings when possible
+  const systemPrompt = useDynamicPrompt
+    ? buildDynamicSystemPrompt(nlInput, defaultRegistry)
+    : buildSystemPrompt()
   const promptContext = buildPromptContext(nlInput, mode, context)
   const userPrompt = buildUserPrompt(promptContext)
 
@@ -130,7 +161,29 @@ export async function nlToDSL(
 
   let intentIR: IntentIR
   try {
-    intentIR = await llmClient.generateIntentIR(systemPrompt, userPrompt)
+    const rawIR = await llmClient.generateIntentIR(systemPrompt, userPrompt)
+
+    // Validate and repair the Intent IR
+    const validation = validateIntentIR(rawIR)
+    if (!validation.success) {
+      // Try to repair common LLM mistakes
+      const repaired = repairIntentIR(rawIR)
+      if (repaired) {
+        intentIR = repaired
+      } else {
+        const errorSummary = validation.errors.slice(0, 3).map(e => e.message).join('; ')
+        throw new Error(`Invalid Intent IR from LLM: ${errorSummary}`)
+      }
+    } else {
+      intentIR = validation.data!
+    }
+
+    // Check for semantic issues (undefined references, duplicates)
+    const semanticErrors = semanticValidation(intentIR)
+    if (semanticErrors.length > 0) {
+      // Log warnings but don't fail - the DSL validation will catch real issues
+      console.warn('[NL] Semantic validation warnings:', semanticErrors)
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     onProgress?.({ stage: 'error', message: `LLM call failed: ${msg}` })
@@ -190,7 +243,7 @@ export async function nlToDSL(
 
   onProgress?.({ stage: 'done', isValid: validation.isValid })
 
-  return {
+  const result: NLGenerateResult = {
     dsl,
     yaml: validation.yaml,
     diagnostics: validation.diagnostics,
@@ -199,7 +252,13 @@ export async function nlToDSL(
     confidence,
     retries: attempt,
     explanation,
+    usedDynamicPrompt: useDynamicPrompt,
   }
+
+  // Cache the result
+  nlCache.set(nlInput, context, result)
+
+  return result
 }
 
 // ─────────────────────────────────────────────
@@ -297,6 +356,11 @@ function buildPromptContext(
       level: d.level,
       message: d.message,
     }))
+  }
+
+  // Add conversation history for multi-turn context
+  if (context.conversationHistory && context.conversationHistory.length > 0) {
+    promptCtx.conversationHistory = context.conversationHistory
   }
 
   return promptCtx
@@ -469,5 +533,8 @@ function generateSessionId(): string {
 
 export type { LLMClient } from './nlRepair'
 export type { ValidationResult } from './nlValidation'
+export type { ConversationTurn } from './nlPromptBuilder'
 export { filterErrors, filterWarnings, formatDiagnostics } from './nlValidation'
-export { buildSystemPrompt, buildUserPrompt, buildRepairPrompt } from './nlPromptBuilder'
+export { buildSystemPrompt, buildDynamicSystemPrompt, buildUserPrompt, buildRepairPrompt } from './nlPromptBuilder'
+export { nlCache, clearNLCache, getNLCacheStats } from './nlCache'
+export { validateIntentIR, repairIntentIR, semanticValidation } from './nlIRValidator'

@@ -7,11 +7,12 @@
  * - Result accept/reject with DSL Store integration
  * - Session lifecycle (create / reset)
  * - LLM client configuration
+ * - Streaming support for real-time generation feedback
  */
 
 import { create } from 'zustand'
 import type { Diagnostic, SymbolTable, WasmBridge } from '@/types/dsl'
-import type { IntentIR } from '@/types/intentIR'
+import type { IntentIR, Intent } from '@/types/intentIR'
 import {
   nlToDSL,
   createSession,
@@ -25,7 +26,27 @@ import type {
   NLGenerateResult,
   LLMClient,
   NLContext,
+  ConversationTurn,
 } from '@/lib/nlPipeline'
+import {
+  createPartialAcceptState,
+  updatePartialAcceptState,
+  toggleSelection,
+  setAllSelections,
+  autoSelectDependencies,
+  updateIntentEdit,
+  revertIntentEdit,
+  buildPartialIntentIR,
+  generatePartialPreview,
+  selectByCategory,
+  invertSelections,
+  getSelectionStats,
+} from '@/lib/nlPartialAccept'
+import type {
+  PartialAcceptState,
+  IntentSelectionState,
+} from '@/lib/nlPartialAccept'
+import { intentIRToDSL } from '@/lib/intentToDsl'
 
 // ─────────────────────────────────────────────
 // Store State
@@ -73,6 +94,20 @@ interface NLState {
   hasServerKey: boolean
   /** Whether config has been fetched from backend */
   configLoaded: boolean
+  /** Streaming text for real-time feedback */
+  streamingText: string
+  /** Whether streaming is enabled */
+  streamingEnabled: boolean
+  /** Conversation history for multi-turn context */
+  conversationHistory: ConversationTurn[]
+  /** Partial accept state (when in partial accept mode) */
+  partialAcceptState: PartialAcceptState | null
+  /** Whether partial accept mode is active */
+  isPartialAcceptMode: boolean
+  /** WASM bridge reference for partial accept preview */
+  wasmRef: WasmBridge | null
+  /** Current DSL reference for partial accept */
+  currentDSLRef: string
 }
 
 // ─────────────────────────────────────────────
@@ -106,9 +141,50 @@ interface NLActions {
   setApiKey(key: string): void
   setModelName(model: string): void
   setShowSettings(show: boolean): void
+  setStreamingEnabled(enabled: boolean): void
 
   /** Fetch NL config from backend (auto-detect endpoint/model from config.yaml) */
   fetchConfig(): Promise<void>
+
+  /** Clear streaming text */
+  clearStreamingText(): void
+
+  // ─────────────────────────────────────────────
+  // Partial Accept Actions
+  // ─────────────────────────────────────────────
+
+  /** Enter partial accept mode for the pending result */
+  enterPartialAcceptMode(wasm: WasmBridge, currentDSL: string, symbols: SymbolTable | null): void
+
+  /** Exit partial accept mode without applying changes */
+  exitPartialAcceptMode(): void
+
+  /** Toggle selection of a single intent */
+  toggleIntentSelection(index: number): void
+
+  /** Select or deselect all intents */
+  selectAllIntents(selected: boolean): void
+
+  /** Auto-select all dependencies for currently selected intents */
+  autoSelectDependencies(): void
+
+  /** Select/deselect all intents of a specific category */
+  selectCategory(category: string, selected: boolean): void
+
+  /** Invert all selections */
+  invertSelections(): void
+
+  /** Edit a single intent */
+  editIntent(index: number, editedIntent: Intent): void
+
+  /** Revert an intent to its original state */
+  revertIntentEdit(index: number): void
+
+  /** Refresh the preview DSL based on current selection */
+  refreshPartialPreview(): Promise<void>
+
+  /** Apply partial accept - only accept selected intents */
+  applyPartialAccept(): { dsl: string; intentIR: IntentIR } | null
 }
 
 export type NLStore = NLState & NLActions
@@ -121,9 +197,12 @@ function createLLMClient(
   apiEndpoint: string,
   apiKey: string,
   modelName: string,
+  onStreamingUpdate?: (text: string) => void,
 ): LLMClient {
   return {
     async generateIntentIR(systemPrompt: string, userPrompt: string): Promise<IntentIR> {
+      const useStreaming = !!onStreamingUpdate
+
       const resp = await fetch(apiEndpoint, {
         method: 'POST',
         headers: {
@@ -138,12 +217,18 @@ function createLLMClient(
           ],
           temperature: 0.1,
           response_format: { type: 'json_object' },
+          stream: useStreaming,
         }),
       })
 
       if (!resp.ok) {
         const text = await resp.text().catch(() => '')
         throw new Error(`LLM API error ${resp.status}: ${text.slice(0, 200)}`)
+      }
+
+      if (useStreaming && resp.body) {
+        // Handle streaming response
+        return handleStreamingResponse(resp.body, onStreamingUpdate!)
       }
 
       const data = await resp.json()
@@ -157,6 +242,55 @@ function createLLMClient(
       return parseIntentIRFromLLM(content)
     },
   }
+}
+
+/**
+ * Handle SSE streaming response from LLM API.
+ */
+async function handleStreamingResponse(
+  body: ReadableStream<Uint8Array>,
+  onUpdate: (text: string) => void,
+): Promise<IntentIR> {
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+  let fullContent = ''
+  let buffer = ''
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+
+      // Process SSE lines
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || '' // Keep incomplete line in buffer
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const data = line.slice(6).trim()
+
+          if (data === '[DONE]') continue
+
+          try {
+            const parsed = JSON.parse(data)
+            const delta = parsed.choices?.[0]?.delta?.content
+            if (delta) {
+              fullContent += delta
+              onUpdate(fullContent)
+            }
+          } catch {
+            // Ignore parse errors for partial data
+          }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock()
+  }
+
+  return parseIntentIRFromLLM(fullContent)
 }
 
 /**
@@ -215,6 +349,13 @@ const initialState: NLState = {
   hasServerEndpoint: false,
   hasServerKey: false,
   configLoaded: false,
+  streamingText: '',
+  streamingEnabled: true,
+  conversationHistory: [],
+  partialAcceptState: null,
+  isPartialAcceptMode: false,
+  wasmRef: null,
+  currentDSLRef: '',
 }
 
 // ─────────────────────────────────────────────
@@ -235,7 +376,7 @@ export const useNLStore = create<NLStore>((set, get) => ({
     symbols: SymbolTable | null,
     diagnostics: Diagnostic[],
   ): Promise<NLGenerateResult | null> {
-    const { apiEndpoint, apiKey, modelName } = get()
+    const { apiEndpoint, apiKey, modelName, streamingEnabled, conversationHistory } = get()
 
     // Add user message
     const userMsg: NLMessage = {
@@ -250,15 +391,22 @@ export const useNLStore = create<NLStore>((set, get) => ({
       isGenerating: true,
       pendingResult: null,
       progress: { stage: 'classifying' },
+      streamingText: '',
     }))
 
     const context: NLContext = {
       currentDSL: currentDSL || undefined,
       symbols: symbols || undefined,
       diagnostics: diagnostics.length > 0 ? diagnostics : undefined,
+      conversationHistory: conversationHistory.length > 0 ? conversationHistory : undefined,
+      useDynamicPrompt: true, // Enable token savings
     }
 
-    const llmClient = createLLMClient(apiEndpoint, apiKey, modelName)
+    // Create LLM client with optional streaming callback
+    const onStreamingUpdate = streamingEnabled
+      ? (text: string) => set({ streamingText: text })
+      : undefined
+    const llmClient = createLLMClient(apiEndpoint, apiKey, modelName, onStreamingUpdate)
 
     const onProgress = (step: NLProgressStep) => {
       set({ progress: step })
@@ -285,6 +433,7 @@ export const useNLStore = create<NLStore>((set, get) => ({
         isGenerating: false,
         progress: null,
         pendingResult: result,
+        streamingText: '',
       })
 
       return result
@@ -304,6 +453,7 @@ export const useNLStore = create<NLStore>((set, get) => ({
         isGenerating: false,
         progress: null,
         pendingResult: null,
+        streamingText: '',
       })
 
       return null
@@ -311,47 +461,74 @@ export const useNLStore = create<NLStore>((set, get) => ({
   },
 
   acceptResult(): { dsl: string; intentIR: IntentIR } | null {
-    const { pendingResult, session } = get()
+    const { pendingResult, session, messages } = get()
     if (!pendingResult) return null
 
     const updatedSession = acceptLastTurn(session, pendingResult.dsl, null)
 
     // Mark last assistant message as accepted
-    const messages = [...get().messages]
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'assistant' && messages[i].result) {
-        messages[i] = { ...messages[i], accepted: true }
+    const updatedMessages = [...messages]
+    for (let i = updatedMessages.length - 1; i >= 0; i--) {
+      if (updatedMessages[i].role === 'assistant' && updatedMessages[i].result) {
+        updatedMessages[i] = { ...updatedMessages[i], accepted: true }
         break
       }
     }
 
+    // Add to conversation history for multi-turn context
+    const lastUserMsg = messages.filter(m => m.role === 'user').pop()
+    const newHistoryEntry: ConversationTurn = {
+      userInput: lastUserMsg?.content || '',
+      summary: pendingResult.explanation,
+      accepted: true,
+    }
+
     set({
       session: updatedSession,
-      messages,
+      messages: updatedMessages,
       pendingResult: null,
+      conversationHistory: [...get().conversationHistory, newHistoryEntry],
     })
 
     return { dsl: pendingResult.dsl, intentIR: pendingResult.intentIR }
   },
 
   rejectResult() {
-    const { session } = get()
+    const { session, messages } = get()
     const updatedSession = rejectLastTurn(session)
 
     // Mark last assistant message as rejected
-    const messages = [...get().messages]
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'assistant' && messages[i].result) {
-        messages[i] = { ...messages[i], accepted: false }
+    const updatedMessages = [...messages]
+    for (let i = updatedMessages.length - 1; i >= 0; i--) {
+      if (updatedMessages[i].role === 'assistant' && updatedMessages[i].result) {
+        updatedMessages[i] = { ...updatedMessages[i], accepted: false }
         break
       }
     }
 
-    set({
-      session: updatedSession,
-      messages,
-      pendingResult: null,
-    })
+    // Add to conversation history as rejected
+    const lastUserMsg = messages.filter(m => m.role === 'user').pop()
+    const pendingResult = get().pendingResult
+    if (pendingResult) {
+      const newHistoryEntry: ConversationTurn = {
+        userInput: lastUserMsg?.content || '',
+        summary: pendingResult.explanation,
+        accepted: false,
+      }
+
+      set({
+        session: updatedSession,
+        messages: updatedMessages,
+        pendingResult: null,
+        conversationHistory: [...get().conversationHistory, newHistoryEntry],
+      })
+    } else {
+      set({
+        session: updatedSession,
+        messages: updatedMessages,
+        pendingResult: null,
+      })
+    }
   },
 
   resetSession() {
@@ -362,6 +539,10 @@ export const useNLStore = create<NLStore>((set, get) => ({
       isGenerating: false,
       inputText: '',
       pendingResult: null,
+      streamingText: '',
+      conversationHistory: [],
+      partialAcceptState: null,
+      isPartialAcceptMode: false,
     })
   },
 
@@ -379,6 +560,14 @@ export const useNLStore = create<NLStore>((set, get) => ({
 
   setShowSettings(show: boolean) {
     set({ showSettings: show })
+  },
+
+  setStreamingEnabled(enabled: boolean) {
+    set({ streamingEnabled: enabled })
+  },
+
+  clearStreamingText() {
+    set({ streamingText: '' })
   },
 
   async fetchConfig() {
@@ -402,5 +591,198 @@ export const useNLStore = create<NLStore>((set, get) => ({
     } catch {
       // Silently fail — config fetch is best-effort
     }
+  },
+
+  // ─────────────────────────────────────────────
+  // Partial Accept Actions
+  // ─────────────────────────────────────────────
+
+  enterPartialAcceptMode(wasm: WasmBridge, currentDSL: string, symbols: SymbolTable | null) {
+    const { pendingResult } = get()
+    if (!pendingResult) return
+
+    const partialState = createPartialAcceptState(
+      pendingResult.intentIR,
+      currentDSL,
+      symbols ?? undefined,
+    )
+
+    set({
+      isPartialAcceptMode: true,
+      partialAcceptState: partialState,
+      wasmRef: wasm,
+      currentDSLRef: currentDSL,
+    })
+
+    // Generate initial preview
+    get().refreshPartialPreview()
+  },
+
+  exitPartialAcceptMode() {
+    set({
+      isPartialAcceptMode: false,
+      partialAcceptState: null,
+    })
+  },
+
+  toggleIntentSelection(index: number) {
+    const { partialAcceptState } = get()
+    if (!partialAcceptState) return
+
+    const newSelections = toggleSelection(partialAcceptState.selections, index)
+    const newState = updatePartialAcceptState(partialAcceptState, newSelections)
+
+    set({ partialAcceptState: newState })
+
+    // Debounced preview refresh
+    get().refreshPartialPreview()
+  },
+
+  selectAllIntents(selected: boolean) {
+    const { partialAcceptState } = get()
+    if (!partialAcceptState) return
+
+    const newSelections = setAllSelections(partialAcceptState.selections, selected)
+    const newState = updatePartialAcceptState(partialAcceptState, newSelections)
+
+    set({ partialAcceptState: newState })
+    get().refreshPartialPreview()
+  },
+
+  autoSelectDependencies() {
+    const { partialAcceptState } = get()
+    if (!partialAcceptState) return
+
+    const newSelections = autoSelectDependencies(
+      partialAcceptState.selections,
+      partialAcceptState.dependencyGraph,
+    )
+    const newState = updatePartialAcceptState(partialAcceptState, newSelections)
+
+    set({ partialAcceptState: newState })
+    get().refreshPartialPreview()
+  },
+
+  selectCategory(category: string, selected: boolean) {
+    const { partialAcceptState } = get()
+    if (!partialAcceptState) return
+
+    const newSelections = selectByCategory(
+      partialAcceptState.originalIR,
+      partialAcceptState.selections,
+      category,
+      selected,
+    )
+    const newState = updatePartialAcceptState(partialAcceptState, newSelections)
+
+    set({ partialAcceptState: newState })
+    get().refreshPartialPreview()
+  },
+
+  invertSelections() {
+    const { partialAcceptState } = get()
+    if (!partialAcceptState) return
+
+    const newSelections = invertSelections(partialAcceptState.selections)
+    const newState = updatePartialAcceptState(partialAcceptState, newSelections)
+
+    set({ partialAcceptState: newState })
+    get().refreshPartialPreview()
+  },
+
+  editIntent(index: number, editedIntent: Intent) {
+    const { partialAcceptState } = get()
+    if (!partialAcceptState) return
+
+    const newSelections = updateIntentEdit(
+      partialAcceptState.selections,
+      index,
+      editedIntent,
+    )
+    const newState = updatePartialAcceptState(partialAcceptState, newSelections)
+
+    set({ partialAcceptState: newState })
+    get().refreshPartialPreview()
+  },
+
+  revertIntentEdit(index: number) {
+    const { partialAcceptState } = get()
+    if (!partialAcceptState) return
+
+    const newSelections = revertIntentEdit(partialAcceptState.selections, index)
+    const newState = updatePartialAcceptState(partialAcceptState, newSelections)
+
+    set({ partialAcceptState: newState })
+    get().refreshPartialPreview()
+  },
+
+  async refreshPartialPreview() {
+    const { partialAcceptState, wasmRef, currentDSLRef } = get()
+    if (!partialAcceptState || !wasmRef) return
+
+    try {
+      const { dsl, validation } = await generatePartialPreview(
+        partialAcceptState.originalIR,
+        partialAcceptState.selections,
+        currentDSLRef || undefined,
+        wasmRef,
+      )
+
+      set({
+        partialAcceptState: {
+          ...partialAcceptState,
+          previewDSL: dsl,
+          previewValidation: validation,
+        },
+      })
+    } catch (err) {
+      console.error('[NL] Failed to generate partial preview:', err)
+    }
+  },
+
+  applyPartialAccept(): { dsl: string; intentIR: IntentIR } | null {
+    const { partialAcceptState, pendingResult, session, messages, currentDSLRef } = get()
+    if (!partialAcceptState || !pendingResult) return null
+
+    // Build the partial IntentIR with only selected intents
+    const partialIR = buildPartialIntentIR(
+      partialAcceptState.originalIR,
+      partialAcceptState.selections,
+    )
+
+    // Use the preview DSL if available, otherwise generate
+    const dsl = partialAcceptState.previewDSL || intentIRToDSL(partialIR, currentDSLRef || undefined)
+
+    // Update session
+    const updatedSession = acceptLastTurn(session, dsl, null)
+
+    // Mark last assistant message as accepted (partially)
+    const updatedMessages = [...messages]
+    for (let i = updatedMessages.length - 1; i >= 0; i--) {
+      if (updatedMessages[i].role === 'assistant' && updatedMessages[i].result) {
+        updatedMessages[i] = { ...updatedMessages[i], accepted: true }
+        break
+      }
+    }
+
+    // Build conversation history summary
+    const stats = getSelectionStats(partialAcceptState.selections)
+    const lastUserMsg = messages.filter(m => m.role === 'user').pop()
+    const newHistoryEntry: ConversationTurn = {
+      userInput: lastUserMsg?.content || '',
+      summary: `${pendingResult.explanation} (partial: ${stats.selected}/${stats.total} items accepted)`,
+      accepted: true,
+    }
+
+    set({
+      session: updatedSession,
+      messages: updatedMessages,
+      pendingResult: null,
+      conversationHistory: [...get().conversationHistory, newHistoryEntry],
+      isPartialAcceptMode: false,
+      partialAcceptState: null,
+    })
+
+    return { dsl, intentIR: partialIR }
   },
 }))
