@@ -108,6 +108,12 @@ def load_model_and_tokenizer(
         **model_kwargs,
     )
     
+    # Resize embeddings to match tokenizer vocabulary
+    # This is critical for models with special tokens beyond base vocab (e.g., Qwen2.5)
+    if len(tokenizer) > model.config.vocab_size:
+        print(f"Resizing embeddings: {model.config.vocab_size} -> {len(tokenizer)}")
+        model.resize_token_embeddings(len(tokenizer))
+    
     # Enable gradient checkpointing if specified
     if config.get('hardware', {}).get('gradient_checkpointing', False):
         model.gradient_checkpointing_enable()
@@ -153,6 +159,9 @@ def create_peft_model(
         ]),
         bias=lora_config.get('bias', 'none'),
         task_type=TaskType.CAUSAL_LM,
+        # 数值稳定性设置
+        init_lora_weights="gaussian",  # 使用高斯初始化而不是默认的kaiming
+        use_rslora=False,  # RSLoRA可能在某些情况下不稳定
     )
     
     # Create PEFT model

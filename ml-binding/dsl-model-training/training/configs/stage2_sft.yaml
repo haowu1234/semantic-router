@@ -17,12 +17,11 @@ model:
 training:
   output_dir: "./checkpoints/stage2_sft"
   num_train_epochs: 3
-  learning_rate: 5.0e-6             # 降低学习率，防止梯度爆炸
+  learning_rate: 2.0e-5
   per_device_train_batch_size: 8    # 增大以充分利用 MI300X 192GB 显存
   gradient_accumulation_steps: 2    # effective batch size = 16
   warmup_ratio: 0.1
-  warmup_steps: 100                 # 确保足够的 warmup
-  max_grad_norm: 0.5                # 更严格的梯度裁剪
+  max_grad_norm: 1.0
   
   # Save best model
   load_best_model_at_end: true
