@@ -1,46 +1,60 @@
-# DSL Model Training Dependencies
+# DSL Model Training Dependencies (AMD ROCm)
 # 
-# For AMD ROCm users:
-#   1. Install PyTorch ROCm version first:
-#      pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.0
-#   2. Then install other dependencies:
-#      pip install -r requirements.txt
-#   3. Verify GPU: python -c "import torch; print(torch.cuda.is_available(), torch.cuda.device_count())"
+# 安装方式:
+#   pip install -r requirements.txt
+#
+# 验证 GPU:
+#   python -c "import torch; print(torch.cuda.is_available(), torch.cuda.device_count())"
 
-# Core ML (skip torch if using ROCm pre-installed version)
-# torch>=2.1.0
+# =============================================================================
+# PyTorch ROCm 版本 (AMD GPU)
+# =============================================================================
+--extra-index-url https://download.pytorch.org/whl/rocm6.2
+torch
+torchvision
+torchaudio
+
+# =============================================================================
+# Core ML
+# =============================================================================
 transformers>=4.40.0
 datasets>=2.18.0
 accelerate>=0.28.0
 peft>=0.10.0
 trl>=0.8.0
 
-# DPO Training
-trl[dpo]>=0.8.0
-
+# =============================================================================
 # Evaluation
+# =============================================================================
 evaluate>=0.4.0
 rouge-score>=0.1.2
 sacrebleu>=2.4.0
 
+# =============================================================================
 # Utilities
+# =============================================================================
 pyyaml>=6.0
 omegaconf>=2.3.0
 wandb>=0.16.0
 tensorboard>=2.16.0
 
+# =============================================================================
 # Data Processing
+# =============================================================================
 jsonlines>=4.0.0
 pandas>=2.2.0
 
+# =============================================================================
 # Progress & Logging
+# =============================================================================
 tqdm>=4.66.0
 rich>=13.7.0
 
-# Note: Flash Attention on ROCm requires special build from source
-# For ROCm, we use PyTorch's native SDPA instead (configured in base.yaml)
-# flash-attn>=2.5.0  # NVIDIA only
-
-# Note: bitsandbytes has limited ROCm support
-# For 4-bit/8-bit quantization on AMD, consider using GPTQ instead
-# bitsandbytes>=0.43.0  # NVIDIA recommended
+# =============================================================================
+# Notes:
+# - Flash Attention: ROCm 使用 PyTorch 原生 SDPA (已在 base.yaml 配置)
+# - bitsandbytes: ROCm 支持有限，如需量化建议用 GPTQ
+# - 如果 ROCm 版本不是 6.2，请修改上面的 URL:
+#   - ROCm 6.1: https://download.pytorch.org/whl/rocm6.1
+#   - ROCm 6.0: https://download.pytorch.org/whl/rocm6.0
+# =============================================================================
