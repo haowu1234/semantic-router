@@ -1,7 +1,14 @@
 # DSL Model Training Dependencies
+# 
+# For AMD ROCm users:
+#   1. Install PyTorch ROCm version first:
+#      pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.0
+#   2. Then install other dependencies:
+#      pip install -r requirements.txt
+#   3. Verify GPU: python -c "import torch; print(torch.cuda.is_available(), torch.cuda.device_count())"
 
-# Core ML
-torch>=2.1.0
+# Core ML (skip torch if using ROCm pre-installed version)
+# torch>=2.1.0
 transformers>=4.40.0
 datasets>=2.18.0
 accelerate>=0.28.0
@@ -30,8 +37,10 @@ pandas>=2.2.0
 tqdm>=4.66.0
 rich>=13.7.0
 
-# Optional: Flash Attention (for faster training)
-# flash-attn>=2.5.0
+# Note: Flash Attention on ROCm requires special build from source
+# For ROCm, we use PyTorch's native SDPA instead (configured in base.yaml)
+# flash-attn>=2.5.0  # NVIDIA only
 
-# Optional: bitsandbytes (for quantization)
-# bitsandbytes>=0.43.0
+# Note: bitsandbytes has limited ROCm support
+# For 4-bit/8-bit quantization on AMD, consider using GPTQ instead
+# bitsandbytes>=0.43.0  # NVIDIA recommended

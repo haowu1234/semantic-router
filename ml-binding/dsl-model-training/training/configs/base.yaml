@@ -3,11 +3,13 @@
 
 # Model settings
 model:
-  name: "Qwen/Qwen2.5-3B"
+  # Qwen2.5-Coder-7B: 代码生成专长，中英文强，适合 DSL 生成
+  name: "Qwen/Qwen2.5-Coder-7B-Instruct"
   revision: "main"
   trust_remote_code: true
   torch_dtype: "bfloat16"
-  attn_implementation: "flash_attention_2"  # or "sdpa" for non-flash
+  # ROCm: use "sdpa" (PyTorch native), flash_attention_2 requires special ROCm build
+  attn_implementation: "sdpa"
   max_length: 2048
 
 # Tokenizer settings
@@ -34,11 +36,12 @@ lora:
   task_type: "CAUSAL_LM"
 
 # Training settings
+# Optimized for AMD MI300X (192GB VRAM)
 training:
   output_dir: "./checkpoints"
-  per_device_train_batch_size: 4
-  per_device_eval_batch_size: 8
-  gradient_accumulation_steps: 4
+  per_device_train_batch_size: 16    # MI300X: can go higher
+  per_device_eval_batch_size: 32
+  gradient_accumulation_steps: 2     # effective batch = 32
   learning_rate: 2.0e-5
   weight_decay: 0.01
   num_train_epochs: 3
@@ -84,7 +87,7 @@ wandb:
 # Hardware settings
 hardware:
   gradient_checkpointing: true
-  use_flash_attention: true
+  use_flash_attention: false  # ROCm: disabled, using SDPA instead
   
 # Evaluation settings
 evaluation:
