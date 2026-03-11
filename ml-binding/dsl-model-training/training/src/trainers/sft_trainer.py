@@ -73,7 +73,8 @@ class DSLSFTTrainer:
             num_train_epochs=training_config.get('num_train_epochs', 3),
             max_steps=training_config.get('max_steps', -1),
             
-            # Warmup
+            # Warmup (warmup_steps takes priority over warmup_ratio)
+            warmup_steps=training_config.get('warmup_steps', 0),
             warmup_ratio=training_config.get('warmup_ratio', 0.1),
             lr_scheduler_type=training_config.get('lr_scheduler_type', 'cosine'),
             

@@ -122,23 +122,47 @@ class SFTDataset(Dataset):
         input_text = sample.get('input', '')
         output_text = sample.get('output', sample.get('dsl', ''))
         
-        # Build conversation
-        messages = [
+        # Build conversation WITHOUT assistant response for prompt
+        prompt_messages = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": f"{instruction}\n\n{input_text}"},
+        ]
+        
+        # Get prompt text with generation prompt
+        prompt_text = self.tokenizer.apply_chat_template(
+            prompt_messages,
+            tokenize=False,
+            add_generation_prompt=True,  # Adds <|im_start|>assistant\n
+        )
+        
+        # Build full conversation
+        full_messages = [
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": f"{instruction}\n\n{input_text}"},
             {"role": "assistant", "content": output_text},
         ]
         
-        # Apply chat template
-        text = self.tokenizer.apply_chat_template(
-            messages,
+        # Full text
+        full_text = self.tokenizer.apply_chat_template(
+            full_messages,
             tokenize=False,
             add_generation_prompt=False,
         )
         
-        # Tokenize
+        # Tokenize prompt to get exact length
+        prompt_encodings = self.tokenizer(
+            prompt_text,
+            max_length=self.max_length,
+            truncation=True,
+            padding=False,
+            return_tensors=None,
+            add_special_tokens=False,
+        )
+        prompt_length = len(prompt_encodings['input_ids'])
+        
+        # Tokenize full text
         encodings = self.tokenizer(
-            text,
+            full_text,
             max_length=self.max_length,
             truncation=True,
             padding=False,
@@ -148,15 +172,15 @@ class SFTDataset(Dataset):
         # Create labels: mask prompt tokens with -100
         labels = encodings['input_ids'].copy()
         
-        # Find where assistant response starts
-        # For Qwen template: <|im_start|>assistant\n
-        assistant_marker = "<|im_start|>assistant"
-        text_up_to_assistant = text.split(assistant_marker)[0] + assistant_marker
-        prompt_length = len(self.tokenizer.encode(text_up_to_assistant, add_special_tokens=False))
-        
-        # Mask prompt tokens
+        # Mask prompt tokens (keep only assistant response for loss)
         for i in range(min(prompt_length, len(labels))):
             labels[i] = -100
+        
+        # Safety check: ensure we have some non-masked labels
+        non_masked = sum(1 for l in labels if l != -100)
+        if non_masked == 0:
+            # Fallback: use all tokens for loss (shouldn't happen normally)
+            labels = encodings['input_ids'].copy()
         
         return {
             'input_ids': encodings['input_ids'],

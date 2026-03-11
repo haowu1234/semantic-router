@@ -32,6 +32,30 @@ from trainers.dpo_trainer import DSLDPOTrainer
 from evaluation.evaluator import DSLEvaluator
 
 
+def find_latest_checkpoint(output_dir: Path) -> str | None:
+    """Find the latest checkpoint in the output directory."""
+    output_dir = Path(output_dir)
+    if not output_dir.exists():
+        return None
+    
+    # Look for checkpoint-* directories
+    checkpoints = list(output_dir.glob("checkpoint-*"))
+    if not checkpoints:
+        return None
+    
+    # Sort by step number and get latest
+    def get_step(p):
+        try:
+            return int(p.name.split("-")[1])
+        except (IndexError, ValueError):
+            return 0
+    
+    checkpoints.sort(key=get_step)
+    latest = checkpoints[-1]
+    
+    return str(latest)
+
+
 def train_stage1(
     config: dict,
     data_dir: Path,
@@ -99,6 +123,7 @@ def train_stage2(
     output_dir: Path,
     logger: TrainingLogger,
     stage1_checkpoint: str = None,
+    resume_from_checkpoint: str = None,
 ) -> str:
     """Run Stage 2: SFT training."""
     logger.logger.info("=" * 60)
@@ -112,6 +137,15 @@ def train_stage2(
     # Update output dir
     stage_output = output_dir / "stage2_sft"
     config['training']['output_dir'] = str(stage_output)
+    
+    # Auto-detect checkpoint for resume
+    if resume_from_checkpoint is True or resume_from_checkpoint == "auto":
+        resume_from_checkpoint = find_latest_checkpoint(stage_output)
+        if resume_from_checkpoint:
+            logger.logger.info(f"Resuming from checkpoint: {resume_from_checkpoint}")
+        else:
+            logger.logger.info("No checkpoint found, starting fresh")
+            resume_from_checkpoint = None
     
     # Load from stage1 checkpoint if available
     model_name = stage1_checkpoint if stage1_checkpoint else config['model']['name']
@@ -152,7 +186,7 @@ def train_stage2(
     
     # Train
     logger.logger.info("Starting training...")
-    metrics = trainer.train()
+    metrics = trainer.train(resume_from_checkpoint=resume_from_checkpoint)
     logger.log_eval(metrics)
     
     return str(stage_output)
@@ -277,6 +311,8 @@ def main():
                         help='Checkpoint to use for stage 2 (skip stage 1)')
     parser.add_argument('--stage2-checkpoint', type=str, default=None,
                         help='Checkpoint to use for stage 3 (skip stages 1,2)')
+    parser.add_argument('--resume', action='store_true',
+                        help='Resume training from latest checkpoint in output dir')
     parser.add_argument('--skip-eval', action='store_true',
                         help='Skip final evaluation')
     parser.add_argument('--log-dir', type=Path, default=Path('./logs'),
@@ -323,6 +359,7 @@ def main():
             output_dir=args.output_dir,
             logger=logger,
             stage1_checkpoint=stage1_checkpoint,
+            resume_from_checkpoint="auto" if args.resume else None,
         )
         final_checkpoint = stage2_checkpoint
     
