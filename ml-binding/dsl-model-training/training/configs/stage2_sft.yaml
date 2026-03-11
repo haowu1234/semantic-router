@@ -18,8 +18,8 @@ training:
   output_dir: "./checkpoints/stage2_sft"
   num_train_epochs: 3
   learning_rate: 2.0e-5
-  per_device_train_batch_size: 8    # 增大以充分利用 MI300X 192GB 显存
-  gradient_accumulation_steps: 2    # effective batch size = 16
+  per_device_train_batch_size: 2     # 减小以避免OOM (eager attention 占用更多显存)
+  gradient_accumulation_steps: 8     # effective batch size = 16
   warmup_ratio: 0.1
   max_grad_norm: 1.0
   
@@ -60,4 +60,4 @@ wandb:
 
 # Hardware settings - override base
 hardware:
-  gradient_checkpointing: false  # 禁用：bf16+checkpointing+长序列在ROCm上导致NaN梯度
+  gradient_checkpointing: true  # 启用：eager attention 下不会有 NaN 问题，且节省显存

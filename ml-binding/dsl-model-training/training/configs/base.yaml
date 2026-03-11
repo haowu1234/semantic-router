@@ -86,8 +86,8 @@ wandb:
 
 # Hardware settings
 hardware:
-  gradient_checkpointing: false  # ROCm: 禁用，bf16+checkpointing+长序列会导致NaN梯度
-  use_flash_attention: false  # ROCm: disabled, using SDPA instead
+  gradient_checkpointing: true  # 启用：eager attention 下不会有 NaN 问题
+  use_flash_attention: false  # ROCm: disabled, using eager instead
   
 # Evaluation settings
 evaluation:
