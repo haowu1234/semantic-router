@@ -198,6 +198,7 @@ def train_stage3(
     output_dir: Path,
     logger: TrainingLogger,
     stage2_checkpoint: str = None,
+    early_stopping: bool | dict = True,  # Enable early stopping by default
 ) -> str:
     """Run Stage 3: DPO training."""
     logger.logger.info("=" * 60)
@@ -279,6 +280,27 @@ def train_stage3(
     logger.logger.info(f"Train samples: {len(train_dpo_dataset)}")
     logger.logger.info(f"Eval samples: {len(eval_dpo_dataset)}")
     
+    # Setup early stopping
+    early_stopping_config = None
+    if early_stopping:
+        if isinstance(early_stopping, dict):
+            early_stopping_config = early_stopping
+        else:
+            # Default early stopping configuration (recommended)
+            early_stopping_config = {
+                'strategy': 'combined',
+                'accuracy_threshold': 0.95,
+                'margin_threshold': 2.5,          # Stop if margins get too high
+                'max_logps_drift': 100.0,         # Stop if model drifts too far
+                'min_steps': 50,                  # Don't stop too early
+                'combined_accuracy': 0.90,        # Combined: need at least 90%
+                'combined_margin_min': 0.5,       # Combined: margin at least 0.5
+                'combined_margin_max': 3.0,       # Combined: margin at most 3.0
+                'combined_max_logps_drift': 80.0, # Combined: drift at most 80
+                'verbose': True,
+            }
+        logger.logger.info(f"Early stopping enabled with config: {early_stopping_config}")
+    
     # Create trainer (use HF Dataset for DPOTrainer compatibility)
     trainer = DSLDPOTrainer(
         model=model,
@@ -287,6 +309,7 @@ def train_stage3(
         config=config,
         train_dataset=train_dpo_dataset.get_hf_dataset(),
         eval_dataset=eval_dpo_dataset.get_hf_dataset(),
+        early_stopping=early_stopping_config,
     )
     
     # Train
@@ -363,6 +386,18 @@ def main():
     parser.add_argument('--save-steps', type=int, default=None,
                         help='Save checkpoint every N steps (overrides config)')
     
+    # Early stopping options (Stage 3 DPO)
+    parser.add_argument('--no-early-stopping', action='store_true',
+                        help='Disable early stopping for DPO training')
+    parser.add_argument('--early-stop-accuracy', type=float, default=0.95,
+                        help='Early stop when accuracy reaches this threshold (default: 0.95)')
+    parser.add_argument('--early-stop-margin', type=float, default=2.5,
+                        help='Early stop when margin exceeds this threshold (default: 2.5)')
+    parser.add_argument('--early-stop-drift', type=float, default=100.0,
+                        help='Early stop when logps drift exceeds this (default: 100.0)')
+    parser.add_argument('--early-stop-min-steps', type=int, default=50,
+                        help='Minimum steps before early stopping can trigger (default: 50)')
+    
     args = parser.parse_args()
     
     # Setup logging
@@ -435,12 +470,29 @@ def main():
         final_checkpoint = stage2_checkpoint
     
     if 3 in stages:
+        # Build early stopping config from command line args
+        early_stopping_config = None
+        if not args.no_early_stopping:
+            early_stopping_config = {
+                'strategy': 'combined',
+                'accuracy_threshold': args.early_stop_accuracy,
+                'margin_threshold': args.early_stop_margin,
+                'max_logps_drift': args.early_stop_drift,
+                'min_steps': args.early_stop_min_steps,
+                'combined_accuracy': 0.90,
+                'combined_margin_min': 0.5,
+                'combined_margin_max': args.early_stop_margin,
+                'combined_max_logps_drift': args.early_stop_drift * 0.8,  # 80% of max
+                'verbose': True,
+            }
+        
         final_checkpoint = train_stage3(
             config=config,
             data_dir=args.data_dir,
             output_dir=args.output_dir,
             logger=logger,
             stage2_checkpoint=stage2_checkpoint,
+            early_stopping=early_stopping_config,
         )
     
     # Final evaluation

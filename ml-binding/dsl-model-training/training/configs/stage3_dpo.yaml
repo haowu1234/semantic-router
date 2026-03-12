@@ -31,13 +31,29 @@ training:
   gradient_accumulation_steps: 8
   warmup_ratio: 0.1
   
-  # DPO doesn't typically need eval during training
-  eval_strategy: "epoch"
+  # More frequent checkpointing (DPO converges fast)
+  save_steps: 50  # Save every 50 steps (was 500)
+  save_total_limit: 5  # Keep more checkpoints
+  eval_steps: 50  # Eval every 50 steps
+  eval_strategy: "steps"
   
   # Save best model
   load_best_model_at_end: true
   metric_for_best_model: "eval_loss"
   greater_is_better: false
+
+# Early stopping configuration (applied in train_all.py)
+# These are documented here for reference; actual config is in the script
+early_stopping:
+  enabled: true
+  strategy: "combined"  # accuracy, margin, logps_drift, loss, combined
+  # Combined strategy (recommended):
+  # - Stops when accuracy >= 90% AND margin in [0.5, 3.0] AND drift <= 80
+  # - Also stops if margin > 3.0 OR drift > 100 (to prevent overfit)
+  accuracy_threshold: 0.95
+  margin_threshold: 2.5  # Stop if margins exceed this
+  max_logps_drift: 100.0  # Stop if model drifts too far from reference
+  min_steps: 50  # Don't stop before this many steps
 
 # Data settings for Stage 3
 data:

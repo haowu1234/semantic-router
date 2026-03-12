@@ -6,13 +6,19 @@ Uses trl's DPOTrainer for Direct Preference Optimization.
 """
 
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Union, List
 
-from transformers import PreTrainedModel, PreTrainedTokenizer
+from transformers import PreTrainedModel, PreTrainedTokenizer, TrainerCallback
 from torch.utils.data import Dataset as TorchDataset
 from datasets import Dataset as HFDataset
 from trl import DPOTrainer, DPOConfig
 from peft import PeftModel
+
+from .early_stopping import (
+    DPOEarlyStoppingCallback, 
+    DPOEarlyStoppingConfig,
+    create_early_stopping_callback,
+)
 
 
 def validate_and_clean_dpo_dataset(dataset: HFDataset) -> HFDataset:
@@ -67,6 +73,8 @@ class DSLDPOTrainer:
         config: dict,
         train_dataset: Optional[Union[HFDataset, TorchDataset]] = None,
         eval_dataset: Optional[Union[HFDataset, TorchDataset]] = None,
+        early_stopping: Optional[Union[bool, DPOEarlyStoppingConfig, dict]] = None,
+        callbacks: Optional[List[TrainerCallback]] = None,
     ):
         self.model = model
         self.ref_model = ref_model
@@ -78,8 +86,39 @@ class DSLDPOTrainer:
         # Build DPO config
         self.dpo_config = self._build_dpo_config()
         
+        # Setup callbacks (including early stopping)
+        self.callbacks = callbacks or []
+        self.early_stopping_callback = None
+        
+        if early_stopping:
+            self.early_stopping_callback = self._setup_early_stopping(early_stopping)
+            self.callbacks.append(self.early_stopping_callback)
+        
         # Initialize trainer
         self.trainer = self._build_trainer()
+    
+    def _setup_early_stopping(
+        self, 
+        early_stopping: Union[bool, DPOEarlyStoppingConfig, dict]
+    ) -> DPOEarlyStoppingCallback:
+        """Setup early stopping callback based on configuration."""
+        if isinstance(early_stopping, bool) and early_stopping:
+            # Use default combined strategy
+            return create_early_stopping_callback(
+                strategy="combined",
+                accuracy_threshold=0.95,
+                margin_threshold=2.5,
+                max_logps_drift=100.0,
+                min_steps=50,
+            )
+        elif isinstance(early_stopping, DPOEarlyStoppingConfig):
+            return DPOEarlyStoppingCallback(early_stopping)
+        elif isinstance(early_stopping, dict):
+            # Build config from dict
+            config = DPOEarlyStoppingConfig(**early_stopping)
+            return DPOEarlyStoppingCallback(config)
+        else:
+            raise ValueError(f"Invalid early_stopping type: {type(early_stopping)}")
     
     def _build_dpo_config(self) -> DPOConfig:
         """Build DPO-specific training configuration."""
@@ -220,6 +259,7 @@ class DSLDPOTrainer:
                 train_dataset=train_dataset,
                 eval_dataset=eval_dataset,
                 processing_class=self.tokenizer,  # New TRL API
+                callbacks=self.callbacks if self.callbacks else None,
             )
         except TypeError:
             # Fallback to old API for older TRL versions
@@ -230,6 +270,7 @@ class DSLDPOTrainer:
                 train_dataset=train_dataset,
                 eval_dataset=eval_dataset,
                 tokenizer=self.tokenizer,  # Old TRL API
+                callbacks=self.callbacks if self.callbacks else None,
             )
         
         return trainer
@@ -237,6 +278,10 @@ class DSLDPOTrainer:
     def train(self, resume_from_checkpoint: Optional[str] = None) -> dict:
         """Run DPO training."""
         result = self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+        
+        # Save early stopping history if enabled
+        if self.early_stopping_callback:
+            self.early_stopping_callback.save_history(self.dpo_config.output_dir)
         
         # Save final model
         self.save()
