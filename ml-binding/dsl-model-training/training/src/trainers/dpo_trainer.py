@@ -5,92 +5,14 @@ DPO Trainer for Stage 3 (Preference Learning).
 Uses trl's DPOTrainer for Direct Preference Optimization.
 """
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, Union
+from typing import Optional, Union
 
-import torch
 from transformers import PreTrainedModel, PreTrainedTokenizer
 from torch.utils.data import Dataset as TorchDataset
 from datasets import Dataset as HFDataset
 from trl import DPOTrainer, DPOConfig
 from peft import PeftModel
-
-
-@dataclass
-class DPODataCollatorWithPadding:
-    """
-    Custom data collator for pre-tokenized DPO data.
-    
-    This collator handles the pre-tokenized data format and pads sequences
-    appropriately for the DPO training process.
-    """
-    
-    tokenizer: PreTrainedTokenizer
-    max_length: Optional[int] = None
-    label_pad_token_id: int = -100
-    
-    def __call__(self, features: list[dict]) -> dict:
-        """Collate pre-tokenized features into a batch with proper padding."""
-        batch = {}
-        
-        # Process each key type
-        keys_config = [
-            # (input_key, attn_key, labels_key, pad_left)
-            ('prompt_input_ids', 'prompt_attention_mask', None, True),
-            ('chosen_input_ids', 'chosen_attention_mask', 'chosen_labels', False),
-            ('rejected_input_ids', 'rejected_attention_mask', 'rejected_labels', False),
-        ]
-        
-        for input_key, attn_key, labels_key, pad_left in keys_config:
-            if input_key not in features[0]:
-                continue
-            
-            # Get sequences
-            sequences = [f[input_key] for f in features]
-            attention_masks = [f[attn_key] for f in features]
-            
-            # Find max length in batch
-            max_len = max(len(s) for s in sequences)
-            if self.max_length:
-                max_len = min(max_len, self.max_length)
-            
-            # Pad sequences
-            padded_input = []
-            padded_attn = []
-            
-            for seq, attn in zip(sequences, attention_masks):
-                pad_len = max_len - len(seq)
-                if pad_len > 0:
-                    if pad_left:
-                        padded_input.append([self.tokenizer.pad_token_id] * pad_len + list(seq))
-                        padded_attn.append([0] * pad_len + list(attn))
-                    else:
-                        padded_input.append(list(seq) + [self.tokenizer.pad_token_id] * pad_len)
-                        padded_attn.append(list(attn) + [0] * pad_len)
-                else:
-                    padded_input.append(list(seq[:max_len]))
-                    padded_attn.append(list(attn[:max_len]))
-            
-            batch[input_key] = torch.tensor(padded_input, dtype=torch.long)
-            batch[attn_key] = torch.tensor(padded_attn, dtype=torch.long)
-            
-            # Handle labels if present
-            if labels_key and labels_key in features[0]:
-                labels_list = [f[labels_key] for f in features]
-                padded_labels = []
-                for labels in labels_list:
-                    pad_len = max_len - len(labels)
-                    if pad_len > 0:
-                        if pad_left:
-                            padded_labels.append([self.label_pad_token_id] * pad_len + list(labels))
-                        else:
-                            padded_labels.append(list(labels) + [self.label_pad_token_id] * pad_len)
-                    else:
-                        padded_labels.append(list(labels[:max_len]))
-                batch[labels_key] = torch.tensor(padded_labels, dtype=torch.long)
-        
-        return batch
 
 
 class DSLDPOTrainer:
@@ -193,22 +115,13 @@ class DSLDPOTrainer:
         return config
     
     def _build_trainer(self) -> DPOTrainer:
-        """Build trl DPOTrainer with custom data collator for pre-tokenized data."""
+        """Build trl DPOTrainer. Let TRL handle tokenization internally."""
         # Ensure tokenizer has padding token
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
         
-        # Set padding side for DPO (left padding for prompts)
-        self.tokenizer.padding_side = 'left'
-        
-        # Create custom data collator for our pre-tokenized data
-        data_collator = DPODataCollatorWithPadding(
-            tokenizer=self.tokenizer,
-            max_length=self.config.get('model', {}).get('max_length', 2048),
-        )
-        
-        # Build trainer with custom collator
+        # Build trainer - TRL will handle tokenization of raw text data
         trainer = DPOTrainer(
             model=self.model,
             ref_model=self.ref_model,
@@ -216,7 +129,6 @@ class DSLDPOTrainer:
             train_dataset=self.train_dataset,
             eval_dataset=self.eval_dataset,
             tokenizer=self.tokenizer,
-            data_collator=data_collator,
         )
         
         return trainer

@@ -224,8 +224,8 @@ class DPODataset:
     
     Returns a HuggingFace Dataset compatible with trl.DPOTrainer.
     
-    Pre-tokenizes the data and produces fields that TRL's DPOTrainer expects.
-    Including 'input_ids' to signal that data is already tokenized.
+    TRL DPOTrainer expects raw text format with 'prompt', 'chosen', 'rejected' fields.
+    The trainer will handle tokenization internally.
     """
     
     samples: list[dict]
@@ -244,65 +244,15 @@ class DPODataset:
         
         self._hf_dataset = self._create_hf_dataset()
     
-    def _build_tokenized_sample(
-        self, 
-        prompt: str, 
-        response: str, 
-        prefix: str
-    ) -> dict:
-        """
-        Build tokenized sample for one response (chosen or rejected).
-        
-        Args:
-            prompt: The formatted prompt string
-            response: The response text
-            prefix: 'chosen' or 'rejected'
-            
-        Returns:
-            Dict with {prefix}_input_ids, {prefix}_attention_mask, {prefix}_labels
-        """
-        # Concatenate prompt + response
-        full_text = prompt + response + self.tokenizer.eos_token
-        
-        # Tokenize full sequence
-        full_tokens = self.tokenizer(
-            full_text,
-            max_length=self.max_length,
-            truncation=True,
-            padding=False,
-            add_special_tokens=False,
-            return_tensors=None,
-        )
-        
-        # Tokenize prompt only to get its length
-        prompt_tokens = self.tokenizer(
-            prompt,
-            max_length=self.max_prompt_length,
-            truncation=True,
-            padding=False,
-            add_special_tokens=False,
-            return_tensors=None,
-        )
-        prompt_len = len(prompt_tokens['input_ids'])
-        
-        # Create labels: -100 for prompt tokens, actual ids for response
-        labels = [-100] * prompt_len + full_tokens['input_ids'][prompt_len:]
-        
-        # Truncate labels to match input length
-        labels = labels[:len(full_tokens['input_ids'])]
-        
-        return {
-            f'{prefix}_input_ids': full_tokens['input_ids'],
-            f'{prefix}_attention_mask': full_tokens['attention_mask'],
-            f'{prefix}_labels': labels,
-        }
-    
     def _create_hf_dataset(self) -> HFDataset:
         """
-        Create HuggingFace Dataset with pre-tokenized data for DPOTrainer.
+        Create HuggingFace Dataset in format expected by TRL DPOTrainer.
         
-        TRL checks for 'input_ids' field to determine if data is pre-tokenized.
-        We include this field (as chosen_input_ids copy) to skip TRL's tokenization.
+        TRL expects either:
+        1. Standard format: {'prompt': str, 'chosen': str, 'rejected': str}
+        2. Conversational format: {'prompt': [...], 'chosen': [...], 'rejected': [...]}
+        
+        We use conversational format to properly include system message.
         """
         processed_samples = []
         skipped = 0
@@ -317,43 +267,19 @@ class DPODataset:
                 skipped += 1
                 continue
             
-            # Build prompt with system message using chat template
-            prompt_messages = [
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": user_prompt},
-            ]
-            
-            # Apply chat template for prompt (with generation prompt)
-            formatted_prompt = self.tokenizer.apply_chat_template(
-                prompt_messages,
-                tokenize=False,
-                add_generation_prompt=True,
-            )
-            
-            # Build tokenized samples for chosen and rejected
-            chosen_data = self._build_tokenized_sample(formatted_prompt, chosen, 'chosen')
-            rejected_data = self._build_tokenized_sample(formatted_prompt, rejected, 'rejected')
-            
-            # Tokenize prompt separately
-            prompt_tokens = self.tokenizer(
-                formatted_prompt,
-                max_length=self.max_prompt_length,
-                truncation=True,
-                padding=False,
-                add_special_tokens=False,
-                return_tensors=None,
-            )
-            
+            # Use conversational format for DPO
+            # This allows TRL to properly apply chat template
             processed_sample = {
-                # Standard fields for TRL DPOTrainer
-                'prompt_input_ids': prompt_tokens['input_ids'],
-                'prompt_attention_mask': prompt_tokens['attention_mask'],
-                **chosen_data,
-                **rejected_data,
-                # Add 'input_ids' to signal that data is pre-tokenized
-                # TRL checks: if 'input_ids' in dataset.column_names, skip tokenization
-                'input_ids': chosen_data['chosen_input_ids'],
-                'attention_mask': chosen_data['chosen_attention_mask'],
+                'prompt': [
+                    {"role": "system", "content": self.system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                'chosen': [
+                    {"role": "assistant", "content": chosen},
+                ],
+                'rejected': [
+                    {"role": "assistant", "content": rejected},
+                ],
             }
             
             processed_samples.append(processed_sample)
