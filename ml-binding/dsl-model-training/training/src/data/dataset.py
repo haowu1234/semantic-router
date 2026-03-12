@@ -224,34 +224,88 @@ class DPODataset:
     
     Returns a HuggingFace Dataset compatible with trl.DPOTrainer.
     
-    For TRL DPOTrainer, the data format should be:
-    - prompt: formatted prompt string (with chat template applied)
-    - chosen: chosen response string (raw text, NOT formatted)
-    - rejected: rejected response string (raw text, NOT formatted)
-    
-    The DPOTrainer will handle the tokenization internally.
+    Pre-tokenizes the data and produces fields that TRL's DPOTrainer expects.
+    Including 'input_ids' to signal that data is already tokenized.
     """
     
     samples: list[dict]
     tokenizer: PreTrainedTokenizer
     max_length: int = 2048
+    max_prompt_length: int = 1024
     system_prompt: str = "You are a Signal DSL configuration generator. Generate valid Signal DSL configurations."
     _hf_dataset: Optional[HFDataset] = None
     
     def __post_init__(self):
         """Convert to HuggingFace Dataset format after initialization."""
+        # Ensure tokenizer has padding token
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+        
         self._hf_dataset = self._create_hf_dataset()
+    
+    def _build_tokenized_sample(
+        self, 
+        prompt: str, 
+        response: str, 
+        prefix: str
+    ) -> dict:
+        """
+        Build tokenized sample for one response (chosen or rejected).
+        
+        Args:
+            prompt: The formatted prompt string
+            response: The response text
+            prefix: 'chosen' or 'rejected'
+            
+        Returns:
+            Dict with {prefix}_input_ids, {prefix}_attention_mask, {prefix}_labels
+        """
+        # Concatenate prompt + response
+        full_text = prompt + response + self.tokenizer.eos_token
+        
+        # Tokenize full sequence
+        full_tokens = self.tokenizer(
+            full_text,
+            max_length=self.max_length,
+            truncation=True,
+            padding=False,
+            add_special_tokens=False,
+            return_tensors=None,
+        )
+        
+        # Tokenize prompt only to get its length
+        prompt_tokens = self.tokenizer(
+            prompt,
+            max_length=self.max_prompt_length,
+            truncation=True,
+            padding=False,
+            add_special_tokens=False,
+            return_tensors=None,
+        )
+        prompt_len = len(prompt_tokens['input_ids'])
+        
+        # Create labels: -100 for prompt tokens, actual ids for response
+        labels = [-100] * prompt_len + full_tokens['input_ids'][prompt_len:]
+        
+        # Truncate labels to match input length
+        labels = labels[:len(full_tokens['input_ids'])]
+        
+        return {
+            f'{prefix}_input_ids': full_tokens['input_ids'],
+            f'{prefix}_attention_mask': full_tokens['attention_mask'],
+            f'{prefix}_labels': labels,
+        }
     
     def _create_hf_dataset(self) -> HFDataset:
         """
-        Create HuggingFace Dataset with proper format for DPOTrainer.
+        Create HuggingFace Dataset with pre-tokenized data for DPOTrainer.
         
-        The format is:
-        - prompt: the formatted prompt string
-        - chosen: raw chosen response (DPOTrainer handles tokenization)
-        - rejected: raw rejected response (DPOTrainer handles tokenization)
+        TRL checks for 'input_ids' field to determine if data is pre-tokenized.
+        We include this field (as chosen_input_ids copy) to skip TRL's tokenization.
         """
         processed_samples = []
+        skipped = 0
         
         for sample in self.samples:
             user_prompt = sample.get('prompt', 'Generate a valid Signal DSL configuration.')
@@ -260,6 +314,7 @@ class DPODataset:
             
             # Skip invalid samples
             if not chosen or not rejected:
+                skipped += 1
                 continue
             
             # Build prompt with system message using chat template
@@ -275,11 +330,36 @@ class DPODataset:
                 add_generation_prompt=True,
             )
             
-            processed_samples.append({
-                'prompt': formatted_prompt,
-                'chosen': chosen,
-                'rejected': rejected,
-            })
+            # Build tokenized samples for chosen and rejected
+            chosen_data = self._build_tokenized_sample(formatted_prompt, chosen, 'chosen')
+            rejected_data = self._build_tokenized_sample(formatted_prompt, rejected, 'rejected')
+            
+            # Tokenize prompt separately
+            prompt_tokens = self.tokenizer(
+                formatted_prompt,
+                max_length=self.max_prompt_length,
+                truncation=True,
+                padding=False,
+                add_special_tokens=False,
+                return_tensors=None,
+            )
+            
+            processed_sample = {
+                # Standard fields for TRL DPOTrainer
+                'prompt_input_ids': prompt_tokens['input_ids'],
+                'prompt_attention_mask': prompt_tokens['attention_mask'],
+                **chosen_data,
+                **rejected_data,
+                # Add 'input_ids' to signal that data is pre-tokenized
+                # TRL checks: if 'input_ids' in dataset.column_names, skip tokenization
+                'input_ids': chosen_data['chosen_input_ids'],
+                'attention_mask': chosen_data['chosen_attention_mask'],
+            }
+            
+            processed_samples.append(processed_sample)
+        
+        if skipped > 0:
+            print(f"Skipped {skipped} invalid samples (empty chosen/rejected)")
         
         return HFDataset.from_list(processed_samples)
     
