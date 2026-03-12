@@ -229,7 +229,7 @@ class DPODataset:
     """
     
     samples: list[dict]
-    tokenizer: PreTrainedTokenizer
+    tokenizer: PreTrainedTokenizer  # Still needed for pad_token setup
     max_length: int = 2048
     max_prompt_length: int = 1024
     system_prompt: str = "You are a Signal DSL configuration generator. Generate valid Signal DSL configurations."
@@ -248,10 +248,14 @@ class DPODataset:
         """
         Create HuggingFace Dataset in format expected by TRL DPOTrainer.
         
-        This version of TRL expects string format:
-        {'prompt': str, 'chosen': str, 'rejected': str}
+        TRL expects string format: {'prompt': str, 'chosen': str, 'rejected': str}
         
-        We manually apply chat template to create the prompt string.
+        The DPOTrainer will:
+        1. Concatenate prompt + chosen/rejected
+        2. Tokenize the full sequences
+        3. Create labels with prompt tokens masked
+        
+        We provide raw text strings, TRL handles the rest.
         """
         processed_samples = []
         skipped = 0
@@ -266,23 +270,13 @@ class DPODataset:
                 skipped += 1
                 continue
             
-            # Build prompt with chat template
-            prompt_messages = [
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": user_prompt},
-            ]
-            
-            # Apply chat template to get formatted prompt string
-            # add_generation_prompt=True adds the assistant turn prefix
-            formatted_prompt = self.tokenizer.apply_chat_template(
-                prompt_messages,
-                tokenize=False,
-                add_generation_prompt=True,
-            )
+            # Build simple text prompt (no chat template)
+            # TRL's tokenize_row expects raw prompt text that will be concatenated with response
+            full_prompt = f"{self.system_prompt}\n\n{user_prompt}\n\nResponse:\n"
             
             # Use standard string format for DPO
             processed_sample = {
-                'prompt': formatted_prompt,
+                'prompt': full_prompt,
                 'chosen': chosen,
                 'rejected': rejected,
             }
@@ -291,6 +285,14 @@ class DPODataset:
         
         if skipped > 0:
             print(f"Skipped {skipped} invalid samples (empty chosen/rejected)")
+        
+        print(f"Created DPO dataset with {len(processed_samples)} samples")
+        if processed_samples:
+            # Debug: show first sample structure
+            sample = processed_samples[0]
+            print(f"Sample prompt length: {len(sample['prompt'])} chars")
+            print(f"Sample chosen length: {len(sample['chosen'])} chars")
+            print(f"Sample rejected length: {len(sample['rejected'])} chars")
         
         return HFDataset.from_list(processed_samples)
     

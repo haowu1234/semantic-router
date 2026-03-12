@@ -103,9 +103,16 @@ class DSLDPOTrainer:
             # Gradient checkpointing
             gradient_checkpointing=self.config.get('hardware', {}).get('gradient_checkpointing', False),
             
-            # Max length
+            # Max length settings - CRITICAL for proper tokenization
             max_length=self.config.get('model', {}).get('max_length', 2048),
-            max_prompt_length=1024,
+            max_prompt_length=512,  # Shorter prompt to leave room for response
+            truncation_mode='keep_end',  # Keep the response end when truncating
+            
+            # Ensure correct model type detection
+            is_encoder_decoder=False,
+            
+            # Remove columns after tokenization to avoid issues
+            remove_unused_columns=False,
             
             # Wandb
             report_to=['wandb'] if wandb_config.get('enabled', False) else ['tensorboard'],
