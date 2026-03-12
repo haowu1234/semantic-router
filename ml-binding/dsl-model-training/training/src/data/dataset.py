@@ -248,11 +248,10 @@ class DPODataset:
         """
         Create HuggingFace Dataset in format expected by TRL DPOTrainer.
         
-        TRL expects either:
-        1. Standard format: {'prompt': str, 'chosen': str, 'rejected': str}
-        2. Conversational format: {'prompt': [...], 'chosen': [...], 'rejected': [...]}
+        This version of TRL expects string format:
+        {'prompt': str, 'chosen': str, 'rejected': str}
         
-        We use conversational format to properly include system message.
+        We manually apply chat template to create the prompt string.
         """
         processed_samples = []
         skipped = 0
@@ -267,19 +266,25 @@ class DPODataset:
                 skipped += 1
                 continue
             
-            # Use conversational format for DPO
-            # This allows TRL to properly apply chat template
+            # Build prompt with chat template
+            prompt_messages = [
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+            
+            # Apply chat template to get formatted prompt string
+            # add_generation_prompt=True adds the assistant turn prefix
+            formatted_prompt = self.tokenizer.apply_chat_template(
+                prompt_messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            
+            # Use standard string format for DPO
             processed_sample = {
-                'prompt': [
-                    {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                'chosen': [
-                    {"role": "assistant", "content": chosen},
-                ],
-                'rejected': [
-                    {"role": "assistant", "content": rejected},
-                ],
+                'prompt': formatted_prompt,
+                'chosen': chosen,
+                'rejected': rejected,
             }
             
             processed_samples.append(processed_sample)
