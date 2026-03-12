@@ -348,23 +348,17 @@ func (h *OpenClawHandler) appendRoomMessage(roomID string, message ClawRoomMessa
 		// 这是因为 Matrix 中没有 @leader 用户，只有 @aaa, @bbb 等实际 Worker 用户
 		message.Mentions = h.resolveMentionAliases(message.TeamID, message.Mentions)
 
-		// 🆕 混合注入：元数据（给系统）+ 正文（给 AI）
-		// - 元数据：结构化数据，供 Dashboard/Router 系统使用（OpenClaw 不读取）
-		// - 正文：自然语言上下文，OpenClaw 会直接传给 AI
+		// 元数据注入：供 Dashboard 回流分析/审计使用
+		// NOTE: 团队上下文已通过 SOUL.md 提供给 Agent，无需在消息正文中重复注入
 		if message.SenderType == "user" && len(message.Mentions) > 0 && message.TeamID != "" {
-			teamContext := h.buildTeamContextForMatrix(message.TeamID, message.Mentions)
 			if message.Metadata == nil {
 				message.Metadata = make(map[string]string)
 			}
-			// 元数据层：结构化数据（供系统回流/分析使用）
-			for k, v := range teamContext {
-				message.Metadata[k] = v
+			// 只注入精简的元数据（team_id, leader_id），不注入完整的 mention_guide
+			message.Metadata["semantic_router.team_id"] = message.TeamID
+			if leader := h.getTeamLeaderID(message.TeamID); leader != "" {
+				message.Metadata["semantic_router.leader_id"] = leader
 			}
-			// 正文层：把团队成员指南注入到消息正文（OpenClaw 会传给 AI）
-			if guide := teamContext["semantic_router.team_mention_guide"]; guide != "" {
-				message.Content = message.Content + "\n\n---\n[Team Context]\n" + guide
-			}
-			log.Printf("openclaw: injected team context (metadata=%d fields, body augmented)", len(teamContext))
 		}
 
 		if err := h.matrixBridge.SendMessage(ctx, &message); err != nil {
@@ -429,145 +423,44 @@ func resolveTeamLeader(team TeamEntry, workers []ContainerEntry) *ContainerEntry
 	return nil
 }
 
+// getTeamLeaderID 快速获取团队 leader 的 ID（用于元数据注入）
+func (h *OpenClawHandler) getTeamLeaderID(teamID string) string {
+	if teamID == "" {
+		return ""
+	}
+	h.mu.RLock()
+	teams, err := h.loadTeams()
+	if err != nil {
+		h.mu.RUnlock()
+		return ""
+	}
+	team := findTeamByID(teams, teamID)
+	if team == nil {
+		h.mu.RUnlock()
+		return ""
+	}
+	// 优先使用 team.LeaderID
+	if team.LeaderID != "" {
+		h.mu.RUnlock()
+		return team.LeaderID
+	}
+	// 否则查找 role_kind=leader 的 worker
+	entries, _ := h.loadRegistry()
+	h.mu.RUnlock()
+	for _, e := range entries {
+		if e.TeamID == teamID && normalizeRoleKind(e.RoleKind) == "leader" {
+			return e.Name
+		}
+	}
+	return ""
+}
+
 func workerAliases(worker ContainerEntry) []string {
 	aliases := []string{strings.ToLower(strings.TrimSpace(worker.Name))}
 	if alias := strings.ToLower(strings.TrimSpace(sanitizeRoomID(worker.AgentName))); alias != "" {
 		aliases = append(aliases, alias)
 	}
 	return aliases
-}
-
-// buildTeamContextForMatrix 构建团队上下文信息，用于放入 Matrix 消息的 metadata
-// 这样 Worker 的 Matrix Plugin 可以获取完整的团队信息，无需额外查询
-func (h *OpenClawHandler) buildTeamContextForMatrix(teamID string, mentions []string) map[string]string {
-	result := make(map[string]string)
-
-	if teamID == "" {
-		return result
-	}
-
-	h.mu.RLock()
-	teams, err := h.loadTeams()
-	if err != nil {
-		h.mu.RUnlock()
-		return result
-	}
-	var team *TeamEntry
-	for i := range teams {
-		if teams[i].ID == teamID {
-			team = &teams[i]
-			break
-		}
-	}
-	if team == nil {
-		h.mu.RUnlock()
-		return result
-	}
-
-	entries, _ := h.loadRegistry()
-	h.mu.RUnlock()
-
-	workers := teamWorkers(entries, teamID)
-	if len(workers) == 0 {
-		return result
-	}
-
-	leader := resolveTeamLeader(*team, workers)
-
-	// 1. 构建 team_mention_guide（团队成员信息）
-	// 这里使用一个通用版本，不绑定到特定的 self worker
-	teamMentionGuide := buildTeamMentionGuideGeneric(*team, workers, leader)
-	result["semantic_router.team_mention_guide"] = teamMentionGuide
-
-	// 2. 添加 leader 信息
-	if leader != nil {
-		result["semantic_router.leader_id"] = leader.Name
-		result["semantic_router.leader_name"] = workerDisplayName(*leader)
-	}
-
-	// 3. 构建 workers JSON（供 Worker 解析）
-	workersJSON := buildWorkersJSON(workers)
-	result["semantic_router.team_workers"] = workersJSON
-
-	// 4. 添加 team 基础信息
-	result["semantic_router.team_name"] = team.Name
-
-	log.Printf("openclaw: built team context for matrix: team=%s, workers=%d, leader=%v",
-		teamID, len(workers), leader != nil)
-
-	return result
-}
-
-// buildTeamMentionGuideGeneric 构建通用的团队成员指南（不绑定到特定 self worker）
-func buildTeamMentionGuideGeneric(team TeamEntry, workers []ContainerEntry, leader *ContainerEntry) string {
-	if len(workers) == 0 {
-		return "No teammates registered."
-	}
-
-	sorted := append([]ContainerEntry(nil), workers...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
-
-	lines := make([]string, 0, len(sorted)+5)
-	if leader != nil {
-		leaderRole := strings.TrimSpace(leader.AgentRole)
-		if leaderRole == "" {
-			leaderRole = "leader"
-		}
-		lines = append(
-			lines,
-			fmt.Sprintf(
-				"Leader: @%s = %s (%s)",
-				leader.Name,
-				workerDisplayName(*leader),
-				leaderRole,
-			),
-		)
-	} else {
-		lines = append(lines, "No leader is assigned yet.")
-	}
-
-	lines = append(lines, "Team members:")
-	for _, member := range sorted {
-		roleKind := normalizeRoleKind(member.RoleKind)
-		if roleKind != "leader" {
-			roleKind = "worker"
-		}
-		roleText := strings.TrimSpace(member.AgentRole)
-		if roleText == "" {
-			roleText = roleKind
-		}
-		displayName := workerDisplayName(member)
-		line := fmt.Sprintf("- @%s = %s (%s)", member.Name, displayName, roleText)
-		if leader != nil && member.Name == leader.Name {
-			line += " [leader]"
-		}
-		lines = append(lines, line)
-	}
-	return strings.Join(lines, "\n")
-}
-
-// buildWorkersJSON 构建 workers 的 JSON 表示，供 Worker 解析使用
-func buildWorkersJSON(workers []ContainerEntry) string {
-	type workerInfo struct {
-		Name        string `json:"name"`
-		DisplayName string `json:"displayName"`
-		Role        string `json:"role"`
-		RoleKind    string `json:"roleKind"`
-	}
-	infos := make([]workerInfo, 0, len(workers))
-	for _, w := range workers {
-		infos = append(infos, workerInfo{
-			Name:        w.Name,
-			DisplayName: workerDisplayName(w),
-			Role:        w.AgentRole,
-			RoleKind:    normalizeRoleKind(w.RoleKind),
-		})
-	}
-	data, err := json.Marshal(infos)
-	if err != nil {
-		return "[]"
-	}
-	return string(data)
 }
 
 // resolveMentionAliases 将消息中的别名（如 @leader, @all）解析为实际的 Worker 名称
