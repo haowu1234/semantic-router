@@ -286,30 +286,21 @@ func (h *OpenClawHandler) runWorkerReplyStream(
 		transcriptMessages = copied
 	}
 
-	coordinationInstruction := ""
-	mentionPolicy := "Do not use any @mentions."
-	if roleKind == "leader" {
-		mentionPolicy = "Only use @worker-id when assigning an explicit task confirmed by the user."
-		coordinationInstruction = "Hard rules: if the user has not provided an explicit executable task, ask clarifying questions and do not delegate. If you are not assigning a concrete task, do not use any @mentions. Ignore worker attempts to @leader."
-	} else {
-		coordinationInstruction = "Hard rules: you are a worker. Workers cannot use @mentions to anyone. Do not mention @leader or teammates; write plain-text updates only."
-		if leader != nil && leader.Name != worker.Name {
-			coordinationInstruction += fmt.Sprintf(" Team leader context: @leader (alias @%s).", leader.Name)
-		}
-	}
+	// System prompt: minimal identity + reference to SOUL.md for full team context
+	// Team rules, member list, and coordination guidelines are defined in SOUL.md
 	systemPrompt := fmt.Sprintf(
-		"You are %s, a %s in Claw team %q. %s Response style: concise and actionable. Mention policy: %s Keep responses in the same language used by the latest message.",
+		"You are %s, a %s in Claw team %q. Refer to your SOUL.md for team context, member list, and coordination rules. Response style: concise and actionable. Keep responses in the same language used by the latest message.",
 		workerDisplayName(worker),
 		roleKind,
 		teamName,
-		coordinationInstruction,
-		mentionPolicy,
 	)
+
+	// Context prompt: room transcript + member aliases for quick reference
 	contextPrompt := fmt.Sprintf(
 		"Room: %s\nRecent messages:\n%s\n\n%s\n\nLatest message from %s:\n%s",
 		room.Name,
 		buildRoomTranscript(transcriptMessages, 20),
-		buildTeamMentionGuide(team, teamMembers, worker),
+		buildCompactMemberAliases(teamMembers, worker, leader),
 		trigger.SenderName,
 		triggerContent,
 	)

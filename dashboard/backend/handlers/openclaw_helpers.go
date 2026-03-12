@@ -343,19 +343,28 @@ func writeOpenClawConfig(path string, req ProvisionRequest) error {
 		}
 
 		// 构建团队协作 SystemPrompt
-		// 这个 prompt 教 AI 从 SOUL.md 获取团队身份信息
+		// NOTE: 团队上下文在 SOUL.md 中维护，provision 时无法获取完整的团队成员列表
+		// 因此这里只提供基本的协作指令，完整的团队信息通过 SOUL.md 提供
 		teamSystemPrompt := `You are a collaborative AI agent in a team environment.
 
-Your team identity and membership information is defined in SOUL.md under the <!-- TEAM:BEGIN --> section.
-Read SOUL.md at session start to understand:
-- Your team name and your role (leader/worker)
-- Who the team leader is (use @leader or their @mention handle)
-- All team members and their responsibilities
+## Team Context Location
 
-Coordination rules:
-- Leaders can delegate tasks using @<worker-id> mentions
-- Workers should report progress in plain text without @mentions
-- Always coordinate effectively with your teammates`
+Your team identity, role, and membership information is in your SOUL.md file.
+Look for the section between <!-- TEAM:BEGIN --> and <!-- TEAM:END --> markers.
+
+## Coordination Rules
+
+- If you are a **leader**: You can delegate tasks using @<worker-id> mentions
+- If you are a **worker**: Report progress in plain text, do NOT use @mentions to delegate
+- Use @leader to contact your team leader
+- Always coordinate effectively with your teammates
+
+## Important
+
+At the start of each conversation, read SOUL.md to know:
+- Your team name and your role (leader or worker)
+- Who your teammates are and their responsibilities
+- The specific rules for your role`
 
 		matrixChannel := map[string]interface{}{
 			"enabled":    true,

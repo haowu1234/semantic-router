@@ -719,6 +719,30 @@ func buildTeamMentionGuide(team TeamEntry, workers []ContainerEntry, self Contai
 	return strings.Join(lines, "\n")
 }
 
+// buildCompactMemberAliases generates a compact one-line member alias list for context prompt.
+// Full team context (rules, detailed member info) is in SOUL.md; this is just a quick reference.
+func buildCompactMemberAliases(workers []ContainerEntry, self ContainerEntry, leader *ContainerEntry) string {
+	if len(workers) == 0 {
+		return "Team: (no members)"
+	}
+
+	sorted := append([]ContainerEntry(nil), workers...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+
+	aliases := make([]string, 0, len(sorted))
+	for _, m := range sorted {
+		alias := fmt.Sprintf("@%s", m.Name)
+		if m.Name == self.Name {
+			alias += "(you)"
+		}
+		if leader != nil && m.Name == leader.Name {
+			alias += "(leader)"
+		}
+		aliases = append(aliases, alias)
+	}
+	return "Team members: " + strings.Join(aliases, ", ")
+}
+
 type openAIChatMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
