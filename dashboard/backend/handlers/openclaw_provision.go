@@ -476,6 +476,13 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 		if err := h.saveTeams(teams); err != nil {
 			log.Printf("openclaw: failed to save teams after provisioning: %v", err)
 		}
+
+		// Update SOUL.md team context for all team members
+		if team != nil {
+			if err := h.SyncTeamMembersContext(*team, entries); err != nil {
+				log.Printf("openclaw: failed to sync team context for %s: %v", req.TeamID, err)
+			}
+		}
 		h.mu.Unlock()
 
 		// Invite worker to team's Matrix room if MatrixBridge is available

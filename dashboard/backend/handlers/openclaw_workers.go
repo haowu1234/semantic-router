@@ -298,6 +298,22 @@ func (h *OpenClawHandler) WorkerByIDHandler() http.HandlerFunc {
 					return
 				}
 			}
+
+			// Sync team context for affected teams
+			affectedTeams := map[string]bool{entry.TeamID: true}
+			if originalEntry.TeamID != "" && originalEntry.TeamID != entry.TeamID {
+				affectedTeams[originalEntry.TeamID] = true
+			}
+			for teamID := range affectedTeams {
+				if teamID == "" {
+					continue
+				}
+				if team := findTeamByID(teams, teamID); team != nil {
+					if err := h.SyncTeamMembersContext(*team, entries); err != nil {
+						log.Printf("openclaw: failed to sync team context for %s: %v", teamID, err)
+					}
+				}
+			}
 			h.mu.Unlock()
 
 			updated := enrichContainerIdentity(entry)

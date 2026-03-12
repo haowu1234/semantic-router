@@ -52,6 +52,14 @@ func (h *OpenClawHandler) deleteContainerByName(name string) error {
 			log.Printf("openclaw: failed to clear leader mapping for deleted worker %s: %v", name, err)
 		}
 	}
+
+	// Sync team context for remaining members after deletion
+	if team := findTeamByID(teams, deletedTeamID); team != nil {
+		if err := h.SyncTeamMembersContext(*team, filtered); err != nil {
+			log.Printf("openclaw: failed to sync team context after deleting %s: %v", name, err)
+		}
+	}
+
 	return nil
 }
 

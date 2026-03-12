@@ -349,6 +349,10 @@ func (h *OpenClawHandler) TeamByIDHandler() http.HandlerFunc {
 				if err := h.saveRegistry(entries); err != nil {
 					log.Printf("openclaw: failed to save registry after team update: %v", err)
 				}
+				// Sync team context for all members after team update
+				if err := h.SyncTeamMembersContext(updated, entries); err != nil {
+					log.Printf("openclaw: failed to sync team context for %s: %v", teamID, err)
+				}
 			}
 
 			rooms, roomErr := h.loadRooms()
