@@ -129,7 +129,7 @@ const IntentEditor: React.FC<IntentEditorProps> = ({
 
         <div className={styles.content}>
           {/* Name field (for most intent types) */}
-          {'name' in editedIntent && editedIntent.type !== 'global' && (
+          {'name' in editedIntent && (editedIntent.type as string) !== 'global' && (
             <div className={styles.field}>
               <label className={styles.label}>
                 Name <span className={styles.required}>*</span>
@@ -186,7 +186,7 @@ const DynamicField: React.FC<DynamicFieldProps> = ({
   error,
   onChange,
 }) => {
-  const { key, label, type, options, required, placeholder, description } = schema
+  const { label, type, options, required, placeholder, description } = schema
 
   const renderInput = () => {
     switch (type) {

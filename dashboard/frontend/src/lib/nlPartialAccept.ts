@@ -15,13 +15,8 @@
 import type {
   IntentIR,
   Intent,
-  SignalIntent,
-  RouteIntent,
-  PluginTemplateIntent,
-  BackendIntent,
-  ConditionNode,
 } from '@/types/intentIR'
-import type { SymbolTable, Diagnostic, WasmBridge } from '@/types/dsl'
+import type { SymbolTable, WasmBridge } from '@/types/dsl'
 import { collectSignalRefs, resolveImplicitDependencies, intentIRToDSL } from './intentToDsl'
 import { validateGeneratedDSL } from './nlValidation'
 import type { ValidationResult } from './nlValidation'
@@ -266,7 +261,6 @@ export function detectDependencyIssues(
     if (!selection.selected) continue
 
     const node = graph.nodes[selection.index]
-    const intent = ir.intents[selection.index]
 
     for (const depIndex of node.dependsOn) {
       if (selectedIndices.has(depIndex)) continue // Dependency is selected, OK
@@ -481,7 +475,7 @@ export async function generatePartialPreview(
  */
 export function createPartialAcceptState(
   ir: IntentIR,
-  existingDSL?: string,
+  _existingDSL?: string,
   existingSymbols?: SymbolTable,
 ): PartialAcceptState {
   const selections = createInitialSelections(ir)

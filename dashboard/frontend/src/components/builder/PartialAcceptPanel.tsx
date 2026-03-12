@@ -14,7 +14,6 @@ import { useNLStore } from '@/stores/nlStore'
 import type { Intent } from '@/types/intentIR'
 import {
   getIntentDisplayName,
-  getIntentCategory,
   groupIntentsByCategory,
   getSelectionStats,
 } from '@/lib/nlPartialAccept'

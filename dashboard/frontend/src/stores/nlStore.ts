@@ -44,7 +44,6 @@ import {
 } from '@/lib/nlPartialAccept'
 import type {
   PartialAcceptState,
-  IntentSelectionState,
 } from '@/lib/nlPartialAccept'
 import { intentIRToDSL } from '@/lib/intentToDsl'
 
