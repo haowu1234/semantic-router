@@ -6,11 +6,12 @@ Uses trl's DPOTrainer for Direct Preference Optimization.
 """
 
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Union
 
 import torch
 from transformers import PreTrainedModel, PreTrainedTokenizer
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset as TorchDataset
+from datasets import Dataset as HFDataset
 from trl import DPOTrainer, DPOConfig
 from peft import PeftModel
 
@@ -30,8 +31,8 @@ class DSLDPOTrainer:
         ref_model: Optional[PreTrainedModel],
         tokenizer: PreTrainedTokenizer,
         config: dict,
-        train_dataset: Optional[Dataset] = None,
-        eval_dataset: Optional[Dataset] = None,
+        train_dataset: Optional[Union[HFDataset, TorchDataset]] = None,
+        eval_dataset: Optional[Union[HFDataset, TorchDataset]] = None,
     ):
         self.model = model
         self.ref_model = ref_model

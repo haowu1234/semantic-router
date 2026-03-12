@@ -233,27 +233,27 @@ def train_stage3(
     
     # Load datasets
     logger.logger.info("Loading datasets...")
-    train_dataset = DPODataset.from_jsonl(
+    train_dpo_dataset = DPODataset.from_jsonl(
         data_dir / "stage3_dpo.jsonl",
         tokenizer,
         max_length=config['model']['max_length'],
     )
-    eval_dataset = DPODataset.from_jsonl(
+    eval_dpo_dataset = DPODataset.from_jsonl(
         data_dir / "stage3_dpo_eval.jsonl",
         tokenizer,
         max_length=config['model']['max_length'],
     )
-    logger.logger.info(f"Train samples: {len(train_dataset)}")
-    logger.logger.info(f"Eval samples: {len(eval_dataset)}")
+    logger.logger.info(f"Train samples: {len(train_dpo_dataset)}")
+    logger.logger.info(f"Eval samples: {len(eval_dpo_dataset)}")
     
-    # Create trainer
+    # Create trainer (use HF Dataset for DPOTrainer compatibility)
     trainer = DSLDPOTrainer(
         model=model,
         ref_model=ref_model,
         tokenizer=tokenizer,
         config=config,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+        train_dataset=train_dpo_dataset.get_hf_dataset(),
+        eval_dataset=eval_dpo_dataset.get_hf_dataset(),
     )
     
     # Train

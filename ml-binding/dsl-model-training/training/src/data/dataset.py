@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import torch
 from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizer
+from datasets import Dataset as HFDataset
 
 
 def load_dataset_from_jsonl(file_path: str | Path) -> list[dict]:
@@ -217,82 +218,90 @@ class SFTDataset(Dataset):
 
 
 @dataclass  
-class DPODataset(Dataset):
+class DPODataset:
     """
     Stage 3: DPO dataset for preference learning.
     
+    Returns a HuggingFace Dataset compatible with trl.DPOTrainer.
+    
     Each sample contains:
-    - id: unique identifier
     - prompt: the prompt/question
     - chosen: preferred (correct) response
     - rejected: dispreferred (incorrect) response
-    - mutation_type: type of error in rejected
-    - mutation_category: category of error
     """
     
     samples: list[dict]
     tokenizer: PreTrainedTokenizer
     max_length: int = 2048
     system_prompt: str = "You are a Signal DSL configuration generator. Generate valid Signal DSL configurations."
+    _hf_dataset: Optional[HFDataset] = None
+    
+    def __post_init__(self):
+        """Convert to HuggingFace Dataset format after initialization."""
+        self._hf_dataset = self._create_hf_dataset()
+    
+    def _create_hf_dataset(self) -> HFDataset:
+        """Create HuggingFace Dataset with proper format for DPOTrainer."""
+        processed_samples = []
+        
+        for sample in self.samples:
+            user_prompt = sample.get('prompt', 'Generate a valid Signal DSL configuration.')
+            chosen = sample['chosen']
+            rejected = sample['rejected']
+            
+            # Build prompt with system message using chat template
+            prompt_messages = [
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+            
+            # Apply chat template for prompt
+            formatted_prompt = self.tokenizer.apply_chat_template(
+                prompt_messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            
+            processed_samples.append({
+                'prompt': formatted_prompt,
+                'chosen': chosen,
+                'rejected': rejected,
+            })
+        
+        return HFDataset.from_list(processed_samples)
     
     def __len__(self) -> int:
         return len(self.samples)
     
     def __getitem__(self, idx: int) -> dict:
-        sample = self.samples[idx]
-        
-        prompt = sample.get('prompt', 'Generate a valid Signal DSL configuration.')
-        chosen = sample['chosen']
-        rejected = sample['rejected']
-        
-        # Build prompt with system message
-        prompt_messages = [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": prompt},
-        ]
-        
-        # Apply chat template for prompt only
-        formatted_prompt = self.tokenizer.apply_chat_template(
-            prompt_messages,
-            tokenize=False,
-            add_generation_prompt=True,
-        )
-        
-        # Tokenize prompt
-        prompt_encodings = self.tokenizer(
-            formatted_prompt,
-            max_length=self.max_length,
-            truncation=True,
-            padding=False,
-            return_tensors=None,
-        )
-        
-        # Tokenize chosen response
-        chosen_encodings = self.tokenizer(
-            chosen,
-            max_length=self.max_length - len(prompt_encodings['input_ids']),
-            truncation=True,
-            padding=False,
-            return_tensors=None,
-        )
-        
-        # Tokenize rejected response
-        rejected_encodings = self.tokenizer(
-            rejected,
-            max_length=self.max_length - len(prompt_encodings['input_ids']),
-            truncation=True,
-            padding=False,
-            return_tensors=None,
-        )
-        
-        return {
-            'prompt_input_ids': prompt_encodings['input_ids'],
-            'prompt_attention_mask': prompt_encodings['attention_mask'],
-            'chosen_input_ids': chosen_encodings['input_ids'],
-            'chosen_attention_mask': chosen_encodings['attention_mask'],
-            'rejected_input_ids': rejected_encodings['input_ids'],
-            'rejected_attention_mask': rejected_encodings['attention_mask'],
-        }
+        """For compatibility with PyTorch Dataset interface."""
+        return self._hf_dataset[idx]
+    
+    def get_hf_dataset(self) -> HFDataset:
+        """Get the underlying HuggingFace Dataset."""
+        return self._hf_dataset
+    
+    # Delegate common Dataset methods to HF Dataset
+    def map(self, *args, **kwargs):
+        """Delegate map to HF Dataset."""
+        return self._hf_dataset.map(*args, **kwargs)
+    
+    def filter(self, *args, **kwargs):
+        """Delegate filter to HF Dataset."""
+        return self._hf_dataset.filter(*args, **kwargs)
+    
+    def select(self, *args, **kwargs):
+        """Delegate select to HF Dataset."""
+        return self._hf_dataset.select(*args, **kwargs)
+    
+    def shuffle(self, *args, **kwargs):
+        """Delegate shuffle to HF Dataset."""
+        return self._hf_dataset.shuffle(*args, **kwargs)
+    
+    @property
+    def column_names(self):
+        """Return column names from HF Dataset."""
+        return self._hf_dataset.column_names
     
     @classmethod
     def from_jsonl(
