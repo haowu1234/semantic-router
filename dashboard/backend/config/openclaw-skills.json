@@ -203,5 +203,14 @@
     "category": "communication",
     "builtin": true,
     "os": ["darwin"]
+  },
+  {
+    "id": "team-notify",
+    "name": "Team Notification",
+    "description": "Send proactive messages to team Matrix room. Use for scheduled task results, reports, alerts, and notifications.",
+    "emoji": "📢",
+    "category": "communication",
+    "builtin": true,
+    "requires": ["curl"]
   }
 ]

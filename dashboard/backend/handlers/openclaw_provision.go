@@ -202,8 +202,70 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 			return
 		}
 
+		// Auto-inject team-notify skill for all agents (leader/worker) if team has Matrix room
+		if team.MatrixRoomID != "" {
+			hasTeamNotify := false
+			for _, s := range req.Skills {
+				if s == "team-notify" {
+					hasTeamNotify = true
+					break
+				}
+			}
+			if !hasTeamNotify {
+				req.Skills = append(req.Skills, "team-notify")
+				log.Printf("openclaw: auto-injecting team-notify skill for %s (team %s has Matrix room)", req.Container.ContainerName, teamName)
+			}
+		}
+
 		for _, skillID := range req.Skills {
-			content := h.fetchSkillContent(skillID, req.Container.BaseImage)
+			var content string
+
+			// Special handling for team-notify skill: dynamically inject team room info
+			if skillID == "team-notify" && team.MatrixRoomID != "" {
+				// Determine Dashboard API URL for the agent to call back.
+				// The URL depends on the container's network mode:
+				// - host mode: localhost:8700 (Dashboard port)
+				// - bridge mode: <dashboard-container>:8700 (container DNS)
+				// - container:xxx mode: localhost:8700 (shared network namespace)
+				dashboardAPIURL := os.Getenv("DASHBOARD_API_URL")
+				if dashboardAPIURL == "" {
+					nm := req.Container.NetworkMode
+					if nm == "host" || strings.HasPrefix(nm, "container:") {
+						// Host or shared network namespace: use localhost
+						dashboardAPIURL = "http://localhost:8700"
+					} else {
+						// Bridge network: use container name for DNS resolution
+						dashboardContainer := os.Getenv("OPENCLAW_DASHBOARD_CONTAINER_NAME")
+						if dashboardContainer == "" {
+							dashboardContainer = vllmSrContainerName
+						}
+						dashboardAPIURL = fmt.Sprintf("http://%s:8700", dashboardContainer)
+					}
+				}
+
+				// Get room name from rooms list
+				rooms, _ := h.loadRooms()
+				roomName := teamName + " Room"
+				for _, r := range rooms {
+					if r.ID == team.MatrixRoomID {
+						roomName = r.Name
+						break
+					}
+				}
+
+				content = generateTeamNotifySkillContent(TeamNotifyContext{
+					TeamName:   teamName,
+					TeamID:     team.ID,
+					RoomID:     team.MatrixRoomID,
+					RoomName:   roomName,
+					GatewayURL: dashboardAPIURL,
+					AgentName:  req.Identity.Name,
+				})
+				log.Printf("openclaw: generated team-notify skill for %s with room %s", req.Container.ContainerName, team.MatrixRoomID)
+			} else {
+				content = h.fetchSkillContent(skillID, req.Container.BaseImage)
+			}
+
 			if content == "" {
 				continue
 			}

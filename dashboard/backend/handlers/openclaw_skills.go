@@ -106,3 +106,93 @@ func (h *OpenClawHandler) fetchSkillContent(skillID, baseImage string) string {
 	}
 	return ""
 }
+
+// TeamNotifyContext holds the context needed for generating team-notify skill content
+type TeamNotifyContext struct {
+	TeamName     string
+	TeamID       string
+	RoomID       string
+	RoomName     string
+	GatewayURL   string
+	AgentName    string
+}
+
+// generateTeamNotifySkillContent generates dynamic content for the team-notify skill
+// This skill allows agents to proactively send messages to the team Matrix room
+func generateTeamNotifySkillContent(ctx TeamNotifyContext) string {
+	return fmt.Sprintf(`---
+name: team-notify
+description: "Send proactive messages to team Matrix room"
+user-invocable: true
+---
+
+# Team Notification
+
+Send messages to your team's Matrix room for notifications, reports, scheduled task results, and alerts.
+
+## Team Information
+
+| Field | Value |
+|-------|-------|
+| Team Name | %s |
+| Team ID | %s |
+| Room ID | %s |
+| Room Name | %s |
+
+## How to Send a Message
+
+Use curl to send a message to the team room via the Dashboard API:
+
+`+"`"+`bash
+curl -X POST "%s/api/openclaw/rooms/%s/messages" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "YOUR_MESSAGE_HERE",
+    "senderType": "worker",
+    "senderName": "%s"
+  }'
+`+"`"+`
+
+## Example Usage
+
+### Send a simple notification
+`+"`"+`bash
+curl -X POST "%s/api/openclaw/rooms/%s/messages" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "✅ Daily report generated successfully", "senderType": "worker", "senderName": "%s"}'
+`+"`"+`
+
+### Send a scheduled task result
+`+"`"+`bash
+curl -X POST "%s/api/openclaw/rooms/%s/messages" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "📊 Weekly metrics:\n- Tasks completed: 42\n- Success rate: 98%%", "senderType": "worker", "senderName": "%s"}'
+`+"`"+`
+
+### Send an alert
+`+"`"+`bash
+curl -X POST "%s/api/openclaw/rooms/%s/messages" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "⚠️ Alert: Disk usage above 80%%", "senderType": "worker", "senderName": "%s"}'
+`+"`"+`
+
+## When to Use
+
+- **Scheduled Tasks**: Report results of cron jobs or scheduled operations
+- **Daily/Weekly Reports**: Send automated summaries to the team
+- **Alerts**: Notify the team of important events or issues
+- **Status Updates**: Keep the team informed of long-running task progress
+
+## Notes
+
+- Messages sent via this method appear in the team's Matrix room
+- All team members will see the notification
+- Use @mention syntax (e.g., @leader) to notify specific members
+`,
+		ctx.TeamName, ctx.TeamID, ctx.RoomID, ctx.RoomName,
+		ctx.GatewayURL, ctx.RoomID, ctx.AgentName,
+		ctx.GatewayURL, ctx.RoomID, ctx.AgentName,
+		ctx.GatewayURL, ctx.RoomID, ctx.AgentName,
+		ctx.GatewayURL, ctx.RoomID, ctx.AgentName,
+	)
+}
