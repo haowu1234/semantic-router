@@ -212,26 +212,54 @@ def train_stage3(
     stage_output = output_dir / "stage3_dpo"
     config['training']['output_dir'] = str(stage_output)
     
-    # Load from stage2 checkpoint if available
-    model_name = stage2_checkpoint if stage2_checkpoint else config['model']['name']
+    # Determine base model name (always need base model for PEFT)
+    base_model_name = config['model']['name']
     
-    logger.logger.info(f"Loading model: {model_name}")
+    # Check if stage2_checkpoint is a PEFT checkpoint
+    is_peft_checkpoint = False
+    if stage2_checkpoint:
+        checkpoint_path = Path(stage2_checkpoint)
+        # PEFT checkpoints have adapter_config.json
+        if (checkpoint_path / "adapter_config.json").exists():
+            is_peft_checkpoint = True
+            logger.logger.info(f"Detected PEFT checkpoint at: {stage2_checkpoint}")
+        else:
+            # It might be a merged/full model
+            logger.logger.info(f"Detected full model checkpoint at: {stage2_checkpoint}")
+            base_model_name = stage2_checkpoint
+    
+    # Load base model and tokenizer
+    logger.logger.info(f"Loading base model: {base_model_name}")
     model, tokenizer = load_model_and_tokenizer(
-        model_name,
+        base_model_name,
         config,
     )
     
-    # CRITICAL FIX: Create PEFT model for training
-    # Without this, the model has no trainable parameters and grad_norm will be 0
-    logger.logger.info("Creating PEFT model for DPO training...")
-    model = create_peft_model(model, config)
+    # Handle PEFT model loading
+    if is_peft_checkpoint:
+        # Load PEFT adapter from stage2 checkpoint
+        from models.dsl_model import load_peft_model
+        logger.logger.info(f"Loading PEFT adapter from: {stage2_checkpoint}")
+        model = load_peft_model(model, stage2_checkpoint, is_trainable=True)
+        model.print_trainable_parameters()
+    else:
+        # Create new PEFT model
+        logger.logger.info("Creating new PEFT model for DPO training...")
+        model = create_peft_model(model, config)
     
-    # Load reference model (for DPO)
+    # Load reference model (for DPO) - should match the training model's starting point
     logger.logger.info("Loading reference model...")
     ref_model, _ = load_model_and_tokenizer(
-        model_name,
+        base_model_name,
         config,
     )
+    
+    # If we have a PEFT checkpoint, load it for reference model too (but frozen)
+    if is_peft_checkpoint:
+        from models.dsl_model import load_peft_model
+        logger.logger.info(f"Loading PEFT adapter for reference model from: {stage2_checkpoint}")
+        ref_model = load_peft_model(ref_model, stage2_checkpoint, is_trainable=False)
+    
     ref_model.eval()
     for param in ref_model.parameters():
         param.requires_grad = False
