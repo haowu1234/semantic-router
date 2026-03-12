@@ -224,11 +224,12 @@ class DPODataset:
     
     Returns a HuggingFace Dataset compatible with trl.DPOTrainer.
     
-    TRL DPOTrainer expects data in one of these formats:
-    - Standard format: {"prompt": str, "chosen": str, "rejected": str}
-    - Conversational format: {"prompt": list[dict], "chosen": list[dict], "rejected": list[dict]}
+    For TRL DPOTrainer, the data format should be:
+    - prompt: formatted prompt string (with chat template applied)
+    - chosen: chosen response string (raw text, NOT formatted)
+    - rejected: rejected response string (raw text, NOT formatted)
     
-    We use the conversational format for better compatibility.
+    The DPOTrainer will handle the tokenization internally.
     """
     
     samples: list[dict]
@@ -245,38 +246,39 @@ class DPODataset:
         """
         Create HuggingFace Dataset with proper format for DPOTrainer.
         
-        Uses conversational format where prompt/chosen/rejected are message lists.
-        This is the recommended format for TRL >= 0.8.0.
+        The format is:
+        - prompt: the formatted prompt string
+        - chosen: raw chosen response (DPOTrainer handles tokenization)
+        - rejected: raw rejected response (DPOTrainer handles tokenization)
         """
         processed_samples = []
         
         for sample in self.samples:
             user_prompt = sample.get('prompt', 'Generate a valid Signal DSL configuration.')
-            chosen = sample['chosen']
-            rejected = sample['rejected']
+            chosen = sample.get('chosen', '')
+            rejected = sample.get('rejected', '')
             
             # Skip invalid samples
             if not chosen or not rejected:
                 continue
             
-            # Build prompt as message list (without assistant response)
+            # Build prompt with system message using chat template
             prompt_messages = [
                 {"role": "system", "content": self.system_prompt},
                 {"role": "user", "content": user_prompt},
             ]
             
-            # Chosen and rejected as message lists (assistant responses only)
-            chosen_messages = [
-                {"role": "assistant", "content": chosen},
-            ]
-            rejected_messages = [
-                {"role": "assistant", "content": rejected},
-            ]
+            # Apply chat template for prompt (with generation prompt)
+            formatted_prompt = self.tokenizer.apply_chat_template(
+                prompt_messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
             
             processed_samples.append({
-                'prompt': prompt_messages,
-                'chosen': chosen_messages,
-                'rejected': rejected_messages,
+                'prompt': formatted_prompt,
+                'chosen': chosen,
+                'rejected': rejected,
             })
         
         return HFDataset.from_list(processed_samples)

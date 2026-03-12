@@ -131,7 +131,7 @@ class DSLDPOTrainer:
             args=self.dpo_config,
             train_dataset=self.train_dataset,
             eval_dataset=self.eval_dataset,
-            processing_class=self.tokenizer,  # TRL >= 0.8.0 uses processing_class instead of tokenizer
+            tokenizer=self.tokenizer,
         )
         
         return trainer
