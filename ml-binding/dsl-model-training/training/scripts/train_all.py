@@ -221,6 +221,11 @@ def train_stage3(
         config,
     )
     
+    # CRITICAL FIX: Create PEFT model for training
+    # Without this, the model has no trainable parameters and grad_norm will be 0
+    logger.logger.info("Creating PEFT model for DPO training...")
+    model = create_peft_model(model, config)
+    
     # Load reference model (for DPO)
     logger.logger.info("Loading reference model...")
     ref_model, _ = load_model_and_tokenizer(
