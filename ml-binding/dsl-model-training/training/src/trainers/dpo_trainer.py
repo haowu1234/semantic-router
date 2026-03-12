@@ -163,8 +163,23 @@ class DSLDPOTrainer:
             self.tokenizer.pad_token = self.tokenizer.eos_token
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
         
+        # CRITICAL FIX: Ensure tokenizer has bos_token
+        # Some models (like Qwen) don't have bos_token set, which causes:
+        # TypeError: 'NoneType' object cannot be interpreted as an integer
+        # when TRL tries to add bos_token to the input_ids
+        if self.tokenizer.bos_token is None:
+            print("WARNING: tokenizer.bos_token is None, setting it to eos_token")
+            self.tokenizer.bos_token = self.tokenizer.eos_token
+            self.tokenizer.bos_token_id = self.tokenizer.eos_token_id
+        
         # Set padding side to left for decoder-only models (important for DPO)
         self.tokenizer.padding_side = 'left'
+        
+        # Debug: print tokenizer special tokens
+        print(f"Tokenizer special tokens:")
+        print(f"  pad_token: {repr(self.tokenizer.pad_token)} (id={self.tokenizer.pad_token_id})")
+        print(f"  bos_token: {repr(self.tokenizer.bos_token)} (id={self.tokenizer.bos_token_id})")
+        print(f"  eos_token: {repr(self.tokenizer.eos_token)} (id={self.tokenizer.eos_token_id})")
         
         # Validate and clean datasets
         train_dataset = None
