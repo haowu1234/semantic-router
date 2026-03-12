@@ -15,6 +15,41 @@ from trl import DPOTrainer, DPOConfig
 from peft import PeftModel
 
 
+def validate_and_clean_dpo_dataset(dataset: HFDataset) -> HFDataset:
+    """
+    Validate and clean DPO dataset to ensure all samples are valid.
+    
+    Removes samples with None, empty, or non-string values.
+    """
+    def is_valid_sample(sample):
+        prompt = sample.get('prompt')
+        chosen = sample.get('chosen')
+        rejected = sample.get('rejected')
+        
+        # Check for None
+        if prompt is None or chosen is None or rejected is None:
+            return False
+        
+        # Check types
+        if not isinstance(prompt, str) or not isinstance(chosen, str) or not isinstance(rejected, str):
+            return False
+        
+        # Check for empty strings
+        if not prompt.strip() or not chosen.strip() or not rejected.strip():
+            return False
+        
+        return True
+    
+    original_len = len(dataset)
+    dataset = dataset.filter(is_valid_sample, desc="Validating DPO samples")
+    new_len = len(dataset)
+    
+    if new_len < original_len:
+        print(f"Removed {original_len - new_len} invalid samples during validation")
+    
+    return dataset
+
+
 class DSLDPOTrainer:
     """
     DPO Trainer for Stage 3: Preference learning to avoid common errors.
@@ -128,15 +163,59 @@ class DSLDPOTrainer:
             self.tokenizer.pad_token = self.tokenizer.eos_token
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
         
+        # Set padding side to left for decoder-only models (important for DPO)
+        self.tokenizer.padding_side = 'left'
+        
+        # Validate and clean datasets
+        train_dataset = None
+        eval_dataset = None
+        
+        if self.train_dataset is not None:
+            print(f"Original train dataset columns: {self.train_dataset.column_names}")
+            print(f"Original train dataset size: {len(self.train_dataset)}")
+            
+            # Show sample info
+            if len(self.train_dataset) > 0:
+                first_sample = self.train_dataset[0]
+                print(f"First sample keys: {list(first_sample.keys())}")
+                for k, v in first_sample.items():
+                    if isinstance(v, str):
+                        print(f"  {k}: type=str, len={len(v)}, preview={repr(v[:50])}...")
+                    else:
+                        print(f"  {k}: type={type(v).__name__}, value={v}")
+            
+            # Validate and clean
+            print("Validating train dataset...")
+            train_dataset = validate_and_clean_dpo_dataset(self.train_dataset)
+            print(f"Validated train dataset size: {len(train_dataset)}")
+            
+        if self.eval_dataset is not None:
+            print("Validating eval dataset...")
+            eval_dataset = validate_and_clean_dpo_dataset(self.eval_dataset)
+            print(f"Validated eval dataset size: {len(eval_dataset)}")
+        
         # Build trainer - TRL will handle tokenization of raw text data
-        trainer = DPOTrainer(
-            model=self.model,
-            ref_model=self.ref_model,
-            args=self.dpo_config,
-            train_dataset=self.train_dataset,
-            eval_dataset=self.eval_dataset,
-            tokenizer=self.tokenizer,
-        )
+        # Note: newer TRL versions use 'processing_class' instead of 'tokenizer'
+        # We try both for compatibility
+        try:
+            trainer = DPOTrainer(
+                model=self.model,
+                ref_model=self.ref_model,
+                args=self.dpo_config,
+                train_dataset=train_dataset,
+                eval_dataset=eval_dataset,
+                processing_class=self.tokenizer,  # New TRL API
+            )
+        except TypeError:
+            # Fallback to old API for older TRL versions
+            trainer = DPOTrainer(
+                model=self.model,
+                ref_model=self.ref_model,
+                args=self.dpo_config,
+                train_dataset=train_dataset,
+                eval_dataset=eval_dataset,
+                tokenizer=self.tokenizer,  # Old TRL API
+            )
         
         return trainer
     

@@ -259,20 +259,59 @@ class DPODataset:
         """
         processed_samples = []
         skipped = 0
+        skipped_reasons = {
+            'empty_chosen': 0,
+            'empty_rejected': 0,
+            'none_value': 0,
+            'not_string': 0,
+        }
         
-        for sample in self.samples:
-            user_prompt = sample.get('prompt', 'Generate a valid Signal DSL configuration.')
-            chosen = sample.get('chosen', '')
-            rejected = sample.get('rejected', '')
+        for idx, sample in enumerate(self.samples):
+            # Get fields with strict validation
+            user_prompt = sample.get('prompt')
+            chosen = sample.get('chosen')
+            rejected = sample.get('rejected')
             
-            # Skip invalid samples
-            if not chosen or not rejected:
+            # Check for None values
+            if user_prompt is None:
+                user_prompt = 'Generate a valid Signal DSL configuration.'
+            if chosen is None:
+                skipped_reasons['none_value'] += 1
+                skipped += 1
+                continue
+            if rejected is None:
+                skipped_reasons['none_value'] += 1
+                skipped += 1
+                continue
+            
+            # Ensure string type
+            if not isinstance(chosen, str):
+                skipped_reasons['not_string'] += 1
+                skipped += 1
+                continue
+            if not isinstance(rejected, str):
+                skipped_reasons['not_string'] += 1
+                skipped += 1
+                continue
+            if not isinstance(user_prompt, str):
+                user_prompt = str(user_prompt)
+            
+            # Check for empty strings (after strip)
+            chosen = chosen.strip()
+            rejected = rejected.strip()
+            
+            if not chosen:
+                skipped_reasons['empty_chosen'] += 1
+                skipped += 1
+                continue
+            if not rejected:
+                skipped_reasons['empty_rejected'] += 1
                 skipped += 1
                 continue
             
             # Build simple text prompt (no chat template)
             # TRL's tokenize_row expects raw prompt text that will be concatenated with response
-            full_prompt = f"{self.system_prompt}\n\n{user_prompt}\n\nResponse:\n"
+            full_prompt = f"{self.system_prompt}\n\n{user_prompt.strip()}\n\nResponse:\n"
             
             # Use standard string format for DPO
             processed_sample = {
@@ -284,7 +323,10 @@ class DPODataset:
             processed_samples.append(processed_sample)
         
         if skipped > 0:
-            print(f"Skipped {skipped} invalid samples (empty chosen/rejected)")
+            print(f"Skipped {skipped} invalid samples:")
+            for reason, count in skipped_reasons.items():
+                if count > 0:
+                    print(f"  - {reason}: {count}")
         
         print(f"Created DPO dataset with {len(processed_samples)} samples")
         if processed_samples:
@@ -293,6 +335,10 @@ class DPODataset:
             print(f"Sample prompt length: {len(sample['prompt'])} chars")
             print(f"Sample chosen length: {len(sample['chosen'])} chars")
             print(f"Sample rejected length: {len(sample['rejected'])} chars")
+            print(f"First sample preview:")
+            print(f"  prompt[:100]: {repr(sample['prompt'][:100])}")
+            print(f"  chosen[:100]: {repr(sample['chosen'][:100])}")
+            print(f"  rejected[:100]: {repr(sample['rejected'][:100])}")
         
         return HFDataset.from_list(processed_samples)
     
