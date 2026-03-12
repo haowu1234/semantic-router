@@ -117,13 +117,21 @@ class DSLDPOTrainer:
     
     def _build_trainer(self) -> DPOTrainer:
         """Build trl DPOTrainer."""
+        # Ensure tokenizer has padding token
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+        
+        # Set padding side for DPO (left padding is recommended)
+        self.tokenizer.padding_side = 'left'
+        
         trainer = DPOTrainer(
             model=self.model,
             ref_model=self.ref_model,
             args=self.dpo_config,
             train_dataset=self.train_dataset,
             eval_dataset=self.eval_dataset,
-            tokenizer=self.tokenizer,
+            processing_class=self.tokenizer,  # TRL >= 0.8.0 uses processing_class instead of tokenizer
         )
         
         return trainer
