@@ -348,7 +348,7 @@ async def list_models():
 
 
 @app.post("/v1/chat/completions")
-async def chat_completions(request: ChatCompletionRequest):
+async def chat_completions(request: Request):
     """
     OpenAI 兼容的 Chat Completion API
     
@@ -357,18 +357,35 @@ async def chat_completions(request: ChatCompletionRequest):
     if model_server.model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
     
+    # 手动解析 JSON 请求
+    try:
+        body = await request.json()
+        print(f"[DEBUG] Raw request body: {body}")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+    
+    # 手动提取字段
+    model = body.get("model", MODEL_NAME)
+    messages_raw = body.get("messages", [])
+    temperature = body.get("temperature", 0.1)
+    top_p = body.get("top_p", 0.9)
+    max_tokens = body.get("max_tokens", 512)
+    stream = body.get("stream", False)
+    
+    # 转换 messages
+    messages = []
+    for m in messages_raw:
+        role = m.get("role", "user")
+        content = m.get("content", "") or ""
+        messages.append(ChatMessage(role=role, content=content))
+    
+    print(f"[DEBUG] Parsed messages: {[(m.role, m.content[:50] if m.content else '') for m in messages]}")
+    
     request_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
     created = int(time.time())
     
-    # Debug: 打印接收到的请求
-    print(f"[DEBUG] Received request:")
-    print(f"[DEBUG]   model: {request.model}")
-    print(f"[DEBUG]   messages: {[(m.role, m.content[:50] if m.content else None) for m in request.messages]}")
-    print(f"[DEBUG]   temperature: {request.temperature}")
-    print(f"[DEBUG]   stream: {request.stream}")
-    
     try:
-        if request.stream:
+        if stream:
             # 流式响应
             async def generate_stream():
                 # 发送初始 chunk (role)
@@ -387,10 +404,10 @@ async def chat_completions(request: ChatCompletionRequest):
                 # 流式生成内容
                 full_content = ""
                 for token in model_server.generate(
-                    messages=request.messages,
-                    max_tokens=request.max_tokens or 512,
-                    temperature=request.temperature or 0.1,
-                    top_p=request.top_p or 0.9,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
                     stream=True
                 ):
                     full_content += token
@@ -432,15 +449,15 @@ async def chat_completions(request: ChatCompletionRequest):
         else:
             # 非流式响应
             generated_text = model_server.generate(
-                messages=request.messages,
-                max_tokens=request.max_tokens or 512,
-                temperature=request.temperature or 0.1,
-                top_p=request.top_p or 0.9,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
                 stream=False
             )
             
             # 计算 token 数量 (估算)
-            prompt_text = " ".join([m.content or "" for m in request.messages])
+            prompt_text = " ".join([m.content or "" for m in messages])
             prompt_tokens = len(model_server.tokenizer.encode(prompt_text, add_special_tokens=False))
             completion_tokens = len(model_server.tokenizer.encode(generated_text, add_special_tokens=False))
             
