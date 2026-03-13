@@ -212,17 +212,8 @@ class DSLModelServer:
             allocated = torch.cuda.memory_allocated() / 1024**3
             print(f"GPU memory allocated: {allocated:.2f} GB")
     
-    def generate(self, 
-                 messages: List[ChatMessage],
-                 max_tokens: int = 512,
-                 temperature: float = 0.1,
-                 top_p: float = 0.9,
-                 stream: bool = False) -> Generator[str, None, None] | str:
-        """生成响应，支持流式输出"""
-        
-        if self.model is None:
-            raise RuntimeError("Model not loaded")
-        
+    def _prepare_inputs(self, messages: List[ChatMessage]):
+        """准备模型输入"""
         # 转换消息格式，确保 content 不为 None
         chat_messages = [{"role": m.role, "content": m.content or ""} for m in messages]
         
@@ -252,54 +243,78 @@ class DSLModelServer:
             max_length=2048
         ).to(self.device)
         
+        return inputs
+    
+    def generate(self, 
+                 messages: List[ChatMessage],
+                 max_tokens: int = 512,
+                 temperature: float = 0.1,
+                 top_p: float = 0.9) -> str:
+        """非流式生成"""
+        
+        if self.model is None:
+            raise RuntimeError("Model not loaded")
+        
+        inputs = self._prepare_inputs(messages)
         input_length = inputs["input_ids"].shape[1]
         
-        if stream:
-            # 流式生成
-            streamer = TextIteratorStreamer(
-                self.tokenizer,
-                skip_prompt=True,
-                skip_special_tokens=True
-            )
-            
-            generation_kwargs = {
+        # 非流式生成
+        with torch.no_grad():
+            outputs = self.model.generate(
                 **inputs,
-                "max_new_tokens": max_tokens,
-                "temperature": temperature if temperature > 0 else 1.0,
-                "top_p": top_p,
-                "do_sample": temperature > 0,
-                "pad_token_id": self.tokenizer.pad_token_id,
-                "eos_token_id": self.tokenizer.eos_token_id,
-                "streamer": streamer,
-            }
+                max_new_tokens=max_tokens,
+                temperature=temperature if temperature > 0 else 1.0,
+                top_p=top_p,
+                do_sample=temperature > 0,
+                pad_token_id=self.tokenizer.pad_token_id,
+                eos_token_id=self.tokenizer.eos_token_id,
+            )
+        
+        # Decode (only new tokens)
+        generated_tokens = outputs[0][input_length:]
+        generated_text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+        
+        return generated_text.strip()
+    
+    def generate_stream(self, 
+                        messages: List[ChatMessage],
+                        max_tokens: int = 512,
+                        temperature: float = 0.1,
+                        top_p: float = 0.9) -> Generator[str, None, None]:
+        """流式生成"""
+        
+        if self.model is None:
+            raise RuntimeError("Model not loaded")
+        
+        inputs = self._prepare_inputs(messages)
+        
+        # 流式生成
+        streamer = TextIteratorStreamer(
+            self.tokenizer,
+            skip_prompt=True,
+            skip_special_tokens=True
+        )
+        
+        generation_kwargs = {
+            **inputs,
+            "max_new_tokens": max_tokens,
+            "temperature": temperature if temperature > 0 else 1.0,
+            "top_p": top_p,
+            "do_sample": temperature > 0,
+            "pad_token_id": self.tokenizer.pad_token_id,
+            "eos_token_id": self.tokenizer.eos_token_id,
+            "streamer": streamer,
+        }
+        
+        # 在后台线程中运行生成
+        thread = Thread(target=self.model.generate, kwargs=generation_kwargs)
+        thread.start()
+        
+        # 逐个 token 返回
+        for text in streamer:
+            yield text
             
-            # 在后台线程中运行生成
-            thread = Thread(target=self.model.generate, kwargs=generation_kwargs)
-            thread.start()
-            
-            # 逐个 token 返回
-            for text in streamer:
-                yield text
-                
-            thread.join()
-        else:
-            # 非流式生成
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=max_tokens,
-                    temperature=temperature if temperature > 0 else 1.0,
-                    top_p=top_p,
-                    do_sample=temperature > 0,
-                    pad_token_id=self.tokenizer.pad_token_id,
-                    eos_token_id=self.tokenizer.eos_token_id,
-                )
-            
-            # Decode (only new tokens)
-            generated_tokens = outputs[0][input_length:]
-            generated_text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
-            
-            return generated_text.strip()
+        thread.join()
 
 
 # ============== FastAPI App ==============
@@ -403,12 +418,11 @@ async def chat_completions(request: Request):
                 
                 # 流式生成内容
                 full_content = ""
-                for token in model_server.generate(
+                for token in model_server.generate_stream(
                     messages=messages,
                     max_tokens=max_tokens,
                     temperature=temperature,
-                    top_p=top_p,
-                    stream=True
+                    top_p=top_p
                 ):
                     full_content += token
                     chunk = ChatCompletionChunk(
@@ -452,8 +466,7 @@ async def chat_completions(request: Request):
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
-                top_p=top_p,
-                stream=False
+                top_p=top_p
             )
             
             # Debug: 检查生成结果
@@ -526,8 +539,7 @@ async def legacy_generate(request: LegacyGenerateRequest):
         messages=messages,
         max_tokens=request.max_new_tokens,
         temperature=request.temperature,
-        top_p=request.top_p,
-        stream=False
+        top_p=request.top_p
     )
     
     return LegacyGenerateResponse(
