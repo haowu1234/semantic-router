@@ -377,6 +377,8 @@ def main():
     # Training hyperparameters (override config)
     parser.add_argument('--batch-size', type=int, default=None,
                         help='Per-device train batch size (overrides config)')
+    parser.add_argument('--eval-batch-size', type=int, default=None,
+                        help='Per-device eval batch size (overrides config, default: same as batch-size)')
     parser.add_argument('--grad-accum', type=int, default=None,
                         help='Gradient accumulation steps (overrides config)')
     parser.add_argument('--learning-rate', type=float, default=None,
@@ -419,6 +421,16 @@ def main():
     if args.batch_size is not None:
         config_dict['training']['per_device_train_batch_size'] = args.batch_size
         base_logger.info(f"Override: batch_size = {args.batch_size}")
+    
+    # Set eval batch size (defaults to train batch size if not specified)
+    if args.eval_batch_size is not None:
+        config_dict['training']['per_device_eval_batch_size'] = args.eval_batch_size
+        base_logger.info(f"Override: eval_batch_size = {args.eval_batch_size}")
+    elif args.batch_size is not None:
+        # Default eval batch size to train batch size for DPO (memory-safe)
+        config_dict['training']['per_device_eval_batch_size'] = args.batch_size
+        base_logger.info(f"Override: eval_batch_size = {args.batch_size} (same as train)")
+    
     if args.grad_accum is not None:
         config_dict['training']['gradient_accumulation_steps'] = args.grad_accum
         base_logger.info(f"Override: gradient_accumulation_steps = {args.grad_accum}")
