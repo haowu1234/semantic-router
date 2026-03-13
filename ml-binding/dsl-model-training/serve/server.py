@@ -608,10 +608,18 @@ def main():
     
     args = parser.parse_args()
     
-    # 验证 checkpoint 路径
-    if not Path(args.checkpoint).exists():
+    # 验证 checkpoint 路径（本地路径或 HuggingFace Hub）
+    is_local_path = Path(args.checkpoint).exists()
+    is_hub_path = "/" in args.checkpoint and not args.checkpoint.startswith("/") and not args.checkpoint.startswith(".")
+    
+    if not is_local_path and not is_hub_path:
         print(f"Error: Checkpoint not found: {args.checkpoint}")
+        print(f"  - Not a local path (does not exist)")
+        print(f"  - Not a HuggingFace Hub path (expected format: username/repo-name)")
         sys.exit(1)
+    
+    if is_hub_path:
+        print(f"Loading from HuggingFace Hub: {args.checkpoint}")
     
     # 加载模型
     model_server.load_model(args.checkpoint, args.base_model)
