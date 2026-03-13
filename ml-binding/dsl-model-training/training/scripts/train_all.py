@@ -24,7 +24,7 @@ from omegaconf import OmegaConf
 
 from utils.config import load_config, merge_configs, config_to_dict
 from utils.logger import setup_logger, TrainingLogger
-from models.dsl_model import load_model_and_tokenizer, create_peft_model, merge_and_save
+from models.dsl_model import load_model_and_tokenizer, create_peft_model, merge_and_save, load_peft_model
 from data.dataset import DSLDataset, SFTDataset, DPODataset
 from trainers.base_trainer import DSLTrainer
 from trainers.sft_trainer import DSLSFTTrainer
@@ -332,8 +332,32 @@ def run_evaluation(
     logger.logger.info("Final Evaluation")
     logger.logger.info("=" * 60)
     
-    # Load model
-    model, tokenizer = load_model_and_tokenizer(model_path, config)
+    # Check if model_path is a PEFT checkpoint or merged model
+    model_path = Path(model_path)
+    adapter_config_path = model_path / "adapter_config.json"
+    
+    if adapter_config_path.exists():
+        # It's a PEFT checkpoint, need to load base model first then adapter
+        logger.logger.info(f"Loading PEFT checkpoint from {model_path}")
+        
+        # Load base model
+        base_model_name = config.get('model', {}).get('name', 'Qwen/Qwen2.5-Coder-7B-Instruct')
+        logger.logger.info(f"Loading base model: {base_model_name}")
+        
+        base_model, tokenizer = load_model_and_tokenizer(
+            base_model_name, 
+            config,
+            device_map="auto",
+        )
+        
+        # Load PEFT adapter
+        logger.logger.info(f"Loading PEFT adapter from {model_path}")
+        model = load_peft_model(base_model, model_path, is_trainable=False)
+    else:
+        # It's a merged model, load directly
+        logger.logger.info(f"Loading merged model from {model_path}")
+        model, tokenizer = load_model_and_tokenizer(str(model_path), config)
+    
     model.eval()
     
     # Create evaluator
