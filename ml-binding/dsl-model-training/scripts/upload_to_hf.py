@@ -158,13 +158,37 @@ def load_training_metrics(checkpoint_path: Path) -> dict:
     # Try to load from early_stopping_history.json
     history_file = checkpoint_path / "early_stopping_history.json"
     if history_file.exists():
-        with open(history_file) as f:
-            history = json.load(f)
-            if history:
-                last = history[-1]
-                metrics["accuracy"] = f"{last.get('accuracy', 0.9625) * 100:.2f}%"
-                metrics["margins"] = f"{last.get('margins', 1.57):.2f}"
-                metrics["loss"] = f"{last.get('loss', 0.27):.2f}"
+        try:
+            with open(history_file) as f:
+                history = json.load(f)
+                
+                # Handle different formats
+                if isinstance(history, list) and len(history) > 0:
+                    # List format: take last entry
+                    last = history[-1]
+                elif isinstance(history, dict):
+                    # Dict format: use directly or get last from nested list
+                    if "history" in history and isinstance(history["history"], list):
+                        last = history["history"][-1] if history["history"] else {}
+                    else:
+                        last = history
+                else:
+                    last = {}
+                
+                if last:
+                    if "accuracy" in last:
+                        acc = last["accuracy"]
+                        # Handle both 0.9625 and 96.25 formats
+                        if acc <= 1:
+                            metrics["accuracy"] = f"{acc * 100:.2f}%"
+                        else:
+                            metrics["accuracy"] = f"{acc:.2f}%"
+                    if "margins" in last:
+                        metrics["margins"] = f"{last['margins']:.2f}"
+                    if "loss" in last:
+                        metrics["loss"] = f"{last['loss']:.2f}"
+        except Exception as e:
+            print(f"Warning: Could not parse metrics file: {e}")
     
     return metrics
 
