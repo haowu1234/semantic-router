@@ -456,10 +456,20 @@ async def chat_completions(request: Request):
                 stream=False
             )
             
+            # Debug: 检查生成结果
+            print(f"[DEBUG] generated_text type: {type(generated_text)}")
+            print(f"[DEBUG] generated_text value: {repr(generated_text)[:200] if generated_text else 'None'}")
+            
+            # 确保是字符串
+            if generated_text is None:
+                generated_text = ""
+            elif not isinstance(generated_text, str):
+                generated_text = str(generated_text)
+            
             # 计算 token 数量 (估算)
             prompt_text = " ".join([m.content or "" for m in messages])
-            prompt_tokens = len(model_server.tokenizer.encode(prompt_text, add_special_tokens=False))
-            completion_tokens = len(model_server.tokenizer.encode(generated_text, add_special_tokens=False))
+            prompt_tokens = len(model_server.tokenizer.encode(prompt_text, add_special_tokens=False)) if prompt_text else 0
+            completion_tokens = len(model_server.tokenizer.encode(generated_text, add_special_tokens=False)) if generated_text else 0
             
             return ChatCompletionResponse(
                 id=request_id,
