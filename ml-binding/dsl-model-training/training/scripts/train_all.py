@@ -443,7 +443,8 @@ def main():
     if args.save_steps is not None:
         config_dict['training']['save_steps'] = args.save_steps
         config_dict['training']['eval_steps'] = args.save_steps  # Keep eval aligned
-        base_logger.info(f"Override: save_steps = {args.save_steps}")
+        config_dict['training']['logging_steps'] = args.save_steps  # Keep logging aligned
+        base_logger.info(f"Override: save_steps/eval_steps/logging_steps = {args.save_steps}")
     
     # Convert back to OmegaConf
     config = OmegaConf.create(config_dict)
