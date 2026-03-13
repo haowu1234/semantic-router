@@ -143,7 +143,7 @@ class DSLModelServer:
         self.model_loaded_time = None
         
     def load_model(self, checkpoint_path: str, base_model: str = DEFAULT_BASE_MODEL):
-        """加载模型，支持 PEFT checkpoint"""
+        """加载模型，支持 PEFT checkpoint（本地或 HuggingFace Hub）"""
         print(f"Loading model from checkpoint: {checkpoint_path}")
         
         self.checkpoint_path = checkpoint_path
@@ -171,8 +171,26 @@ class DSLModelServer:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         
         # 检查是否是 PEFT checkpoint
-        adapter_config_path = Path(checkpoint_path) / "adapter_config.json"
-        is_peft = adapter_config_path.exists()
+        # 1. 本地路径：检查 adapter_config.json 文件
+        # 2. HuggingFace Hub：尝试从 hub 检测
+        is_peft = False
+        is_local = Path(checkpoint_path).exists()
+        
+        if is_local:
+            adapter_config_path = Path(checkpoint_path) / "adapter_config.json"
+            is_peft = adapter_config_path.exists()
+        else:
+            # 假设是 HuggingFace Hub 路径，尝试检测是否是 PEFT 模型
+            try:
+                from huggingface_hub import hf_hub_download, HfFileSystem
+                fs = HfFileSystem()
+                files = fs.ls(checkpoint_path, detail=False)
+                is_peft = any("adapter_config.json" in f for f in files)
+                print(f"Detected HuggingFace Hub model, is_peft={is_peft}")
+            except Exception as e:
+                print(f"Could not detect model type from Hub: {e}")
+                # 默认假设是 PEFT（因为我们上传的就是 PEFT）
+                is_peft = True
         
         if is_peft:
             print(f"Detected PEFT checkpoint, loading base model + adapter...")
@@ -186,7 +204,7 @@ class DSLModelServer:
                 attn_implementation="eager"  # ROCm compatible
             )
             
-            # 加载 PEFT adapter
+            # 加载 PEFT adapter（支持本地路径和 HuggingFace Hub）
             self.model = PeftModel.from_pretrained(
                 self.model,
                 checkpoint_path,
