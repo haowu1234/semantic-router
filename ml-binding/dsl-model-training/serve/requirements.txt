@@ -1,0 +1,12 @@
+# Server dependencies
+fastapi>=0.100.0
+uvicorn>=0.23.0
+pydantic>=2.0.0
+
+# Client dependencies
+requests>=2.31.0
+
+# Model dependencies (should already be installed from training)
+torch>=2.0.0
+transformers>=4.36.0
+peft>=0.7.0

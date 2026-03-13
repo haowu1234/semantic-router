@@ -172,9 +172,9 @@ def get_failed_ids(output_dir: Path, checkpoint: CheckpointState = None) -> set:
 
 
 # NL 生成提示词模板
-NL_GENERATION_PROMPT = '''You are an expert at describing Signal DSL router configurations in natural language.
+NL_GENERATION_PROMPT = '''You are an expert at understanding what users WANT when they need a Signal DSL configuration.
 
-Given this DSL configuration, generate 6 CONCISE natural language descriptions. Each description should capture the CORE INTENT without listing every parameter.
+Given this DSL configuration, imagine you are the USER who needs this configuration. Generate 6 natural language descriptions expressing your INTENT/GOAL, not describing the DSL syntax.
 
 DSL Configuration:
 ```
@@ -183,23 +183,35 @@ DSL Configuration:
 
 Generate exactly 6 descriptions in JSON format:
 {{
-  "en_formal": "Formal English - Brief technical summary (2-3 sentences max)",
-  "en_casual": "Casual English - Conversational (1-2 sentences)",
-  "en_technical": "Technical English - Key DSL elements only",
-  "zh_formal": "正式中文 - 简要技术描述",
-  "zh_casual": "口语中文 - 简短对话",
-  "ambiguous": "Underspecified - Missing some details"
+  "en_formal": "Formal English - Express the business/routing goal",
+  "en_casual": "Casual English - How a user would ask for this",
+  "en_technical": "Technical English - Functional requirements only",
+  "zh_formal": "正式中文 - 表达业务/路由目标",
+  "zh_casual": "口语中文 - 用户会怎么提需求",
+  "ambiguous": "Underspecified - Vague request that leads to this config"
 }}
 
 CRITICAL RULES:
-1. Keep each description under 200 characters
-2. Focus on: signal TYPES (not all names), routing LOGIC, model SELECTION strategy
-3. Do NOT enumerate every signal/parameter - summarize instead (e.g., "5 keyword signals" not listing all 5)
-4. Chinese: natural expressions, not word-by-word translation
-5. Output ONLY valid JSON, no markdown, no explanation
+1. Express USER INTENT, not DSL structure. Think "what problem does this solve?"
+2. NEVER mention signal names like "preference_97" or "embedding_93" - these are internal IDs
+3. NEVER say "create a SIGNAL" or "build a ROUTE" - users don't think in DSL terms
+4. Focus on: WHAT the user wants to achieve, WHEN to route, WHICH model to use
+5. Chinese: natural expressions like real users would say
+6. Keep each description under 150 characters
+
+BAD examples (DO NOT generate):
+- "Create preference_97 with embedding_93 threshold 0.92" ❌ (mentions internal IDs)
+- "Build a ROUTE with PRIORITY 500 and WHEN condition" ❌ (DSL syntax)
+- "Configure SIGNAL domain with description" ❌ (technical structure)
+
+GOOD examples:
+- "Route coding questions to DeepSeek, general chat to GPT-4" ✓
+- "Use a powerful model when the user seems frustrated" ✓
+- "当用户问数学问题时用推理能力强的模型" ✓
+- "帮我配个路由，代码问题用便宜模型，复杂问题用好模型" ✓
 
 Example good response:
-{{"en_formal": "Configure routing with jailbreak detection and keyword filtering. Route high-risk requests to GPT-4, others to Qwen with weighted selection.", "en_casual": "Set up a router that catches jailbreak attempts and routes them to GPT-4, everything else goes to a mix of models.", "en_technical": "2 SIGNAL (jailbreak, keyword), 2 ROUTE with WHEN conditions, MODEL selection via weighted algorithm.", "zh_formal": "配置包含越狱检测和关键词过滤的路由器，高风险请求路由至GPT-4。", "zh_casual": "搞个路由，检测越狱就用GPT-4，其他随机选模型。", "ambiguous": "Route requests based on content safety, use multiple models."}}'''
+{{"en_formal": "Route requests based on content complexity. High-complexity requests should use GPT-4 with reasoning, while simple requests use a lightweight model.", "en_casual": "I want complex stuff to go to the smart model and easy questions to the cheap one.", "en_technical": "Complexity-based routing: high→GPT-4 with reasoning, low→lightweight model.", "zh_formal": "根据内容复杂度路由请求，复杂请求使用GPT-4推理模式，简单请求使用轻量模型。", "zh_casual": "复杂的问题用好模型，简单的用便宜的就行。", "ambiguous": "Smart routing based on how hard the question is."}}'''''
 
 # 简化版提示词 (用于 dry-run 或低成本测试)
 NL_SIMPLE_PROMPT = '''Describe this DSL configuration in one sentence:
