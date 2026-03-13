@@ -389,12 +389,18 @@ async def chat_completions(request: Request):
     
     # 转换 messages
     messages = []
+    has_system_message = any(m.get("role") == "system" for m in messages_raw)
+    
+    # 如果没有 system message，添加默认的 DSL system prompt
+    if not has_system_message:
+        messages.append(ChatMessage(role="system", content=DEFAULT_SYSTEM_PROMPT))
+    
     for m in messages_raw:
         role = m.get("role", "user")
         content = m.get("content", "") or ""
         messages.append(ChatMessage(role=role, content=content))
     
-    print(f"[DEBUG] Parsed messages: {[(m.role, m.content[:50] if m.content else '') for m in messages]}")
+    print(f"[DEBUG] Parsed messages (system_added={not has_system_message}): {[(m.role, m.content[:50] if m.content else '') for m in messages]}")
     
     request_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
     created = int(time.time())
