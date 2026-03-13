@@ -64,6 +64,14 @@ const HEADER_INFO: Record<string, { label: string; description: string }> = {
     label: 'Selected Model',
     description: 'The model chosen by the router',
   },
+  'x-vsr-session-affinity': {
+    label: 'Session Affinity',
+    description: 'Whether routing stuck, switched, or bypassed the prior session model',
+  },
+  'x-vsr-session-affinity-reason': {
+    label: 'Affinity Reason',
+    description: 'Why the session-affinity action was applied',
+  },
   // Plugin status headers
   'x-vsr-cache-hit': {
     label: 'Cache Status',
@@ -138,7 +146,9 @@ const HeaderReveal = ({ headers, onComplete, displayDuration = 2000 }: HeaderRev
     ),
     // Model selection headers: selected-model
     model: displayHeaders.filter(([key]) =>
-      key === 'x-vsr-selected-model'
+      key === 'x-vsr-selected-model' ||
+      key === 'x-vsr-session-affinity' ||
+      key === 'x-vsr-session-affinity-reason'
     ),
     // Plugin status headers: cache, reasoning, context, security, quality
     plugin: displayHeaders.filter(([key]) =>

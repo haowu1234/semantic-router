@@ -107,5 +107,7 @@ func buildResponseHeaderMutation(
 	builder.addJoined(headers.VSRMatchedJailbreak, ctx.VSRMatchedJailbreak)
 	builder.addJoined(headers.VSRMatchedPII, ctx.VSRMatchedPII)
 	builder.addString(headers.RouterReplayID, ctx.RouterReplayID)
+	builder.addString(headers.VSRSessionAffinity, ctx.VSRSessionAffinityAction)
+	builder.addString(headers.VSRSessionAffinityReason, ctx.VSRSessionAffinityReason)
 	return builder.mutation()
 }

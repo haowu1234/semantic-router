@@ -94,7 +94,15 @@ func (r *OpenAIRouter) handleModelRouting(openAIRequest *openai.ChatCompletionNe
 
 	// Anthropic model routing
 	if r.Config.GetModelAPIFormat(targetModel) == config.APIFormatAnthropic {
-		return r.handleAnthropicRouting(openAIRequest, originalModel, targetModel, decisionName, ctx)
+		if ctx.routingSelection != nil && ctx.routingSelection.affinityEvaluation != nil {
+			ctx.VSRSessionAffinityAction = string(ctx.routingSelection.affinityEvaluation.Action)
+			ctx.VSRSessionAffinityReason = ctx.routingSelection.affinityEvaluation.Reason
+		}
+		response, err := r.handleAnthropicRouting(openAIRequest, originalModel, targetModel, decisionName, ctx)
+		if err == nil {
+			r.commitSessionAffinitySelection(ctx, targetModel, sessionAffinityActionFromContext(ctx), ctx.VSRSessionAffinityReason)
+		}
+		return response, err
 	}
 
 	// OpenAI-compatible routing
@@ -119,13 +127,24 @@ func (r *OpenAIRouter) handleAutoModelRouting(openAIRequest *openai.ChatCompleti
 	logging.Infof("Using Auto Model Selection (model=%s), decision=%s, selected=%s",
 		originalModel, decisionName, selectedModel)
 
-	matchedModel := selectedModel
-
-	if matchedModel == originalModel || matchedModel == "" {
+	if selectedModel == "" {
 		// No model change needed
 		ctx.RequestModel = originalModel
 		return response, nil
 	}
+
+	target, targetErr := r.resolveAutoRoutingTarget(ctx, selectedModel)
+	if targetErr != nil {
+		return nil, fmt.Errorf("auto routing: %w", targetErr)
+	}
+
+	matchedModel := target.routingModel
+	if target.modelRef != nil {
+		reasoningDecision = buildReasoningDecisionForModel(decisionName, ctx.VSRSelectedDecisionConfidence, target.modelRef)
+	}
+
+	ctx.VSRSessionAffinityAction = string(target.affinityAction)
+	ctx.VSRSessionAffinityReason = target.affinityReason
 
 	// Record routing decision with tracing
 	r.recordRoutingDecision(ctx, decisionName, originalModel, matchedModel, reasoningDecision)
@@ -137,15 +156,9 @@ func (r *OpenAIRouter) handleAutoModelRouting(openAIRequest *openai.ChatCompleti
 	// Track model routing metrics
 	metrics.RecordModelRouting(originalModel, matchedModel)
 
-	// Select endpoint for the matched model
-	selectedEndpoint, selectedEndpointName, endpointErr := r.selectEndpointForModel(ctx, matchedModel)
-	if endpointErr != nil {
-		return nil, fmt.Errorf("auto routing: %w", endpointErr)
-	}
-
 	// Resolve model name alias to real model name for the selected endpoint
 	// e.g., "qwen14b-rack1" -> "Qwen/Qwen2.5-14B-Instruct"
-	upstreamModel := r.resolveModelNameForEndpoint(matchedModel, selectedEndpointName)
+	upstreamModel := r.resolveModelNameForEndpoint(matchedModel, target.endpointName)
 
 	// Modify request body with resolved model name, reasoning mode, and system prompt
 	modifiedBody, err := r.modifyRequestBodyForAutoRouting(openAIRequest, upstreamModel, decisionName, reasoningDecision.UseReasoning, ctx)
@@ -154,7 +167,7 @@ func (r *OpenAIRouter) handleAutoModelRouting(openAIRequest *openai.ChatCompleti
 	}
 
 	// Create response with mutations (use original alias for headers/tracing, upstream model in body)
-	response = r.createRoutingResponse(matchedModel, selectedEndpoint, selectedEndpointName, modifiedBody, ctx)
+	response = r.createRoutingResponse(matchedModel, target.endpoint, target.endpointName, modifiedBody, ctx)
 
 	// Log routing decision
 	r.logRoutingDecision(ctx, "auto_routing", originalModel, matchedModel, decisionName, reasoningDecision.UseReasoning)
@@ -166,6 +179,7 @@ func (r *OpenAIRouter) handleAutoModelRouting(openAIRequest *openai.ChatCompleti
 
 	// Save the actual model for token tracking
 	ctx.RequestModel = matchedModel
+	r.commitSessionAffinitySelection(ctx, matchedModel, target.affinityAction, target.affinityReason)
 
 	// Capture router replay information if enabled
 	r.startRouterReplay(ctx, originalModel, matchedModel, decisionName)

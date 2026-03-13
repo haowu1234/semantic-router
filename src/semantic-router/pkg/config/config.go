@@ -172,9 +172,10 @@ type InlineModels struct {
 // IntelligentRouting captures user-facing signal and decision configuration.
 type IntelligentRouting struct {
 	Signals         `yaml:",inline"`
-	Decisions       []Decision           `yaml:"decisions,omitempty"`
-	Strategy        string               `yaml:"strategy,omitempty"`
-	ModelSelection  ModelSelectionConfig `yaml:"model_selection,omitempty"`
+	Decisions       []Decision            `yaml:"decisions,omitempty"`
+	Strategy        string                `yaml:"strategy,omitempty"`
+	ModelSelection  ModelSelectionConfig  `yaml:"model_selection,omitempty"`
+	SessionAffinity SessionAffinityConfig `yaml:"session_affinity,omitempty"`
 	ReasoningConfig `yaml:",inline"`
 }
 

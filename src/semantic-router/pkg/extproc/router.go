@@ -17,6 +17,7 @@ import (
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/ratelimit"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/routerreplay"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/selection"
+	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/sessionaffinity"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/tools"
 )
 
@@ -35,6 +36,7 @@ type OpenAIRouter struct {
 	ReplayRecorders map[string]*routerreplay.Recorder
 	MemoryStore     *memory.MilvusStore
 	MemoryExtractor *memory.MemoryExtractor
+	SessionAffinity *sessionaffinity.Manager
 
 	// CredentialResolver resolves per-user LLM API keys from multiple sources
 	// (ext_authz injected headers -> static config fallback).

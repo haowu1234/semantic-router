@@ -16,6 +16,8 @@ export interface OutboundChatMessage {
 
 const RESPONSE_HEADER_KEYS = [
   'x-vsr-selected-model',
+  'x-vsr-session-affinity',
+  'x-vsr-session-affinity-reason',
   'x-vsr-selected-decision',
   'x-vsr-cache-hit',
   'x-vsr-selected-reasoning',

@@ -64,6 +64,10 @@ type RequestContext struct {
 	VSRReasoningMode              string           // "on" or "off" - whether reasoning mode was determined to be used
 	VSRSelectedModel              string           // The model selected by VSR
 	VSRSelectionMethod            string           // Model selection algorithm used (e.g., "elo", "static", "router_dc")
+	VSRSessionID                  string           // Stable session identifier used for session affinity
+	VSRSessionPriorModel          string           // Previously bound model for the session, if any
+	VSRSessionAffinityAction      string           // Session-affinity action applied to this request
+	VSRSessionAffinityReason      string           // Explanation for the affinity action
 	VSRCacheHit                   bool             // Whether this request hit the cache
 	VSRInjectedSystemPrompt       bool             // Whether a system prompt was injected into the request
 	VSRSelectedDecision           *config.Decision // The decision object selected by DecisionEngine (for plugins)
@@ -153,4 +157,8 @@ type RequestContext struct {
 
 	// Rate limit context - stored after Check() for post-response Report()
 	RateLimitCtx *ratelimit.Context
+
+	// Internal routing state threaded between pre-routing evaluation and
+	// final endpoint selection. Not exposed outside extproc.
+	routingSelection *routingSelectionOutcome
 }

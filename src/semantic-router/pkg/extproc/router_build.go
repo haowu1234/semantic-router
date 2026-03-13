@@ -12,6 +12,7 @@ import (
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/ratelimit"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/routerreplay"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/selection"
+	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/sessionaffinity"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/tools"
 )
 
@@ -33,6 +34,7 @@ type routerComponents struct {
 	modelSelector        *selection.Registry
 	memoryStore          *memory.MilvusStore
 	memoryExtractor      *memory.MemoryExtractor
+	sessionAffinity      *sessionaffinity.Manager
 	credentialResolver   *authz.CredentialResolver
 	rateLimiter          *ratelimit.RateLimitResolver
 }
@@ -101,6 +103,10 @@ func buildRouterComponents(cfg *config.RouterConfig) (*routerComponents, error) 
 	replayRecorders, replayRecorder := createReplayRuntime(cfg)
 	modelSelector := createModelSelectorRegistry(cfg)
 	memoryStore, memoryExtractor := createMemoryRuntime(cfg)
+	sessionAffinity, err := createSessionAffinityRuntime(cfg)
+	if err != nil {
+		return nil, err
+	}
 	credentialResolver := buildCredentialResolver(cfg)
 	rateLimiter := buildRateLimitResolver(cfg)
 
@@ -123,6 +129,7 @@ func buildRouterComponents(cfg *config.RouterConfig) (*routerComponents, error) 
 		modelSelector:        modelSelector,
 		memoryStore:          memoryStore,
 		memoryExtractor:      memoryExtractor,
+		sessionAffinity:      sessionAffinity,
 		credentialResolver:   credentialResolver,
 		rateLimiter:          rateLimiter,
 	}, nil
@@ -141,6 +148,7 @@ func (components *routerComponents) buildRouter() *OpenAIRouter {
 		ReplayRecorders:      components.replayRecorders,
 		MemoryStore:          components.memoryStore,
 		MemoryExtractor:      components.memoryExtractor,
+		SessionAffinity:      components.sessionAffinity,
 		CredentialResolver:   components.credentialResolver,
 		RateLimiter:          components.rateLimiter,
 	}

@@ -12,12 +12,16 @@ func TestHeaderConstants(t *testing.T) {
 	}{
 		// Request headers
 		{"RequestID", RequestID, "x-request-id"},
+		{"VSRSessionID", VSRSessionID, "x-vsr-session-id"},
+		{"VSRSessionAffinityMode", VSRSessionAffinityMode, "x-vsr-session-affinity-mode"},
 		{"GatewayDestinationEndpoint", GatewayDestinationEndpoint, "x-vsr-destination-endpoint"},
 		{"SelectedModel", SelectedModel, "x-selected-model"},
 		// VSR headers
 		{"VSRSelectedCategory", VSRSelectedCategory, "x-vsr-selected-category"},
 		{"VSRSelectedReasoning", VSRSelectedReasoning, "x-vsr-selected-reasoning"},
 		{"VSRSelectedModel", VSRSelectedModel, "x-vsr-selected-model"},
+		{"VSRSessionAffinity", VSRSessionAffinity, "x-vsr-session-affinity"},
+		{"VSRSessionAffinityReason", VSRSessionAffinityReason, "x-vsr-session-affinity-reason"},
 		{"VSRInjectedSystemPrompt", VSRInjectedSystemPrompt, "x-vsr-injected-system-prompt"},
 		{"VSRCacheHit", VSRCacheHit, "x-vsr-cache-hit"},
 		// Legacy security headers (kept for backward compatibility)

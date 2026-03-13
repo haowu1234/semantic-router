@@ -10,6 +10,14 @@ const HEADER_INFO: Record<string, { label: string; type: 'info' | 'success' | 'w
     label: 'Model',
     type: 'info',
   },
+  'x-vsr-session-affinity': {
+    label: 'Affinity',
+    type: 'success',
+  },
+  'x-vsr-session-affinity-reason': {
+    label: 'Affinity Reason',
+    type: 'info',
+  },
   'x-vsr-selected-decision': {
     label: 'Decision',
     type: 'info',

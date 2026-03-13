@@ -10,6 +10,15 @@ const (
 	// This header is case-insensitive when read from incoming requests.
 	RequestID = "x-request-id"
 
+	// VSRSessionID is the optional client-provided session identifier for
+	// non-Response API requests. It is only trusted when combined with a
+	// trusted user identity from the auth layer.
+	VSRSessionID = "x-vsr-session-id"
+
+	// VSRSessionAffinityMode controls per-request session-affinity behavior.
+	// Supported values: default, bypass, refresh, reset.
+	VSRSessionAffinityMode = "x-vsr-session-affinity-mode"
+
 	// GatewayDestinationEndpoint specifies the backend endpoint address selected by the router.
 	// This header is set by the router to direct Envoy to the appropriate upstream service.
 	GatewayDestinationEndpoint = "x-vsr-destination-endpoint"
@@ -61,6 +70,14 @@ const (
 	// RouterReplayID carries the identifier for a captured replay record.
 	// Value: opaque replay token
 	RouterReplayID = "x-vsr-replay-id"
+
+	// VSRSessionAffinity indicates the affinity action applied to this request.
+	// Example values: "bind", "stick", "switch", "bypass", "reset"
+	VSRSessionAffinity = "x-vsr-session-affinity"
+
+	// VSRSessionAffinityReason explains why the affinity action was chosen.
+	// Example values: "new_session", "momentum_hold", "negative_feedback_release"
+	VSRSessionAffinityReason = "x-vsr-session-affinity-reason"
 )
 
 // VSR Signal Tracking Headers
