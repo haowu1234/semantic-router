@@ -227,15 +227,26 @@ class DSLModelServer:
         chat_messages = [{"role": m.role, "content": m.content or ""} for m in messages]
         
         # 使用 tokenizer 的 chat template
-        full_prompt = self.tokenizer.apply_chat_template(
-            chat_messages,
-            tokenize=False,
-            add_generation_prompt=True
-        )
+        try:
+            full_prompt = self.tokenizer.apply_chat_template(
+                chat_messages,
+                tokenize=False,
+                add_generation_prompt=True
+            )
+            # 确保是字符串
+            if isinstance(full_prompt, list):
+                full_prompt = full_prompt[0] if full_prompt else ""
+            full_prompt = str(full_prompt)
+        except Exception as e:
+            # Fallback: 手动构建 prompt
+            print(f"Warning: apply_chat_template failed: {e}, using fallback")
+            system_msg = next((m["content"] for m in chat_messages if m["role"] == "system"), "")
+            user_msg = next((m["content"] for m in chat_messages if m["role"] == "user"), "")
+            full_prompt = f"<|im_start|>system\n{system_msg}<|im_end|>\n<|im_start|>user\n{user_msg}<|im_end|>\n<|im_start|>assistant\n"
         
-        # Tokenize
+        # Tokenize - 显式传入字符串
         inputs = self.tokenizer(
-            full_prompt,
+            text=full_prompt,
             return_tensors="pt",
             truncation=True,
             max_length=2048
