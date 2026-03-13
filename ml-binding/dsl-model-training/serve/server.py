@@ -223,8 +223,8 @@ class DSLModelServer:
         if self.model is None:
             raise RuntimeError("Model not loaded")
         
-        # 转换消息格式
-        chat_messages = [{"role": m.role, "content": m.content} for m in messages]
+        # 转换消息格式，确保 content 不为 None
+        chat_messages = [{"role": m.role, "content": m.content or ""} for m in messages]
         
         # 使用 tokenizer 的 chat template
         full_prompt = self.tokenizer.apply_chat_template(
@@ -422,9 +422,9 @@ async def chat_completions(request: ChatCompletionRequest):
             )
             
             # 计算 token 数量 (估算)
-            prompt_text = " ".join([m.content for m in request.messages])
-            prompt_tokens = len(model_server.tokenizer.encode(prompt_text))
-            completion_tokens = len(model_server.tokenizer.encode(generated_text))
+            prompt_text = " ".join([m.content or "" for m in request.messages])
+            prompt_tokens = len(model_server.tokenizer.encode(prompt_text, add_special_tokens=False))
+            completion_tokens = len(model_server.tokenizer.encode(generated_text, add_special_tokens=False))
             
             return ChatCompletionResponse(
                 id=request_id,
