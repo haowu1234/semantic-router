@@ -360,6 +360,13 @@ async def chat_completions(request: ChatCompletionRequest):
     request_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
     created = int(time.time())
     
+    # Debug: 打印接收到的请求
+    print(f"[DEBUG] Received request:")
+    print(f"[DEBUG]   model: {request.model}")
+    print(f"[DEBUG]   messages: {[(m.role, m.content[:50] if m.content else None) for m in request.messages]}")
+    print(f"[DEBUG]   temperature: {request.temperature}")
+    print(f"[DEBUG]   stream: {request.stream}")
+    
     try:
         if request.stream:
             # 流式响应
@@ -454,6 +461,9 @@ async def chat_completions(request: ChatCompletionRequest):
             )
     
     except Exception as e:
+        import traceback
+        print(f"[ERROR] Exception in chat_completions:")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
