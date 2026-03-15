@@ -82,6 +82,23 @@ func normalizeRoleKind(raw string) string {
 	}
 }
 
+// buildAgentIdentity constructs the OpenClaw agents.list[].identity map from
+// the provision request's IdentityConfig.  OpenClaw uses identity.name (and
+// optionally identity.emoji) to auto-derive mentionPatterns via
+// deriveMentionPatterns() when no explicit mentionPatterns are configured.
+// For example, identity.name="Torch" produces the regex /\b@?Torch\b/i,
+// enabling layer-4 text-based mention detection in resolveMentions().
+func buildAgentIdentity(id IdentityConfig) map[string]interface{} {
+	identity := map[string]interface{}{}
+	if id.Name != "" {
+		identity["name"] = id.Name
+	}
+	if id.Emoji != "" {
+		identity["emoji"] = id.Emoji
+	}
+	return identity
+}
+
 func deriveContainerName(requested, identityName string) string {
 	if name := sanitizeContainerName(requested); name != "" {
 		return name
@@ -251,7 +268,18 @@ func writeOpenClawConfig(path string, req ProvisionRequest) error {
 				"compaction": map[string]string{"mode": "safeguard"},
 			},
 			"list": []map[string]interface{}{
-				{"id": "vllm-sr", "default": true, "name": "vLLM-SR Powered Agent", "workspace": "/workspace"},
+				{
+					"id": "vllm-sr", "default": true,
+					"name":      "vLLM-SR Powered Agent",
+					"workspace": "/workspace",
+					// identity enables OpenClaw to auto-derive mentionPatterns
+					// (mentionRegexes at runtime) from the agent's name.  Without
+					// this, resolveMentionPatterns returns [] and the regex-based
+					// mention detection layer (layer 4 in resolveMentions) is
+					// disabled — meaning Agent-to-Agent @mentions in plain text
+					// are silently ignored even though the text matches.
+					"identity": buildAgentIdentity(req.Identity),
+				},
 			},
 		},
 		"commands": map[string]interface{}{"native": "auto", "nativeSkills": "auto", "restart": true},
