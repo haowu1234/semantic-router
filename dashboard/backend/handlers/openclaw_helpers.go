@@ -418,9 +418,25 @@ At the start of each conversation, read SOUL.md to know:
 				"policy":    "allowlist",
 				"allowFrom": dmAllowFrom,
 			},
-			"groupPolicy": "allowlist",
-			// groupAllowFrom: who can invite this agent to group rooms
-			// Must include @system since Dashboard uses @system identity to invite agents
+			// groupPolicy "open" allows any room member to send messages that
+			// reach the agent.  The previous "allowlist" policy required the
+			// sender to be in groupAllowFrom, but at provision time we don't
+			// know every teammate's Matrix user ID — so agent-to-agent
+			// messages from Leader/Workers whose userId wasn't hard-coded in
+			// groupAllowFrom were silently dropped before mention detection
+			// could even run.
+			//
+			// Security is still maintained because:
+			//   1. Only users explicitly invited to the Matrix room can send
+			//      messages (Synapse room membership).
+			//   2. groups["*"].requireMention = true ensures the agent only
+			//      responds when @mentioned, not to every room message.
+			//   3. groupAllowFrom still controls who may *invite* the agent
+			//      into new rooms (handled by the invite-acceptance path).
+			"groupPolicy": "open",
+			// groupAllowFrom retains the invite-acceptance allowlist so only
+			// known identities (admin, system, leader placeholder) can pull
+			// this agent into new rooms.
 			"groupAllowFrom": []string{
 				fmt.Sprintf("@%s:%s", adminUser, domain),
 				fmt.Sprintf("@leader:%s", domain),
