@@ -1,22 +1,9 @@
 // topology/types.ts - Topology Page Type Definitions
 
 import { ReactNode } from 'react'
+import type { SignalType } from '@/lib/dslMutations'
 
-// ============== Signal Types ==============
-export type SignalType =
-  | 'keyword'
-  | 'embedding'
-  | 'domain'
-  | 'fact_check'
-  | 'user_feedback'
-  | 'preference'
-  | 'language'
-  | 'context'
-  | 'complexity'
-  | 'modality'
-  | 'authz'
-  | 'jailbreak'
-  | 'pii'
+export type { SignalType } from '@/lib/dslMutations'
 
 export interface SignalConfig {
   type: SignalType

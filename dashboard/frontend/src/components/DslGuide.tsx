@@ -4,6 +4,8 @@ import {
   PLUGIN_TYPES,
   BACKEND_TYPES,
   ALGORITHM_TYPES,
+  SIGNAL_DESCRIPTIONS,
+  BACKEND_DESCRIPTIONS,
   PLUGIN_DESCRIPTIONS,
   ALGORITHM_DESCRIPTIONS,
   getSignalFieldSchema,
@@ -218,33 +220,6 @@ const GLOBAL_SNIPPET = `GLOBAL {
   strategy: "priority"
   default_reasoning_effort: "low"
 }`
-
-// Signal type descriptions
-const SIGNAL_DESCRIPTIONS: Record<string, string> = {
-  keyword: 'Match queries by keyword lists (regex, BM25, n-gram)',
-  embedding: 'Semantic similarity matching via embedding vectors',
-  domain: 'MMLU-based academic domain detection',
-  fact_check: 'Flag queries requiring factual verification',
-  user_feedback: 'Route based on user feedback signals',
-  preference: 'User preference-based routing',
-  language: 'Detect query language',
-  context: 'Context window length requirements',
-  complexity: 'Estimate query difficulty via embedding similarity',
-  modality: 'Detect multi-modal input (text, image, audio)',
-  authz: 'Authorization-based routing (RBAC)',
-}
-
-// Backend type descriptions
-const BACKEND_DESCRIPTIONS: Record<string, string> = {
-  vllm_endpoint: 'vLLM or Ollama inference endpoint',
-  provider_profile: 'Cloud provider API profile (OpenAI, Azure, etc.)',
-  embedding_model: 'Embedding model endpoint for signal detection',
-  semantic_cache: 'Semantic cache backend storage',
-  memory: 'Persistent memory/vector storage',
-  response_api: 'OpenAI Responses API endpoint',
-  vector_store: 'Vector store for RAG retrieval',
-  image_gen_backend: 'Image generation backend (DALL-E, SD, etc.)',
-}
 
 const DslGuide: React.FC<DslGuideProps> = ({ onInsertSnippet }) => {
   const [searchQuery, setSearchQuery] = useState('')

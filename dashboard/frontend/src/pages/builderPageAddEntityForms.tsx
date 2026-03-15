@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
+  BACKEND_DESCRIPTIONS,
   BACKEND_TYPES,
   getSignalFieldSchema,
   PLUGIN_DESCRIPTIONS,
@@ -14,11 +15,10 @@ import {
   BackendIcon,
   CustomSelect,
   FieldEditor,
-  GenericFieldsEditor,
   PluginIcon,
   SignalIcon,
 } from "./builderPageFormPrimitives";
-import { PluginSchemaEditor } from "./builderPageSharedDslEditors";
+import { BackendSchemaEditor, PluginSchemaEditor } from "./builderPageSharedDslEditors";
 
 const AddSignalForm: React.FC<{
   onAdd: (
@@ -256,6 +256,17 @@ const AddBackendForm: React.FC<{
           options={[...BACKEND_TYPES]}
           onChange={(value) => setBackendType(value)}
         />
+        {BACKEND_DESCRIPTIONS[backendType] && (
+          <span
+            style={{
+              fontSize: "0.625rem",
+              color: "var(--color-text-muted)",
+              marginTop: "0.25rem",
+            }}
+          >
+            {BACKEND_DESCRIPTIONS[backendType]}
+          </span>
+        )}
       </div>
 
       <div className={styles.fieldGroup}>
@@ -271,7 +282,12 @@ const AddBackendForm: React.FC<{
         />
       </div>
 
-      <GenericFieldsEditor fields={fields} onUpdate={setFields} />
+      <BackendSchemaEditor
+        backendType={backendType}
+        backendName={name.trim() || undefined}
+        fields={fields}
+        onUpdate={setFields}
+      />
     </div>
   );
 };

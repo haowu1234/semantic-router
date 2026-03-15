@@ -1,5 +1,8 @@
 // topology/constants.ts - Constants and Color Schemes
 
+import {
+  SIGNAL_TYPES as SHARED_SIGNAL_TYPES,
+} from '@/lib/dslMutations'
 import { SignalType, PluginType, AlgorithmType } from './types'
 
 // ============== Signal Icons ==============
@@ -209,21 +212,7 @@ export const TOPOLOGY_LAYER_LAYOUT = {
 } as const
 
 // ============== Signal Types Array ==============
-export const SIGNAL_TYPES: SignalType[] = [
-  'keyword',
-  'embedding',
-  'domain',
-  'fact_check',
-  'user_feedback',
-  'preference',
-  'language',
-  'context',
-  'complexity',
-  'modality',
-  'authz',
-  'jailbreak',
-  'pii',
-]
+export const SIGNAL_TYPES: SignalType[] = [...SHARED_SIGNAL_TYPES]
 
 // ============== Plugin Types Array ==============
 export const PLUGIN_TYPES: PluginType[] = [

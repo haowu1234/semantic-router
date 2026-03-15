@@ -2,15 +2,15 @@ import React, { useMemo } from "react";
 
 import { getAlgorithmFieldSchema } from "@/lib/dslMutations";
 import type {
-  ASTAlgoSpec,
-  ASTModelRef,
-  ASTPluginRef,
-} from "@/types/dsl";
-import type {
   RouteAlgoInput,
   RouteModelInput,
   RoutePluginInput,
 } from "@/lib/dslMutations";
+import {
+  astAlgoToInput,
+  astModelToInput,
+  astPluginRefToInput,
+} from "./builderPageRouteInputSupport";
 
 import styles from "./BuilderPage.module.css";
 
@@ -352,31 +352,6 @@ const RouteDslPreviewPanel: React.FC<{
     </div>
   );
 };
-
-// ===================================================================
-// Route Editor Form (editable)
-// ===================================================================
-
-function astModelToInput(m: ASTModelRef): RouteModelInput {
-  return {
-    model: m.model,
-    reasoning: m.reasoning,
-    effort: m.effort,
-    lora: m.lora,
-    paramSize: m.paramSize,
-    weight: m.weight,
-    reasoningFamily: m.reasoningFamily,
-  };
-}
-
-function astAlgoToInput(a?: ASTAlgoSpec): RouteAlgoInput | undefined {
-  if (!a) return undefined;
-  return { algoType: a.algoType, fields: { ...a.fields } };
-}
-
-function astPluginRefToInput(p: ASTPluginRef): RoutePluginInput {
-  return { name: p.name, fields: p.fields ? { ...p.fields } : undefined };
-}
 
 export {
   RouteDslPreviewPanel,

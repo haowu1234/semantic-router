@@ -86,6 +86,7 @@ func TestRequiredPermission(t *testing.T) {
 		{method: http.MethodGet, path: "/api/openclaw/teams", expected: PermOpenClawRead},
 		{method: http.MethodPost, path: "/api/openclaw/teams", expected: PermOpenClaw},
 		{method: http.MethodPost, path: "/api/openclaw/rooms/room-1/messages", expected: PermOpenClawRead},
+		{method: http.MethodPost, path: "/api/builder/nl/sessions", expected: PermConfigRead},
 		{method: http.MethodPost, path: "/api/router/v1/chat/completions", expected: PermConfigRead},
 	}
 

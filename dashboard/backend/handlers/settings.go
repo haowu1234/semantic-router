@@ -1,10 +1,8 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
 
-	"github.com/vllm-project/semantic-router/dashboard/backend/auth"
 	"github.com/vllm-project/semantic-router/dashboard/backend/config"
 )
 
@@ -24,23 +22,13 @@ func SettingsHandler(cfg *config.Config) http.HandlerFunc {
 			return
 		}
 
-		readOnlyMode := cfg.ReadonlyMode
-		if !readOnlyMode {
-			if ac, ok := auth.AuthFromContext(r); ok && !ac.Perms[auth.PermConfigWrite] {
-				readOnlyMode = true
-			}
-		}
-
 		response := SettingsResponse{
-			ReadonlyMode: readOnlyMode,
+			ReadonlyMode: effectiveReadonlyMode(cfg, r),
 			SetupMode:    cfg.SetupMode,
 			Platform:     cfg.Platform,
 			EnvoyURL:     cfg.EnvoyURL,
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(response); err != nil {
-			http.Error(w, "Failed to encode response", http.StatusInternalServerError)
-		}
+		writeJSON(w, response)
 	}
 }

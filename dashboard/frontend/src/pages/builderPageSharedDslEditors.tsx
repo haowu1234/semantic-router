@@ -2,7 +2,9 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { ASTSignalDecl } from "@/types/dsl";
 import {
+  BACKEND_DESCRIPTIONS,
   getAlgorithmFieldSchema,
+  getBackendFieldSchema,
   getPluginFieldSchema,
   getSignalFieldSchema,
   PLUGIN_DESCRIPTIONS,
@@ -407,8 +409,89 @@ const PluginSchemaEditor: React.FC<{
   );
 };
 
+const BackendSchemaEditor: React.FC<{
+  backendType: string;
+  backendName?: string;
+  fields: Record<string, unknown>;
+  onUpdate: (fields: Record<string, unknown>) => void;
+}> = ({ backendType, backendName, fields, onUpdate }) => {
+  const schema = useMemo(() => getBackendFieldSchema(backendType), [backendType]);
+
+  if (schema.length === 0) {
+    return (
+      <div className={styles.dslPreview}>
+        <div className={styles.dslPreviewHeader}>
+          <span className={styles.dslPreviewTitle}>
+            {backendName ?? "Configuration"}
+            {BACKEND_DESCRIPTIONS[backendType] && (
+              <span
+                style={{
+                  fontWeight: 400,
+                  fontSize: "0.625rem",
+                  color: "var(--color-text-muted)",
+                  marginLeft: "0.5rem",
+                }}
+              >
+                — {BACKEND_DESCRIPTIONS[backendType]}
+              </span>
+            )}
+          </span>
+        </div>
+        <div style={{ padding: "var(--spacing-md)" }}>
+          <ExtraFieldsEditor fields={fields} schemaKeys={[]} onUpdate={onUpdate} />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={styles.dslPreview}>
+      <div className={styles.dslPreviewHeader}>
+        <span className={styles.dslPreviewTitle}>
+          {backendName ?? "Configuration"}
+          {BACKEND_DESCRIPTIONS[backendType] && (
+            <span
+              style={{
+                fontWeight: 400,
+                fontSize: "0.625rem",
+                color: "var(--color-text-muted)",
+                marginLeft: "0.5rem",
+              }}
+            >
+              — {BACKEND_DESCRIPTIONS[backendType]}
+            </span>
+          )}
+        </span>
+      </div>
+      <div
+        style={{
+          padding: "var(--spacing-md)",
+          display: "flex",
+          flexDirection: "column",
+          gap: "var(--spacing-md)",
+        }}
+      >
+        {schema.map((field) => (
+          <FieldEditor
+            key={field.key}
+            schema={field}
+            value={fields[field.key]}
+            onChange={(value) => onUpdate({ ...fields, [field.key]: value })}
+          />
+        ))}
+        <ExtraFieldsEditor
+          fields={fields}
+          schemaKeys={schema.map((field) => field.key)}
+          onUpdate={onUpdate}
+        />
+      </div>
+    </div>
+  );
+};
+
 export {
   AlgorithmSchemaEditor,
+  BackendSchemaEditor,
   DslPreviewPanel,
   ExtraFieldsEditor,
   generateGlobalDslPreview,

@@ -13,7 +13,7 @@ import {
   PluginConfig,
   ModelRefConfig,
 } from '../types'
-import { SIGNAL_LATENCY } from '../constants'
+import { SIGNAL_LATENCY, SIGNAL_TYPES } from '../constants'
 
 /**
  * Parse raw config data into structured topology data
@@ -590,21 +590,9 @@ function normalizeModelScores(
  * Group signals by type
  */
 export function groupSignalsByType(signals: SignalConfig[]): Record<SignalType, SignalConfig[]> {
-  const groups: Record<SignalType, SignalConfig[]> = {
-    keyword: [],
-    embedding: [],
-    domain: [],
-    fact_check: [],
-    user_feedback: [],
-    preference: [],
-    language: [],
-    context: [],
-    complexity: [],
-    modality: [],
-    authz: [],
-    jailbreak: [],
-    pii: [],
-  }
+  const groups = Object.fromEntries(
+    SIGNAL_TYPES.map((type) => [type, [] as SignalConfig[]]),
+  ) as Record<SignalType, SignalConfig[]>
 
   signals.forEach(signal => {
     if (groups[signal.type]) {

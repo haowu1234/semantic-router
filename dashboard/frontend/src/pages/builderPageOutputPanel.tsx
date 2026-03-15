@@ -105,6 +105,7 @@ const BuilderOutputPanel: React.FC<BuilderOutputPanelProps> = ({
                 ? styles.outputPanelTabActive
                 : styles.outputPanelTab
             }
+            data-testid="builder-output-tab-yaml"
             onClick={() => setOutputTab("yaml")}
           >
             YAML
@@ -115,6 +116,7 @@ const BuilderOutputPanel: React.FC<BuilderOutputPanelProps> = ({
                 ? styles.outputPanelTabActive
                 : styles.outputPanelTab
             }
+            data-testid="builder-output-tab-crd"
             onClick={() => setOutputTab("crd")}
           >
             CRD
@@ -125,6 +127,7 @@ const BuilderOutputPanel: React.FC<BuilderOutputPanelProps> = ({
                 ? styles.outputPanelTabActive
                 : styles.outputPanelTab
             }
+            data-testid="builder-output-tab-dsl"
             onClick={() => setOutputTab("dsl")}
           >
             DSL
@@ -197,7 +200,9 @@ const BuilderOutputPanel: React.FC<BuilderOutputPanelProps> = ({
             <div className={styles.outputPanelError}>{compileError}</div>
           )}
           {outputContent ? (
-            <pre className={styles.outputPanelCode}>{outputContent}</pre>
+            <pre className={styles.outputPanelCode} data-testid="builder-output-code">
+              {outputContent}
+            </pre>
           ) : (
             <div className={styles.emptyState}>
               <div className={styles.emptyIcon}>&#9889;</div>

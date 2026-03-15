@@ -123,6 +123,8 @@ func settingsPermission(method, path string) (string, bool) {
 
 func routerPermission(method, path string) (string, bool) {
 	switch {
+	case strings.HasPrefix(path, "/api/builder/nl/"):
+		return PermConfigRead, true
 	case strings.HasPrefix(path, "/api/router/config/"):
 		if method == http.MethodGet {
 			return PermConfigRead, true

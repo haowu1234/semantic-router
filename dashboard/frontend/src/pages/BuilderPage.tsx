@@ -16,6 +16,7 @@ import { BuilderDeployConfirmModal, BuilderDeployToast, BuilderDragOverlay } fro
 import { VisualMode } from "./builderPageVisualShell";
 import { BuilderGuideDrawer } from "./builderPageGuideDrawer";
 import { BuilderImportModal } from "./builderPageImportModal";
+import BuilderNLMode from "./builderPageNLMode";
 import { BuilderOutputPanel } from "./builderPageOutputPanel";
 import { useResizableWidth } from "./builderPageResizeHooks";
 import { BuilderStatusBar } from "./builderPageStatusBar";
@@ -40,6 +41,7 @@ const BuilderPage: React.FC = () => {
     crdOutput,
     compileError,
     initWasm,
+    setDslSource,
     compile,
     validate,
     parseAST,
@@ -348,6 +350,23 @@ const BuilderPage: React.FC = () => {
     requestDeploy();
   }, [deployDisabled, requestDeploy]);
 
+  const handleApplyNLDraft = useCallback(
+    (draftDsl: string) => {
+      setDslSource(draftDsl);
+      compile();
+    },
+    [compile, setDslSource],
+  );
+
+  const handleOpenNLDraftInDSL = useCallback(
+    (draftDsl: string) => {
+      setDslSource(draftDsl);
+      compile();
+      setMode("dsl");
+    },
+    [compile, setDslSource, setMode],
+  );
+
   // On first entry, load current router config and compile it by default.
   useEffect(() => {
     if (!wasmReady || autoLoadedDefaultConfigRef.current) return;
@@ -482,24 +501,16 @@ const BuilderPage: React.FC = () => {
             </div>
           )}
           {mode === "nl" && (
-            <div className={styles.nlPlaceholder}>
-              <div className={styles.nlPlaceholderIcon}>🤖</div>
-              <div className={styles.nlPlaceholderTitle}>
-                Natural Language Mode
-              </div>
-              <div>
-                Describe your routing configuration in plain English and let AI
-                generate DSL for you.
-              </div>
-              <div
-                style={{
-                  fontSize: "var(--text-xs)",
-                  color: "var(--color-text-muted)",
-                }}
-              >
-                Coming soon — Phase 6
-              </div>
-            </div>
+            <BuilderNLMode
+              dslSource={dslSource}
+              ast={ast}
+              symbols={symbols}
+              diagnostics={diagnostics}
+              wasmReady={wasmReady}
+              readonlyMode={isReadonly}
+              onApplyDraft={handleApplyNLDraft}
+              onOpenDraftInDSL={handleOpenNLDraftInDSL}
+            />
           )}
         </div>
 
