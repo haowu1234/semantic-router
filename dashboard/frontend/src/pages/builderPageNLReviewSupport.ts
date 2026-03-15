@@ -193,7 +193,7 @@ function buildModifyCard(
 
 function summarizeRouteChanges(
   changes: Record<string, unknown> | undefined,
-  baseRoute: ReturnType<typeof resolveBaseRouteDetails>,
+  baseRoute: BaseRouteDetails | null,
 ): string[] {
   if (!changes) {
     return ["No explicit field changes were provided."];
@@ -279,14 +279,7 @@ function summarizeRouteChanges(
 function resolveBaseRouteDetails(
   routeName: string,
   baseAst: ASTProgram | null,
-): {
-  description: string | null;
-  priority: string | null;
-  condition: string | null;
-  models: string | null;
-  algorithm: string | null;
-  plugins: string | null;
-} | null {
+): BaseRouteDetails | null {
   const route = baseAst?.routes?.find((candidate) => candidate.name === routeName);
   if (!route) {
     return null;
@@ -306,6 +299,15 @@ function resolveBaseRouteDetails(
       ? input.plugins.map((plugin) => plugin.name).join(", ")
       : null,
   };
+}
+
+interface BaseRouteDetails {
+  description: string | null;
+  priority: string | null;
+  condition: string | null;
+  models: string | null;
+  algorithm: string | null;
+  plugins: string | null;
 }
 
 function summarizeFieldMap(
