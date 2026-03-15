@@ -13,6 +13,19 @@
 
 .header {
   display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  padding: 1rem 1.1rem;
+  border: 1px solid rgba(118, 185, 0, 0.14);
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(135deg, rgba(118, 185, 0, 0.08), transparent 42%),
+    rgba(13, 16, 22, 0.9);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.18);
+}
+
+.headerMain {
+  display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--spacing-md);
@@ -36,6 +49,42 @@
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 0.5rem;
+}
+
+.heroInfoRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.heroStatCard,
+.heroNoteCard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  min-width: 8.25rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.heroStatCard strong,
+.contextSummaryCard strong,
+.emptyPreviewCard strong {
+  color: var(--color-text);
+}
+
+.heroNoteCard {
+  min-width: 17rem;
+  flex: 1 1 17rem;
+}
+
+.heroNoteCard p {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.55;
 }
 
 .badge,
@@ -99,10 +148,17 @@
 
 .grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(22rem, 0.9fr);
   gap: var(--spacing-md);
   min-height: 0;
   align-items: start;
+}
+
+.gridReviewIdle {
+  grid-template-columns: minmax(0, 1.06fr) minmax(22rem, 0.94fr);
+}
+
+.gridReviewActive {
+  grid-template-columns: minmax(0, 0.96fr) minmax(24rem, 1.04fr);
 }
 
 .card {
@@ -148,6 +204,44 @@
   color: var(--color-text-muted);
 }
 
+.composerCard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 0.95rem;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(118, 185, 0, 0.18);
+  background:
+    linear-gradient(180deg, rgba(118, 185, 0, 0.05), transparent 26%),
+    rgba(255, 255, 255, 0.02);
+}
+
+.composerHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+}
+
+.composerHints {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.35rem;
+}
+
+.composerHint {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.28rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
 .textarea {
   width: 100%;
   resize: vertical;
@@ -173,6 +267,13 @@
   align-items: center;
   gap: var(--spacing-sm);
   flex-wrap: wrap;
+}
+
+.promptRailHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-md);
 }
 
 .primaryButton,
@@ -293,11 +394,27 @@
   border-color: var(--color-primary);
 }
 
-.promptSupportGrid {
+.promptLowerGrid {
   display: grid;
   grid-template-columns: minmax(0, 1.15fr) minmax(16rem, 0.85fr);
   gap: var(--spacing-sm);
   align-items: start;
+}
+
+.quickStartCard,
+.emptyPreviewFrame {
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.quickStartCard {
+  padding: 0.85rem;
+}
+
+.supportStack {
+  display: grid;
+  gap: var(--spacing-sm);
 }
 
 .tipList {
@@ -370,7 +487,7 @@
   flex: 1;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: space-between;
   gap: 0.9rem;
 }
 
@@ -414,6 +531,97 @@
   color: var(--color-text-secondary);
   font-size: var(--text-xs);
   line-height: 1.55;
+}
+
+.emptyPreviewFrame {
+  padding: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.emptyPreviewHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+}
+
+.emptyPreviewTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.emptyPreviewTab,
+.emptyPreviewTabActive {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.32rem 0.62rem;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.emptyPreviewTabActive {
+  color: var(--color-primary-light);
+  border-color: rgba(118, 185, 0, 0.35);
+  background: rgba(118, 185, 0, 0.12);
+}
+
+.emptyPreviewGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.emptyPreviewCard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.8rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.emptyPreviewCard p {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+}
+
+.emptyPreviewSkeleton {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.85rem;
+  border-radius: var(--radius-md);
+  border: 1px dashed rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.emptyPreviewLine {
+  height: 0.62rem;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(118, 185, 0, 0.14), rgba(255, 255, 255, 0.05));
+}
+
+.emptyPreviewLineStrong {
+  width: 72%;
+}
+
+.emptyPreviewLineShort {
+  width: 46%;
+}
+
+.emptyPreviewSeparator {
+  height: 1px;
+  margin: 0.2rem 0;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .clarificationCard {
@@ -561,6 +769,69 @@
   padding: 0 1rem 1rem;
 }
 
+.intentReviewGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.intentReviewCard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  padding: 0.85rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.intentReviewHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.intentReviewKicker {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 0.18rem 0.48rem;
+  border-radius: 999px;
+  background: rgba(118, 185, 0, 0.12);
+  color: var(--color-primary-light);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.intentReviewTitle {
+  color: var(--color-text);
+  font-size: var(--text-sm);
+}
+
+.intentReviewSummary {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+}
+
+.intentReviewDetails {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.intentReviewDetail {
+  padding: 0.55rem 0.65rem;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
 .semanticHighlights {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -701,15 +972,26 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .headerMain {
+    flex-direction: column;
+  }
+
+  .composerHeader,
+  .emptyPreviewHeader {
+    flex-direction: column;
+  }
+
   .card,
   .reviewCardEmpty {
     max-height: none;
     min-height: 0;
   }
 
-  .promptSupportGrid,
+  .promptLowerGrid,
   .contextGrid,
-  .emptySteps {
+  .emptySteps,
+  .emptyPreviewGrid,
+  .intentReviewGrid {
     grid-template-columns: minmax(0, 1fr);
   }
 

@@ -19,6 +19,7 @@ import {
 
 import { buildDraftDiff } from "./builderPageNLDiff";
 import { preparePlannerDraft } from "./builderPageNLDraft";
+import { buildIntentReviewCards } from "./builderPageNLReviewSupport";
 import styles from "./builderPageNLMode.module.css";
 
 interface BuilderNLModeProps {
@@ -109,6 +110,16 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
     };
   }, [diagnostics, symbols]);
 
+  const contextStatItems = useMemo(
+    () => [
+      { label: "Signals", value: currentContextSummary.signals },
+      { label: "Routes", value: currentContextSummary.routes },
+      { label: "Plugins", value: currentContextSummary.plugins },
+      { label: "Backends", value: currentContextSummary.backends },
+    ],
+    [currentContextSummary],
+  );
+
   const examplePrompts = useMemo(() => {
     const examples = [
       `Create a keyword signal named urgent_signal with keywords "urgent", "asap"`,
@@ -143,6 +154,10 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
     }
     return buildDraftDiff(dslSource, draftDsl);
   }, [draftDsl, dslSource]);
+  const reviewCards = useMemo(
+    () => buildIntentReviewCards(plannerResult, ast),
+    [ast, plannerResult],
+  );
 
   const draftLineCount = useMemo(() => countLines(draftDsl), [draftDsl]);
   const currentLineCount = useMemo(() => countLines(dslSource), [dslSource]);
@@ -365,6 +380,7 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
   ).length;
   const draftIssueCount =
     draftErrorCount + draftConstraintCount + draftWarningCount;
+  const reviewEngaged = Boolean(plannerResult);
   const canApplyDraft =
     wasmReady &&
     !!draftDsl.trim() &&
@@ -400,48 +416,68 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
   return (
     <div className={styles.container} data-testid="builder-nl-mode">
       <div className={styles.header}>
-        <div>
-          <div className={styles.title}>Natural Language Drafting</div>
-          <div className={styles.subtitle}>
-            Builder stays on canonical DSL. The planner only proposes a draft.
+        <div className={styles.headerMain}>
+          <div>
+            <div className={styles.title}>Natural Language Drafting</div>
+            <div className={styles.subtitle}>
+              Builder stays on canonical DSL. The planner only proposes a
+              reviewed draft before anything touches the working config.
+            </div>
+          </div>
+          <div className={styles.badgeRow}>
+            <span
+              className={`${styles.badge} ${styles.badgePrimary}`}
+              title={capabilities?.plannerBackend ?? "planner unavailable"}
+              data-testid="builder-nl-badge-planner"
+            >
+              <span className={styles.badgeDot} aria-hidden="true" />
+              <span className={styles.badgeCopy}>
+                <strong>{plannerBadgeTitle}</strong>
+                <small>{plannerBadgeMeta}</small>
+              </span>
+            </span>
+            <span
+              className={`${styles.badge} ${styles.badgeInfo}`}
+              data-testid="builder-nl-badge-mode"
+            >
+              <span className={styles.badgeDot} aria-hidden="true" />
+              <span className={styles.badgeCopy}>
+                <strong>{previewBadgeTitle}</strong>
+                <small>{previewBadgeMeta}</small>
+              </span>
+            </span>
+            {readonlyMode && <span className={styles.badgeWarn}>readonly</span>}
           </div>
         </div>
-        <div className={styles.badgeRow}>
-          <span
-            className={`${styles.badge} ${styles.badgePrimary}`}
-            title={capabilities?.plannerBackend ?? "planner unavailable"}
-            data-testid="builder-nl-badge-planner"
-          >
-            <span className={styles.badgeDot} aria-hidden="true" />
-            <span className={styles.badgeCopy}>
-              <strong>{plannerBadgeTitle}</strong>
-              <small>{plannerBadgeMeta}</small>
-            </span>
-          </span>
-          <span
-            className={`${styles.badge} ${styles.badgeInfo}`}
-            data-testid="builder-nl-badge-mode"
-          >
-            <span className={styles.badgeDot} aria-hidden="true" />
-            <span className={styles.badgeCopy}>
-              <strong>{previewBadgeTitle}</strong>
-              <small>{previewBadgeMeta}</small>
-            </span>
-          </span>
-          {readonlyMode && <span className={styles.badgeWarn}>readonly</span>}
+        <div className={styles.heroInfoRow}>
+          {contextStatItems.map((item) => (
+            <div key={item.label} className={styles.heroStatCard}>
+              <span className={styles.statLabel}>{item.label}</span>
+              <strong>{item.value}</strong>
+            </div>
+          ))}
+          <div className={styles.heroNoteCard}>
+            <span className={styles.statLabel}>Workflow</span>
+            <strong>Prompt to Review to Apply</strong>
+            <p>
+              Start with one change, inspect assumptions and diff, then apply
+              only when the canonical draft looks right.
+            </p>
+          </div>
         </div>
       </div>
 
-      <div className={styles.grid}>
+      <div
+        className={`${styles.grid} ${
+          reviewEngaged ? styles.gridReviewActive : styles.gridReviewIdle
+        }`}
+      >
         <section className={`${styles.card} ${styles.promptCard}`}>
           <div className={styles.sectionHeader}>
             <div>
               <h3 className={styles.sectionTitle}>Prompt</h3>
               <p className={styles.sectionMeta}>
-                Context: {currentContextSummary.signals} signals,{" "}
-                {currentContextSummary.routes} routes,{" "}
-                {currentContextSummary.plugins} plugins,{" "}
-                {currentContextSummary.backends} backends
+                Draft against the current Builder DSL context.
               </p>
             </div>
             <button className={styles.secondaryButton} onClick={handleReset}>
@@ -449,85 +485,113 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
             </button>
           </div>
 
-          <textarea
-            className={styles.textarea}
-            data-testid="builder-nl-prompt"
-            value={prompt}
-            onChange={(event) => setPrompt(event.target.value)}
-            placeholder='Describe one change, for example: Create route support_route for model gpt-4o-mini'
-            rows={6}
-          />
+          <div className={styles.composerCard}>
+            <div className={styles.composerHeader}>
+              <div>
+                <div className={styles.contextLabel}>Compose one change</div>
+                <div className={styles.sectionMeta}>
+                  Ask for a single create, update, delete, or fix against the
+                  current Builder DSL.
+                </div>
+              </div>
+              <div className={styles.composerHints}>
+                <span className={styles.composerHint}>Single change</span>
+                <span className={styles.composerHint}>Exact names work best</span>
+              </div>
+            </div>
 
-          <div className={styles.actionRow}>
-            <button
-              className={styles.primaryButton}
-              onClick={() => void handleSubmit()}
-              disabled={
-                loading || !wasmReady || !prompt.trim() || !capabilities?.enabled
-              }
-            >
-              {loading ? "Planning..." : "Generate draft"}
-            </button>
-            <span className={styles.hint}>
-              {sessionExpiresAt
-                ? `Session expires ${new Date(sessionExpiresAt).toLocaleTimeString()}`
-                : "Session starts on first turn"}
-            </span>
+            <textarea
+              className={styles.textarea}
+              data-testid="builder-nl-prompt"
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+              placeholder='Describe one change, for example: Create route support_route for model gpt-4o-mini'
+              rows={6}
+            />
+
+            <div className={styles.actionRow}>
+              <button
+                className={styles.primaryButton}
+                onClick={() => void handleSubmit()}
+                disabled={
+                  loading || !wasmReady || !prompt.trim() || !capabilities?.enabled
+                }
+              >
+                {loading ? "Planning..." : "Generate draft"}
+              </button>
+              <span className={styles.hint}>
+                {sessionExpiresAt
+                  ? `Session expires ${new Date(sessionExpiresAt).toLocaleTimeString()}`
+                  : "Session starts on first turn"}
+              </span>
+            </div>
           </div>
 
           {surfaceError && <div className={styles.errorBox}>{surfaceError}</div>}
 
-          <div className={styles.exampleGroup}>
-            <div className={styles.exampleHeader}>
-              <div className={styles.sectionMeta}>Examples</div>
-              <span className={styles.hint}>One change per turn</span>
-            </div>
-            <div className={styles.exampleList}>
-              {examplePrompts.map((example) => (
-                <button
-                  key={example}
-                  className={styles.exampleChip}
-                  onClick={() => setPrompt(example)}
-                >
-                  {example}
-                </button>
-              ))}
+          <div className={styles.promptRailHeader}>
+            <div>
+              <div className={styles.contextLabel}>Prompt support</div>
+              <div className={styles.sectionMeta}>
+                Use quick starts and supported construct hints to keep the draft
+                inside the preview planner’s working set.
+              </div>
             </div>
           </div>
 
-          <div className={styles.promptSupportGrid}>
-            <div className={styles.contextGrid}>
-              <div className={styles.contextCard}>
-                <div className={styles.contextLabel}>Supported constructs</div>
-                <div className={styles.pillRow}>
-                  {(capabilities?.supportedConstructs ?? []).map((construct) => (
-                    <span key={construct} className={styles.pill}>
-                      {construct}
-                    </span>
-                  ))}
-                </div>
+          <div className={styles.promptLowerGrid}>
+            <div className={styles.quickStartCard}>
+              <div className={styles.exampleHeader}>
+                <div className={styles.contextLabel}>Quick starts</div>
+                <span className={styles.hint}>One change per turn</span>
               </div>
-              <div className={styles.contextCard}>
-                <div className={styles.contextLabel}>Signal types</div>
-                <div className={styles.pillRow}>
-                  {supportedSignalEntries.map((entry) => (
-                    <span key={entry.typeName} className={styles.pill}>
-                      {entry.typeName}
-                    </span>
-                  ))}
-                </div>
+              <div className={styles.exampleList}>
+                {examplePrompts.map((example) => (
+                  <button
+                    key={example}
+                    className={styles.exampleChip}
+                    onClick={() => setPrompt(example)}
+                  >
+                    {example}
+                  </button>
+                ))}
               </div>
             </div>
 
-            <div className={styles.guidanceCard}>
-              <div className={styles.contextLabel}>Best results</div>
-              <div className={styles.tipList}>
-                <div className={styles.tipItem}>Describe one change per turn.</div>
-                <div className={styles.tipItem}>
-                  Mention exact route, model, signal, or plugin names when editing existing config.
+            <div className={styles.supportStack}>
+              <div className={styles.contextGrid}>
+                <div className={styles.contextCard}>
+                  <div className={styles.contextLabel}>Supported constructs</div>
+                  <div className={styles.pillRow}>
+                    {(capabilities?.supportedConstructs ?? []).map((construct) => (
+                      <span key={construct} className={styles.pill}>
+                        {construct}
+                      </span>
+                    ))}
+                  </div>
                 </div>
-                <div className={styles.tipItem}>
-                  Drafts stay review-only until you apply them to Builder.
+                <div className={styles.contextCard}>
+                  <div className={styles.contextLabel}>Signal types</div>
+                  <div className={styles.pillRow}>
+                    {supportedSignalEntries.map((entry) => (
+                      <span key={entry.typeName} className={styles.pill}>
+                        {entry.typeName}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className={styles.guidanceCard}>
+                <div className={styles.contextLabel}>Best results</div>
+                <div className={styles.tipList}>
+                  <div className={styles.tipItem}>Describe one change per turn.</div>
+                  <div className={styles.tipItem}>
+                    Mention exact route, model, signal, or plugin names when editing existing config.
+                  </div>
+                  <div className={styles.tipItem}>
+                    Drafts stay review-only until you apply them to Builder.
+                  </div>
                 </div>
               </div>
             </div>
@@ -579,6 +643,44 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
                     <strong>Apply only when ready</strong>
                     <p>Applying replaces the working Builder DSL, then recompiles it so deploy preview uses the new draft.</p>
                   </div>
+                </div>
+              </div>
+              <div className={styles.emptyPreviewFrame}>
+                <div className={styles.emptyPreviewHeader}>
+                  <div>
+                    <div className={styles.contextLabel}>Review canvas</div>
+                    <div className={styles.sectionMeta}>
+                      Changes stay review-only until you apply them to Builder.
+                    </div>
+                  </div>
+                  <span className={styles.hint}>Current DSL remains untouched</span>
+                </div>
+                <div className={styles.emptyPreviewTabs}>
+                  <span className={styles.emptyPreviewTabActive}>Changes</span>
+                  <span className={styles.emptyPreviewTab}>Diff</span>
+                  <span className={styles.emptyPreviewTab}>Full draft</span>
+                </div>
+                <div className={styles.emptyPreviewGrid}>
+                  <div className={styles.emptyPreviewCard}>
+                    <span className={styles.statLabel}>Planner interpretation</span>
+                    <p>See the planner’s understanding of your request and any default assumptions it made.</p>
+                  </div>
+                  <div className={styles.emptyPreviewCard}>
+                    <span className={styles.statLabel}>Semantic changes</span>
+                    <p>Check the route, signal, plugin, or backend changes before you trust the full DSL diff.</p>
+                  </div>
+                  <div className={styles.emptyPreviewCard}>
+                    <span className={styles.statLabel}>Canonical DSL result</span>
+                    <p>Inspect the diff or full draft that will replace the working Builder DSL after apply.</p>
+                  </div>
+                </div>
+                <div className={styles.emptyPreviewSkeleton}>
+                  <div className={`${styles.emptyPreviewLine} ${styles.emptyPreviewLineStrong}`} />
+                  <div className={styles.emptyPreviewLine} />
+                  <div className={`${styles.emptyPreviewLine} ${styles.emptyPreviewLineShort}`} />
+                  <div className={styles.emptyPreviewSeparator} />
+                  <div className={`${styles.emptyPreviewLine} ${styles.emptyPreviewLineStrong}`} />
+                  <div className={`${styles.emptyPreviewLine} ${styles.emptyPreviewLineShort}`} />
                 </div>
               </div>
             </div>
@@ -769,7 +871,38 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
                     </div>
 
                     <div>
-                      <div className={styles.contextLabel}>Proposed changes</div>
+                      <div className={styles.contextLabel}>Structured review</div>
+                      <div className={styles.intentReviewGrid}>
+                        {reviewCards.map((card) => (
+                          <div key={card.id} className={styles.intentReviewCard}>
+                            <div className={styles.intentReviewHeader}>
+                              <span className={styles.intentReviewKicker}>
+                                {card.kicker}
+                              </span>
+                              <strong className={styles.intentReviewTitle}>
+                                {card.title}
+                              </strong>
+                            </div>
+                            <p className={styles.intentReviewSummary}>
+                              {card.summary}
+                            </p>
+                            <div className={styles.intentReviewDetails}>
+                              {card.details.map((detail) => (
+                                <div
+                                  key={`${card.id}-${detail}`}
+                                  className={styles.intentReviewDetail}
+                                >
+                                  {detail}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className={styles.contextLabel}>Change summary</div>
                       <div className={styles.summaryList}>
                         {draftSummary.map((item) => (
                           <div key={item} className={styles.summaryItem}>

@@ -262,6 +262,9 @@ test.describe('Builder NL mode', () => {
     await expect(page.getByTestId('builder-nl-review')).toContainText(
       'Append reviewed draft to Builder DSL',
     )
+    await expect(page.getByTestId('builder-nl-review')).toContainText(
+      'Keywords: urgent, asap',
+    )
     await page.getByTestId('builder-nl-review-tab-diff').click()
     await expect(page.getByTestId('builder-nl-diff-preview')).toContainText(
       'SIGNAL keyword urgent_signal',
@@ -555,6 +558,14 @@ test.describe('Builder NL mode', () => {
     await expect(page.getByTestId('builder-nl-review')).toContainText(
       'Update route support_route to use model gpt-4.1-mini.',
     )
+    await page.getByTestId('builder-nl-review-tab-changes').click()
+    await expect(page.getByTestId('builder-nl-review')).toContainText(
+      'Model refs: gpt-4o-mini -> gpt-4.1-mini',
+    )
+    await expect(page.getByTestId('builder-nl-review')).toContainText(
+      'Unspecified route settings stay unchanged.',
+    )
+    await page.getByTestId('builder-nl-review-tab-diff').click()
     await expect(page.getByTestId('builder-nl-diff-preview')).toContainText(
       'gpt-4.1-mini',
     )
