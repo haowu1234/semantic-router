@@ -341,6 +341,22 @@ func writeOpenClawConfig(path string, req ProvisionRequest) error {
 		cfg["browser"] = map[string]interface{}{"enabled": true, "headless": true, "noSandbox": true}
 	}
 
+	// Global messages.groupChat.mentionPatterns — workaround for the Matrix
+	// plugin bug where buildMentionRegexes(cfg) is called without agentId,
+	// causing resolveMentionPatterns to skip the agent-level identity and
+	// return [].  By placing mentionPatterns at the global messages level,
+	// the fallback path `cfg.messages.groupChat.mentionPatterns` will find
+	// them even when agentId is undefined.
+	if identityName := strings.TrimSpace(req.Identity.Name); identityName != "" {
+		cfg["messages"] = map[string]interface{}{
+			"groupChat": map[string]interface{}{
+				"mentionPatterns": []string{
+					`\b@?` + identityName + `\b`,
+				},
+			},
+		}
+	}
+
 	// Matrix channel configuration for agent-to-agent and human-in-the-loop communication
 	if req.Container.MatrixEnabled && req.Container.MatrixHomeserver != "" {
 		domain := req.Container.MatrixDomain
@@ -666,8 +682,18 @@ func (h *OpenClawHandler) ensureMatrixUserAndGetToken(username string) (string, 
 	if regErr != nil {
 		// Check if user already exists (M_USER_IN_USE)
 		if strings.Contains(regErr.Error(), "M_USER_IN_USE") {
-			// User exists but password might be different, this is an error state
-			return "", fmt.Errorf("matrix user %q exists but login failed (password mismatch?): %w", username, err)
+			// User exists but password is different — use admin API to reset it
+			log.Printf("Matrix user %q exists with mismatched password, attempting admin password reset", username)
+			if resetErr := h.matrixClient.ResetPassword(ctx, username, password); resetErr != nil {
+				return "", fmt.Errorf("matrix user %q exists but password reset failed: login error: %v, reset error: %w", username, err, resetErr)
+			}
+			log.Printf("Matrix user %q password reset successful, retrying login", username)
+			// Retry login with the updated password
+			token, err = h.matrixClient.LoginUser(ctx, username, password)
+			if err != nil {
+				return "", fmt.Errorf("matrix user %q login failed even after password reset: %w", username, err)
+			}
+			return token, nil
 		}
 		return "", fmt.Errorf("failed to register matrix user %q: %w", username, regErr)
 	}

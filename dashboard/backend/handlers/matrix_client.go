@@ -606,6 +606,20 @@ func (c *MatrixClient) doRequestWithTokenRaw(method, endpoint string, body inter
 	return respBody, nil
 }
 
+// ResetPassword resets a user's password using the Synapse-compatible admin API.
+// Conduwuit/Tuwunel supports the PUT /_synapse/admin/v2/users/<user_id> endpoint.
+// The caller must have admin privileges (system user access token).
+func (c *MatrixClient) ResetPassword(ctx context.Context, username, newPassword string) error {
+	userID := fmt.Sprintf("@%s:%s", username, c.config.Domain)
+	endpoint := fmt.Sprintf("/_synapse/admin/v2/users/%s", userID)
+
+	body := map[string]interface{}{
+		"password": newPassword,
+	}
+	_, err := c.doRequestWithAuth("PUT", endpoint, body)
+	return err
+}
+
 // Close 关闭客户端
 func (c *MatrixClient) Close() error {
 	// 可以选择登出
