@@ -38,6 +38,7 @@ interface RunTurnOptions {
 }
 
 type ReviewTab = "changes" | "diff" | "draft";
+type ApplyState = "idle" | "applying" | "applied";
 
 const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
   dslSource,
@@ -66,6 +67,9 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
   const [draftDiagnostics, setDraftDiagnostics] = useState<Diagnostic[]>([]);
   const [draftSummary, setDraftSummary] = useState<string[]>([]);
   const [activeReviewTab, setActiveReviewTab] = useState<ReviewTab>("changes");
+  const [applyState, setApplyState] = useState<ApplyState>("idle");
+  const reviewSectionRef = useRef<HTMLElement | null>(null);
+  const appliedBannerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -142,6 +146,51 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
 
   const draftLineCount = useMemo(() => countLines(draftDsl), [draftDsl]);
   const currentLineCount = useMemo(() => countLines(dslSource), [dslSource]);
+  const draftMatchesBuilder = useMemo(
+    () => normalizeDslForCompare(draftDsl) === normalizeDslForCompare(dslSource),
+    [draftDsl, dslSource],
+  );
+
+  useEffect(() => {
+    if (!draftDsl.trim()) {
+      setApplyState("idle");
+      return;
+    }
+    if (applyState === "applying" && draftMatchesBuilder) {
+      setApplyState("applied");
+      setActiveReviewTab("changes");
+      return;
+    }
+    if (!draftMatchesBuilder && applyState === "applied") {
+      setApplyState("idle");
+    }
+  }, [applyState, draftDsl, draftMatchesBuilder]);
+
+  useEffect(() => {
+    if (!plannerResult) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      reviewSectionRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [plannerResult]);
+
+  useEffect(() => {
+    if (applyState !== "applied") {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      appliedBannerRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+      });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [applyState]);
 
   const validateDraft = useCallback((nextDraft: string) => {
     if (!wasmReady || !nextDraft.trim()) {
@@ -180,6 +229,7 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
     setDraftDiagnostics([]);
     setDraftSummary([]);
     setActiveReviewTab("changes");
+    setApplyState("idle");
 
     const preparedDraft = preparePlannerDraft(dslSource, result, schema, ast);
     if (preparedDraft.error) {
@@ -201,9 +251,10 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
     if (!preparedDraft.draft) {
       return;
     }
+    const nextDraftDiff = buildDraftDiff(dslSource, preparedDraft.draft.dsl);
     setDraftDsl(preparedDraft.draft.dsl);
     setDraftSummary(preparedDraft.draft.summary);
-    setActiveReviewTab("diff");
+    setActiveReviewTab(selectDefaultReviewTab(nextDraftDiff));
     validateDraft(preparedDraft.draft.dsl);
   }, [ast, dslSource, schema, validateDraft]);
 
@@ -299,6 +350,7 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
     setSessionId(null);
     setSessionExpiresAt(null);
     setSurfaceError(null);
+    setApplyState("idle");
     lastTurnOptionsRef.current = {};
   }, []);
 
@@ -314,12 +366,36 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
   const draftIssueCount =
     draftErrorCount + draftConstraintCount + draftWarningCount;
   const canApplyDraft =
-    wasmReady && !!draftDsl.trim() && draftIssueCount === 0 && !readonlyMode;
+    wasmReady &&
+    !!draftDsl.trim() &&
+    draftIssueCount === 0 &&
+    !readonlyMode &&
+    applyState !== "applied";
   const canRepairDraft =
     wasmReady &&
     !!draftDsl.trim() &&
     draftIssueCount > 0 &&
     capabilities?.plannerAvailable;
+  const plannerBadgeTitle = capabilities?.plannerAvailable
+    ? "Preview feature"
+    : "Planner unavailable";
+  const plannerBadgeMeta = capabilities?.plannerAvailable
+    ? formatPlannerBackendLabel(capabilities?.plannerBackend)
+    : "No planner backend configured";
+  const previewBadgeTitle = capabilities?.preview
+    ? "Review before apply"
+    : "Stable workflow";
+  const previewBadgeMeta = capabilities?.preview
+    ? "Draft-only workflow"
+    : "Planner can write into the working Builder state";
+
+  const handleApplyDraft = useCallback(() => {
+    if (!canApplyDraft) {
+      return;
+    }
+    setApplyState("applying");
+    onApplyDraft(draftDsl);
+  }, [canApplyDraft, draftDsl, onApplyDraft]);
 
   return (
     <div className={styles.container} data-testid="builder-nl-mode">
@@ -332,20 +408,32 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
         </div>
         <div className={styles.badgeRow}>
           <span
-            className={styles.badge}
+            className={`${styles.badge} ${styles.badgePrimary}`}
             title={capabilities?.plannerBackend ?? "planner unavailable"}
+            data-testid="builder-nl-badge-planner"
           >
-            {capabilities?.plannerAvailable ? "Preview planner" : "Planner unavailable"}
+            <span className={styles.badgeDot} aria-hidden="true" />
+            <span className={styles.badgeCopy}>
+              <strong>{plannerBadgeTitle}</strong>
+              <small>{plannerBadgeMeta}</small>
+            </span>
           </span>
-          <span className={styles.badge}>
-            {capabilities?.preview ? "Draft-only preview" : "stable"}
+          <span
+            className={`${styles.badge} ${styles.badgeInfo}`}
+            data-testid="builder-nl-badge-mode"
+          >
+            <span className={styles.badgeDot} aria-hidden="true" />
+            <span className={styles.badgeCopy}>
+              <strong>{previewBadgeTitle}</strong>
+              <small>{previewBadgeMeta}</small>
+            </span>
           </span>
           {readonlyMode && <span className={styles.badgeWarn}>readonly</span>}
         </div>
       </div>
 
       <div className={styles.grid}>
-        <section className={styles.card}>
+        <section className={`${styles.card} ${styles.promptCard}`}>
           <div className={styles.sectionHeader}>
             <div>
               <h3 className={styles.sectionTitle}>Prompt</h3>
@@ -390,7 +478,10 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
           {surfaceError && <div className={styles.errorBox}>{surfaceError}</div>}
 
           <div className={styles.exampleGroup}>
-            <div className={styles.sectionMeta}>Examples</div>
+            <div className={styles.exampleHeader}>
+              <div className={styles.sectionMeta}>Examples</div>
+              <span className={styles.hint}>One change per turn</span>
+            </div>
             <div className={styles.exampleList}>
               {examplePrompts.map((example) => (
                 <button
@@ -404,40 +495,50 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
             </div>
           </div>
 
-          <div className={styles.contextGrid}>
-            <div className={styles.contextCard}>
-              <div className={styles.contextLabel}>Supported constructs</div>
-              <div className={styles.pillRow}>
-                {(capabilities?.supportedConstructs ?? []).map((construct) => (
-                  <span key={construct} className={styles.pill}>
-                    {construct}
-                  </span>
-                ))}
+          <div className={styles.promptSupportGrid}>
+            <div className={styles.contextGrid}>
+              <div className={styles.contextCard}>
+                <div className={styles.contextLabel}>Supported constructs</div>
+                <div className={styles.pillRow}>
+                  {(capabilities?.supportedConstructs ?? []).map((construct) => (
+                    <span key={construct} className={styles.pill}>
+                      {construct}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <div className={styles.contextCard}>
+                <div className={styles.contextLabel}>Signal types</div>
+                <div className={styles.pillRow}>
+                  {supportedSignalEntries.map((entry) => (
+                    <span key={entry.typeName} className={styles.pill}>
+                      {entry.typeName}
+                    </span>
+                  ))}
+                </div>
               </div>
             </div>
-            <div className={styles.contextCard}>
-              <div className={styles.contextLabel}>Signal types</div>
-              <div className={styles.pillRow}>
-                {supportedSignalEntries.map((entry) => (
-                  <span key={entry.typeName} className={styles.pill}>
-                    {entry.typeName}
-                  </span>
-                ))}
-              </div>
-            </div>
-          </div>
 
-          <div className={styles.guidanceCard}>
-            <div className={styles.contextLabel}>Best results</div>
-            <ul className={styles.guidanceList}>
-              <li>Describe one change per turn.</li>
-              <li>Mention exact route, model, signal, or plugin names when editing existing config.</li>
-              <li>Drafts stay review-only until you apply them to Builder.</li>
-            </ul>
+            <div className={styles.guidanceCard}>
+              <div className={styles.contextLabel}>Best results</div>
+              <div className={styles.tipList}>
+                <div className={styles.tipItem}>Describe one change per turn.</div>
+                <div className={styles.tipItem}>
+                  Mention exact route, model, signal, or plugin names when editing existing config.
+                </div>
+                <div className={styles.tipItem}>
+                  Drafts stay review-only until you apply them to Builder.
+                </div>
+              </div>
+            </div>
           </div>
         </section>
 
-        <section className={styles.card} data-testid="builder-nl-review">
+        <section
+          className={`${styles.card} ${!plannerResult ? styles.reviewCardEmpty : ""}`}
+          data-testid="builder-nl-review"
+          ref={reviewSectionRef}
+        >
           <div className={styles.sectionHeader}>
             <div>
               <h3 className={styles.sectionTitle}>Review</h3>
@@ -448,9 +549,38 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
           </div>
 
           {!plannerResult && (
-            <div className={styles.emptyState}>
-              <strong>Draft review will appear here.</strong>
-              <span>Generate one change from the prompt panel, then review assumptions, proposed changes, and the canonical DSL result before applying it.</span>
+            <div className={styles.emptyReviewBody}>
+              <div className={styles.emptyState}>
+                <strong>Draft review will appear here.</strong>
+                <span>
+                  Generate one change from the prompt panel, then inspect the
+                  planner interpretation, assumptions, semantic changes, and
+                  canonical DSL result before applying it.
+                </span>
+              </div>
+              <div className={styles.emptySteps}>
+                <div className={styles.emptyStep}>
+                  <span className={styles.emptyStepIndex}>1</span>
+                  <div>
+                    <strong>Describe one change</strong>
+                    <p>Use exact route, model, signal, or plugin names when editing existing config.</p>
+                  </div>
+                </div>
+                <div className={styles.emptyStep}>
+                  <span className={styles.emptyStepIndex}>2</span>
+                  <div>
+                    <strong>Review assumptions and changes</strong>
+                    <p>Check the semantic change summary first, then inspect the diff or full draft if needed.</p>
+                  </div>
+                </div>
+                <div className={styles.emptyStep}>
+                  <span className={styles.emptyStepIndex}>3</span>
+                  <div>
+                    <strong>Apply only when ready</strong>
+                    <p>Applying replaces the working Builder DSL, then recompiles it so deploy preview uses the new draft.</p>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
 
@@ -515,7 +645,7 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
                     draftIssueCount === 0 ? styles.validBadge : styles.invalidBadge
                   }
                 >
-                  {draftIssueCount === 0
+                        {draftIssueCount === 0
                     ? "Draft validates cleanly"
                     : formatDraftIssueSummary(
                         draftErrorCount,
@@ -529,6 +659,16 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
                   </span>
                 )}
               </div>
+
+              {applyState === "applied" && (
+                <div
+                  ref={appliedBannerRef}
+                  className={styles.appliedBanner}
+                  data-testid="builder-nl-applied-banner"
+                >
+                  Draft applied to Builder. The current working DSL now matches this reviewed draft.
+                </div>
+              )}
 
               {draftDiagnostics.length > 0 && (
                 <div className={styles.diagnosticList}>
@@ -575,6 +715,40 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
 
                 {activeReviewTab === "changes" && (
                   <div className={styles.reviewPanel}>
+                    <div className={styles.semanticHighlights}>
+                      <div className={styles.highlightCard}>
+                        <span className={styles.statLabel}>Review mode</span>
+                        <strong>
+                          {draftDiff?.removals
+                            ? "Update existing Builder DSL"
+                            : "Append reviewed draft to Builder DSL"}
+                        </strong>
+                        <p>
+                          {draftMatchesBuilder
+                            ? "Builder already matches this draft."
+                            : "Current Builder DSL remains unchanged until you apply."}
+                        </p>
+                      </div>
+                      <div className={styles.highlightCard}>
+                        <span className={styles.statLabel}>Primary change</span>
+                        <strong>{draftSummary[0] ?? "Draft change"}</strong>
+                        <p>
+                          {draftDiff?.additions ?? 0} added line(s), {draftDiff?.removals ?? 0} removed line(s).
+                        </p>
+                      </div>
+                      <div className={styles.highlightCard}>
+                        <span className={styles.statLabel}>Apply effect</span>
+                        <strong>
+                          {applyState === "applied" ? "Applied to Builder" : "Replaces working DSL"}
+                        </strong>
+                        <p>
+                          {applyState === "applied"
+                            ? "Compile and deploy now use the applied draft."
+                            : "Apply writes this reviewed draft into Builder, then recompiles it."}
+                        </p>
+                      </div>
+                    </div>
+
                     <div className={styles.statGrid}>
                       <div className={styles.statCard}>
                         <span className={styles.statLabel}>Current DSL</span>
@@ -616,6 +790,12 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
                     className={styles.diffPreview}
                     data-testid="builder-nl-diff-preview"
                   >
+                    <div className={styles.diffHeader}>
+                      <span>Op</span>
+                      <span>Current</span>
+                      <span>Draft</span>
+                      <span>Line</span>
+                    </div>
                     {draftDiff?.lines.map((line, index) => (
                       <div
                         key={`${line.kind}-${line.leftNumber ?? "x"}-${line.rightNumber ?? "y"}-${index}`}
@@ -656,7 +836,7 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
                 )}
               </div>
 
-              <div className={styles.actionRow}>
+              <div className={styles.reviewActionBar}>
                 {canRepairDraft && (
                   <button
                     className={styles.secondaryButton}
@@ -670,10 +850,16 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
                 <button
                   className={styles.primaryButton}
                   data-testid="builder-nl-apply-draft"
-                  onClick={() => onApplyDraft(draftDsl)}
+                  onClick={handleApplyDraft}
                   disabled={!canApplyDraft}
                 >
-                  {readonlyMode ? "Readonly" : "Apply to Builder"}
+                  {readonlyMode
+                    ? "Readonly"
+                    : applyState === "applying"
+                      ? "Applying..."
+                      : applyState === "applied"
+                        ? "Applied to Builder"
+                        : "Apply to Builder"}
                 </button>
                 <button
                   className={styles.secondaryButton}
@@ -758,11 +944,32 @@ function formatDraftIssueSummary(
   return `Needs review: ${parts.join(", ")}`;
 }
 
+function formatPlannerBackendLabel(backend: string | null | undefined): string {
+  if (!backend) {
+    return "No backend configured";
+  }
+  if (backend === "preview-rulebased") {
+    return "Rule-based planner";
+  }
+  return backend.replace(/[-_]/g, " ");
+}
+
+function selectDefaultReviewTab(diff: ReturnType<typeof buildDraftDiff>): ReviewTab {
+  if (!diff.hasChanges || (diff.additions > 0 && diff.removals === 0)) {
+    return "changes";
+  }
+  return "diff";
+}
+
 function countLines(value: string): number {
   if (!value.trim()) {
     return 0;
   }
   return value.replace(/\r\n/g, "\n").replace(/\n$/, "").split("\n").length;
+}
+
+function normalizeDslForCompare(value: string): string {
+  return value.replace(/\r\n/g, "\n").trim();
 }
 
 function parseJsonErrorMessage(raw: string): string | null {

@@ -238,6 +238,9 @@ test.describe('Builder NL mode', () => {
     const generateButton = page.getByRole('button', { name: 'Generate draft' })
 
     await expect(page.getByTestId('builder-nl-mode')).toBeVisible()
+    await expect(page.getByTestId('builder-nl-badge-planner')).toContainText('Preview feature')
+    await expect(page.getByTestId('builder-nl-badge-mode')).toContainText('Review before apply')
+    await expect(page.getByTestId('builder-nl-review')).toContainText('Describe one change')
     await expect(generateButton).toBeDisabled()
 
     await promptInput.fill('Create a keyword signal named urgent_signal with keywords "urgent", "asap"')
@@ -256,6 +259,10 @@ test.describe('Builder NL mode', () => {
       'Create a keyword signal urgent_signal for 2 keyword(s).',
     )
     await expect(page.getByTestId('builder-nl-review')).toContainText('Draft validates cleanly')
+    await expect(page.getByTestId('builder-nl-review')).toContainText(
+      'Append reviewed draft to Builder DSL',
+    )
+    await page.getByTestId('builder-nl-review-tab-diff').click()
     await expect(page.getByTestId('builder-nl-diff-preview')).toContainText(
       'SIGNAL keyword urgent_signal',
     )
@@ -618,6 +625,10 @@ test.describe('Builder NL mode', () => {
     )
     await page.getByRole('button', { name: 'Generate draft' }).click()
     await page.getByTestId('builder-nl-apply-draft').click()
+
+    await expect(page.getByTestId('builder-nl-applied-banner')).toContainText(
+      'Draft applied to Builder.',
+    )
 
     await expect(page.getByRole('button', { name: 'Deploy' })).toBeEnabled()
     await page.getByRole('button', { name: 'Deploy' }).click()
