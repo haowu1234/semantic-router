@@ -17,6 +17,7 @@ import {
   getNLAuthoringSchema,
 } from "@/utils/nlAuthoringApi";
 
+import { buildDraftDiff } from "./builderPageNLDiff";
 import { preparePlannerDraft } from "./builderPageNLDraft";
 import styles from "./builderPageNLMode.module.css";
 
@@ -35,6 +36,8 @@ interface RunTurnOptions {
   modeHint?: NLOperationMode;
   context?: NLSessionContext;
 }
+
+type ReviewTab = "changes" | "diff" | "draft";
 
 const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
   dslSource,
@@ -62,6 +65,7 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
   const [draftDsl, setDraftDsl] = useState<string>("");
   const [draftDiagnostics, setDraftDiagnostics] = useState<Diagnostic[]>([]);
   const [draftSummary, setDraftSummary] = useState<string[]>([]);
+  const [activeReviewTab, setActiveReviewTab] = useState<ReviewTab>("changes");
 
   useEffect(() => {
     let cancelled = false;
@@ -129,6 +133,16 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
     return entries.slice(0, 5);
   }, [capabilities?.supportedSignalTypes, schema]);
 
+  const draftDiff = useMemo(() => {
+    if (!draftDsl.trim()) {
+      return null;
+    }
+    return buildDraftDiff(dslSource, draftDsl);
+  }, [draftDsl, dslSource]);
+
+  const draftLineCount = useMemo(() => countLines(draftDsl), [draftDsl]);
+  const currentLineCount = useMemo(() => countLines(dslSource), [dslSource]);
+
   const validateDraft = useCallback((nextDraft: string) => {
     if (!wasmReady || !nextDraft.trim()) {
       setDraftDiagnostics([]);
@@ -165,6 +179,7 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
     setDraftDsl("");
     setDraftDiagnostics([]);
     setDraftSummary([]);
+    setActiveReviewTab("changes");
 
     const preparedDraft = preparePlannerDraft(dslSource, result, schema, ast);
     if (preparedDraft.error) {
@@ -188,6 +203,7 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
     }
     setDraftDsl(preparedDraft.draft.dsl);
     setDraftSummary(preparedDraft.draft.summary);
+    setActiveReviewTab("diff");
     validateDraft(preparedDraft.draft.dsl);
   }, [ast, dslSource, schema, validateDraft]);
 
@@ -315,11 +331,14 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
           </div>
         </div>
         <div className={styles.badgeRow}>
-          <span className={styles.badge}>
-            {capabilities?.plannerBackend ?? "loading planner"}
+          <span
+            className={styles.badge}
+            title={capabilities?.plannerBackend ?? "planner unavailable"}
+          >
+            {capabilities?.plannerAvailable ? "Preview planner" : "Planner unavailable"}
           </span>
           <span className={styles.badge}>
-            {capabilities?.preview ? "preview" : "stable"}
+            {capabilities?.preview ? "Draft-only preview" : "stable"}
           </span>
           {readonlyMode && <span className={styles.badgeWarn}>readonly</span>}
         </div>
@@ -407,6 +426,15 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
               </div>
             </div>
           </div>
+
+          <div className={styles.guidanceCard}>
+            <div className={styles.contextLabel}>Best results</div>
+            <ul className={styles.guidanceList}>
+              <li>Describe one change per turn.</li>
+              <li>Mention exact route, model, signal, or plugin names when editing existing config.</li>
+              <li>Drafts stay review-only until you apply them to Builder.</li>
+            </ul>
+          </div>
         </section>
 
         <section className={styles.card} data-testid="builder-nl-review">
@@ -414,28 +442,35 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
             <div>
               <h3 className={styles.sectionTitle}>Review</h3>
               <p className={styles.sectionMeta}>
-                Validate before apply; invalid drafts stay review-only.
+                Current Builder DSL stays unchanged until you apply a reviewed draft.
               </p>
             </div>
           </div>
 
           {!plannerResult && (
             <div className={styles.emptyState}>
-              Drafts appear here after the planner returns a result.
+              <strong>Draft review will appear here.</strong>
+              <span>Generate one change from the prompt panel, then review assumptions, proposed changes, and the canonical DSL result before applying it.</span>
             </div>
           )}
 
           {plannerResult?.explanation && (
-            <div className={styles.explanation}>{plannerResult.explanation}</div>
+            <div>
+              <div className={styles.contextLabel}>Planner interpretation</div>
+              <div className={styles.explanation}>{plannerResult.explanation}</div>
+            </div>
           )}
 
           {plannerResult?.warnings?.length ? (
-            <div className={styles.warningList}>
-              {plannerResult.warnings.map((warning) => (
-                <div key={`${warning.code}-${warning.message}`} className={styles.warningItem}>
-                  <strong>{warning.code}</strong>: {warning.message}
-                </div>
-              ))}
+            <div>
+              <div className={styles.contextLabel}>Assumptions made</div>
+              <div className={styles.warningList}>
+                {plannerResult.warnings.map((warning) => (
+                  <div key={`${warning.code}-${warning.message}`} className={styles.warningItem}>
+                    <strong>{warning.code}</strong>: {warning.message}
+                  </div>
+                ))}
+              </div>
             </div>
           ) : null}
 
@@ -474,14 +509,6 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
 
           {!!draftDsl && (
             <>
-              <div className={styles.summaryList}>
-                {draftSummary.map((item) => (
-                  <div key={item} className={styles.summaryItem}>
-                    {item}
-                  </div>
-                ))}
-              </div>
-
               <div className={styles.validationRow}>
                 <span
                   className={
@@ -496,7 +523,7 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
                         draftWarningCount,
                       )}
                 </span>
-                {currentContextSummary.errors > 0 && (
+                  {currentContextSummary.errors > 0 && (
                   <span className={styles.hint}>
                     Current DSL has {currentContextSummary.errors} existing error(s).
                   </span>
@@ -513,12 +540,121 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
                 </div>
               )}
 
-              <pre
-                className={styles.codePreview}
-                data-testid="builder-nl-draft-preview"
-              >
-                {draftDsl}
-              </pre>
+              <div className={styles.reviewFrame}>
+                <div className={styles.reviewToolbar}>
+                  <div>
+                    <div className={styles.contextLabel}>Draft review</div>
+                    <div className={styles.sectionMeta}>
+                      Compare the current Builder DSL with the draft before you apply it.
+                    </div>
+                  </div>
+                  <div className={styles.tabRow} data-testid="builder-nl-review-tabs">
+                    <button
+                      className={activeReviewTab === "changes" ? styles.activeTab : styles.tabButton}
+                      data-testid="builder-nl-review-tab-changes"
+                      onClick={() => setActiveReviewTab("changes")}
+                    >
+                      Changes
+                    </button>
+                    <button
+                      className={activeReviewTab === "diff" ? styles.activeTab : styles.tabButton}
+                      data-testid="builder-nl-review-tab-diff"
+                      onClick={() => setActiveReviewTab("diff")}
+                    >
+                      Diff
+                    </button>
+                    <button
+                      className={activeReviewTab === "draft" ? styles.activeTab : styles.tabButton}
+                      data-testid="builder-nl-review-tab-draft"
+                      onClick={() => setActiveReviewTab("draft")}
+                    >
+                      Full draft
+                    </button>
+                  </div>
+                </div>
+
+                {activeReviewTab === "changes" && (
+                  <div className={styles.reviewPanel}>
+                    <div className={styles.statGrid}>
+                      <div className={styles.statCard}>
+                        <span className={styles.statLabel}>Current DSL</span>
+                        <strong>{currentLineCount} line(s)</strong>
+                      </div>
+                      <div className={styles.statCard}>
+                        <span className={styles.statLabel}>Draft DSL</span>
+                        <strong>{draftLineCount} line(s)</strong>
+                      </div>
+                      <div className={styles.statCard}>
+                        <span className={styles.statLabel}>Added</span>
+                        <strong>+{draftDiff?.additions ?? 0}</strong>
+                      </div>
+                      <div className={styles.statCard}>
+                        <span className={styles.statLabel}>Removed</span>
+                        <strong>-{draftDiff?.removals ?? 0}</strong>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className={styles.contextLabel}>Proposed changes</div>
+                      <div className={styles.summaryList}>
+                        {draftSummary.map((item) => (
+                          <div key={item} className={styles.summaryItem}>
+                            {item}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className={styles.infoBox}>
+                      This draft has not changed the current Builder DSL yet. Use <strong>Apply to Builder</strong> to replace the working DSL with this reviewed draft.
+                    </div>
+                  </div>
+                )}
+
+                {activeReviewTab === "diff" && (
+                  <div
+                    className={styles.diffPreview}
+                    data-testid="builder-nl-diff-preview"
+                  >
+                    {draftDiff?.lines.map((line, index) => (
+                      <div
+                        key={`${line.kind}-${line.leftNumber ?? "x"}-${line.rightNumber ?? "y"}-${index}`}
+                        className={
+                          line.kind === "add"
+                            ? styles.diffAdd
+                            : line.kind === "remove"
+                              ? styles.diffRemove
+                              : line.kind === "separator"
+                                ? styles.diffSeparator
+                                : styles.diffContext
+                        }
+                      >
+                        <span className={styles.diffMarker}>
+                          {line.kind === "add"
+                            ? "+"
+                            : line.kind === "remove"
+                              ? "-"
+                              : line.kind === "separator"
+                                ? "..."
+                                : " "}
+                        </span>
+                        <span className={styles.diffNumber}>{line.leftNumber ?? ""}</span>
+                        <span className={styles.diffNumber}>{line.rightNumber ?? ""}</span>
+                        <code className={styles.diffText}>{line.text || " "}</code>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {activeReviewTab === "draft" && (
+                  <pre
+                    className={styles.codePreview}
+                    data-testid="builder-nl-draft-preview"
+                  >
+                    {draftDsl}
+                  </pre>
+                )}
+              </div>
 
               <div className={styles.actionRow}>
                 {canRepairDraft && (
@@ -537,7 +673,7 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
                   onClick={() => onApplyDraft(draftDsl)}
                   disabled={!canApplyDraft}
                 >
-                  {readonlyMode ? "Readonly" : "Apply draft"}
+                  {readonlyMode ? "Readonly" : "Apply to Builder"}
                 </button>
                 <button
                   className={styles.secondaryButton}
@@ -545,7 +681,7 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
                   onClick={() => onOpenDraftInDSL(draftDsl)}
                   disabled={!draftDsl.trim()}
                 >
-                  Open in DSL
+                  Edit in DSL
                 </button>
               </div>
             </>
@@ -620,6 +756,13 @@ function formatDraftIssueSummary(
     parts.push(`${warningCount} warning(s)`);
   }
   return `Needs review: ${parts.join(", ")}`;
+}
+
+function countLines(value: string): number {
+  if (!value.trim()) {
+    return 0;
+  }
+  return value.replace(/\r\n/g, "\n").replace(/\n$/, "").split("\n").length;
 }
 
 function parseJsonErrorMessage(raw: string): string | null {

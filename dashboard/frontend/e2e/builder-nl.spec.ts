@@ -256,6 +256,10 @@ test.describe('Builder NL mode', () => {
       'Create a keyword signal urgent_signal for 2 keyword(s).',
     )
     await expect(page.getByTestId('builder-nl-review')).toContainText('Draft validates cleanly')
+    await expect(page.getByTestId('builder-nl-diff-preview')).toContainText(
+      'SIGNAL keyword urgent_signal',
+    )
+    await page.getByTestId('builder-nl-review-tab-draft').click()
     await expect(page.getByTestId('builder-nl-draft-preview')).toContainText(
       'SIGNAL keyword urgent_signal',
     )
@@ -304,6 +308,7 @@ test.describe('Builder NL mode', () => {
     )
     await page.getByRole('button', { name: 'Generate draft' }).click()
 
+    await page.getByTestId('builder-nl-review-tab-draft').click()
     await expect(page.getByTestId('builder-nl-draft-preview')).toContainText(
       'SIGNAL keyword urgent_signal',
     )
@@ -497,6 +502,7 @@ test.describe('Builder NL mode', () => {
       expect.stringContaining('threshold: 1.5'),
     )
 
+    await page.getByTestId('builder-nl-review-tab-draft').click()
     await expect(page.getByTestId('builder-nl-draft-preview')).toContainText('threshold: 0.7')
     await expect(page.getByTestId('builder-nl-apply-draft')).toBeEnabled()
   })
@@ -542,6 +548,10 @@ test.describe('Builder NL mode', () => {
     await expect(page.getByTestId('builder-nl-review')).toContainText(
       'Update route support_route to use model gpt-4.1-mini.',
     )
+    await expect(page.getByTestId('builder-nl-diff-preview')).toContainText(
+      'gpt-4.1-mini',
+    )
+    await page.getByTestId('builder-nl-review-tab-draft').click()
     await expect(page.getByTestId('builder-nl-draft-preview')).toContainText(
       'ROUTE support_route',
     )
