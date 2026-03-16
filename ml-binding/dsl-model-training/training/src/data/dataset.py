@@ -232,7 +232,8 @@ class DPODataset:
     tokenizer: PreTrainedTokenizer  # Still needed for pad_token setup
     max_length: int = 2048
     max_prompt_length: int = 1024
-    system_prompt: str = "You are a Signal DSL configuration generator. Generate valid Signal DSL configurations."
+    system_prompt: Optional[str] = None
+    prompt_template: Optional[str] = None
     _hf_dataset: Optional[HFDataset] = None
     
     def __post_init__(self):
@@ -260,6 +261,7 @@ class DPODataset:
         processed_samples = []
         skipped = 0
         skipped_reasons = {
+            'empty_prompt': 0,
             'empty_chosen': 0,
             'empty_rejected': 0,
             'none_value': 0,
@@ -269,12 +271,15 @@ class DPODataset:
         for idx, sample in enumerate(self.samples):
             # Get fields with strict validation
             user_prompt = sample.get('prompt')
+            instruction = sample.get('instruction', '')
             chosen = sample.get('chosen')
             rejected = sample.get('rejected')
             
             # Check for None values
             if user_prompt is None:
-                user_prompt = 'Generate a valid Signal DSL configuration.'
+                skipped_reasons['none_value'] += 1
+                skipped += 1
+                continue
             if chosen is None:
                 skipped_reasons['none_value'] += 1
                 skipped += 1
@@ -297,8 +302,19 @@ class DPODataset:
                 user_prompt = str(user_prompt)
             
             # Check for empty strings (after strip)
+            user_prompt = user_prompt.strip()
             chosen = chosen.strip()
             rejected = rejected.strip()
+
+            if isinstance(instruction, str):
+                instruction = instruction.strip()
+            else:
+                instruction = str(instruction).strip()
+
+            if not user_prompt:
+                skipped_reasons['empty_prompt'] += 1
+                skipped += 1
+                continue
             
             if not chosen:
                 skipped_reasons['empty_chosen'] += 1
@@ -309,9 +325,18 @@ class DPODataset:
                 skipped += 1
                 continue
             
-            # Build simple text prompt (no chat template)
-            # TRL's tokenize_row expects raw prompt text that will be concatenated with response
-            full_prompt = f"{self.system_prompt}\n\n{user_prompt.strip()}\n\nResponse:\n"
+            if self.prompt_template:
+                full_prompt = self.prompt_template.format(
+                    prompt=user_prompt,
+                    instruction=instruction or user_prompt,
+                )
+            elif self.system_prompt:
+                if instruction:
+                    full_prompt = f"{self.system_prompt}\n\n{instruction}\n\n{user_prompt}\n\nResponse:\n"
+                else:
+                    full_prompt = f"{self.system_prompt}\n\n{user_prompt}\n\nResponse:\n"
+            else:
+                full_prompt = user_prompt
             
             # Use standard string format for DPO
             processed_sample = {
@@ -381,7 +406,9 @@ class DPODataset:
         file_path: str | Path,
         tokenizer: PreTrainedTokenizer,
         max_length: int = 2048,
+        max_prompt_length: int = 1024,
         system_prompt: Optional[str] = None,
+        prompt_template: Optional[str] = None,
         max_samples: Optional[int] = None,
     ) -> "DPODataset":
         """Create dataset from JSONL file."""
@@ -393,9 +420,12 @@ class DPODataset:
             'samples': samples,
             'tokenizer': tokenizer,
             'max_length': max_length,
+            'max_prompt_length': max_prompt_length,
         }
         if system_prompt is not None:
             kwargs['system_prompt'] = system_prompt
+        if prompt_template is not None:
+            kwargs['prompt_template'] = prompt_template
             
         return cls(**kwargs)
 
@@ -435,11 +465,15 @@ def create_dataset(
     
     elif stage == "stage3_dpo":
         system_prompt = config.get('data', {}).get('system_prompt')
+        prompt_template = config.get('data', {}).get('prompt_template')
+        max_prompt_length = config.get('data', {}).get('max_prompt_length', 1024)
         return DPODataset.from_jsonl(
             file_path=file_path,
             tokenizer=tokenizer,
             max_length=max_length,
+            max_prompt_length=max_prompt_length,
             system_prompt=system_prompt,
+            prompt_template=prompt_template,
             max_samples=max_samples,
         )
     

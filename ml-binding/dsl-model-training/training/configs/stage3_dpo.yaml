@@ -59,6 +59,7 @@ early_stopping:
 data:
   train_file: "stage3_dpo.jsonl"
   eval_file: "stage3_dpo_eval.jsonl"
+  max_prompt_length: 1024
   
   # Data format: preference pairs
   format: "preference"

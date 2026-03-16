@@ -12,7 +12,6 @@ Usage:
 """
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -30,6 +29,47 @@ from trainers.base_trainer import DSLTrainer
 from trainers.sft_trainer import DSLSFTTrainer
 from trainers.dpo_trainer import DSLDPOTrainer
 from evaluation.evaluator import DSLEvaluator
+
+
+def resolve_data_file(data_dir: Path, *candidate_names: str) -> Path:
+    """Return the first dataset file that exists, keeping legacy filenames compatible."""
+    for candidate in candidate_names:
+        path = data_dir / candidate
+        if path.exists():
+            return path
+    raise FileNotFoundError(
+        f"None of the dataset files exist in {data_dir}: {', '.join(candidate_names)}"
+    )
+
+
+def load_model_from_checkpoint(
+    checkpoint: str | None,
+    config: dict,
+    logger: TrainingLogger,
+    is_trainable: bool,
+) -> tuple[torch.nn.Module, object, bool]:
+    """Load either a merged model checkpoint or a PEFT adapter checkpoint."""
+    base_model_name = config['model']['name']
+
+    if not checkpoint:
+        logger.logger.info(f"Loading base model: {base_model_name}")
+        model, tokenizer = load_model_and_tokenizer(base_model_name, config)
+        return model, tokenizer, False
+
+    checkpoint_path = Path(checkpoint)
+    adapter_config_path = checkpoint_path / "adapter_config.json"
+
+    if adapter_config_path.exists():
+        logger.logger.info(
+            f"Loading base model {base_model_name} with PEFT adapter from: {checkpoint_path}"
+        )
+        base_model, tokenizer = load_model_and_tokenizer(base_model_name, config)
+        model = load_peft_model(base_model, checkpoint_path, is_trainable=is_trainable)
+        return model, tokenizer, True
+
+    logger.logger.info(f"Loading full model checkpoint: {checkpoint_path}")
+    model, tokenizer = load_model_and_tokenizer(str(checkpoint_path), config)
+    return model, tokenizer, False
 
 
 def find_latest_checkpoint(output_dir: Path) -> str | None:
@@ -70,6 +110,7 @@ def train_stage1(
     # Load stage config
     stage_config = load_config(Path(__file__).parent.parent / "configs" / "stage1_pt.yaml")
     config = merge_configs(config_to_dict(config), config_to_dict(stage_config))
+    data_config = config.get('data', {})
     
     # Update output dir
     stage_output = output_dir / "stage1_pt"
@@ -87,15 +128,28 @@ def train_stage1(
     
     # Load datasets
     logger.logger.info("Loading datasets...")
+    train_file = resolve_data_file(
+        data_dir,
+        data_config.get('train_file', 'stage1_syntax_pt.jsonl'),
+        "stage1_syntax_pt_train.jsonl",
+        "stage1_syntax_pt.jsonl",
+    )
+    eval_file = resolve_data_file(
+        data_dir,
+        data_config.get('eval_file', 'stage1_syntax_pt_eval.jsonl'),
+        "stage1_syntax_pt_eval.jsonl",
+    )
     train_dataset = DSLDataset.from_jsonl(
-        data_dir / "stage1_syntax_pt.jsonl",
+        train_file,
         tokenizer,
         max_length=config['model']['max_length'],
+        template=data_config.get('template', "{dsl}"),
     )
     eval_dataset = DSLDataset.from_jsonl(
-        data_dir / "stage1_syntax_pt_eval.jsonl",
+        eval_file,
         tokenizer,
         max_length=config['model']['max_length'],
+        template=data_config.get('template', "{dsl}"),
     )
     logger.logger.info(f"Train samples: {len(train_dataset)}")
     logger.logger.info(f"Eval samples: {len(eval_dataset)}")
@@ -133,6 +187,7 @@ def train_stage2(
     # Load stage config
     stage_config = load_config(Path(__file__).parent.parent / "configs" / "stage2_sft.yaml")
     config = merge_configs(config_to_dict(config), config_to_dict(stage_config))
+    data_config = config.get('data', {})
     
     # Update output dir
     stage_output = output_dir / "stage2_sft"
@@ -148,29 +203,44 @@ def train_stage2(
             resume_from_checkpoint = None
     
     # Load from stage1 checkpoint if available
-    model_name = stage1_checkpoint if stage1_checkpoint else config['model']['name']
-    
-    logger.logger.info(f"Loading model: {model_name}")
-    model, tokenizer = load_model_and_tokenizer(
-        model_name,
+    model, tokenizer, stage1_is_peft = load_model_from_checkpoint(
+        stage1_checkpoint,
         config,
+        logger,
+        is_trainable=True,
     )
-    
-    # Create PEFT model (or continue from stage1)
-    if not stage1_checkpoint:
+
+    # Create PEFT model when starting fresh or from a merged/full checkpoint.
+    if not stage1_is_peft:
         model = create_peft_model(model, config)
     
     # Load datasets
     logger.logger.info("Loading datasets...")
+    train_file = resolve_data_file(
+        data_dir,
+        "stage2_sft_train.jsonl",
+        data_config.get('train_file', 'stage2_sft.jsonl'),
+        "stage2_sft.jsonl",
+    )
+    eval_file = resolve_data_file(
+        data_dir,
+        "stage2_sft_eval.jsonl",
+        data_config.get('eval_file', 'stage2_sft_eval.jsonl'),
+        "stage2_sft_eval.jsonl",
+    )
     train_dataset = SFTDataset.from_jsonl(
-        data_dir / "stage2_sft.jsonl",
+        train_file,
         tokenizer,
         max_length=config['model']['max_length'],
+        system_prompt=data_config.get('system_prompt'),
+        default_instruction=data_config.get('default_instruction'),
     )
     eval_dataset = SFTDataset.from_jsonl(
-        data_dir / "stage2_sft_eval.jsonl",
+        eval_file,
         tokenizer,
         max_length=config['model']['max_length'],
+        system_prompt=data_config.get('system_prompt'),
+        default_instruction=data_config.get('default_instruction'),
     )
     logger.logger.info(f"Train samples: {len(train_dataset)}")
     logger.logger.info(f"Eval samples: {len(eval_dataset)}")
@@ -208,58 +278,30 @@ def train_stage3(
     # Load stage config
     stage_config = load_config(Path(__file__).parent.parent / "configs" / "stage3_dpo.yaml")
     config = merge_configs(config_to_dict(config), config_to_dict(stage_config))
+    data_config = config.get('data', {})
     
     # Update output dir
     stage_output = output_dir / "stage3_dpo"
     config['training']['output_dir'] = str(stage_output)
     
-    # Determine base model name (always need base model for PEFT)
-    base_model_name = config['model']['name']
-    
-    # Check if stage2_checkpoint is a PEFT checkpoint
-    is_peft_checkpoint = False
-    if stage2_checkpoint:
-        checkpoint_path = Path(stage2_checkpoint)
-        # PEFT checkpoints have adapter_config.json
-        if (checkpoint_path / "adapter_config.json").exists():
-            is_peft_checkpoint = True
-            logger.logger.info(f"Detected PEFT checkpoint at: {stage2_checkpoint}")
-        else:
-            # It might be a merged/full model
-            logger.logger.info(f"Detected full model checkpoint at: {stage2_checkpoint}")
-            base_model_name = stage2_checkpoint
-    
-    # Load base model and tokenizer
-    logger.logger.info(f"Loading base model: {base_model_name}")
-    model, tokenizer = load_model_and_tokenizer(
-        base_model_name,
+    # Load training and reference models from the same starting checkpoint.
+    model, tokenizer, stage2_is_peft = load_model_from_checkpoint(
+        stage2_checkpoint,
         config,
+        logger,
+        is_trainable=True,
     )
-    
-    # Handle PEFT model loading
-    if is_peft_checkpoint:
-        # Load PEFT adapter from stage2 checkpoint
-        from models.dsl_model import load_peft_model
-        logger.logger.info(f"Loading PEFT adapter from: {stage2_checkpoint}")
-        model = load_peft_model(model, stage2_checkpoint, is_trainable=True)
-        model.print_trainable_parameters()
-    else:
-        # Create new PEFT model
+    if not stage2_is_peft:
         logger.logger.info("Creating new PEFT model for DPO training...")
         model = create_peft_model(model, config)
-    
-    # Load reference model (for DPO) - should match the training model's starting point
+
     logger.logger.info("Loading reference model...")
-    ref_model, _ = load_model_and_tokenizer(
-        base_model_name,
+    ref_model, _, _ = load_model_from_checkpoint(
+        stage2_checkpoint,
         config,
+        logger,
+        is_trainable=False,
     )
-    
-    # If we have a PEFT checkpoint, load it for reference model too (but frozen)
-    if is_peft_checkpoint:
-        from models.dsl_model import load_peft_model
-        logger.logger.info(f"Loading PEFT adapter for reference model from: {stage2_checkpoint}")
-        ref_model = load_peft_model(ref_model, stage2_checkpoint, is_trainable=False)
     
     ref_model.eval()
     for param in ref_model.parameters():
@@ -267,15 +309,33 @@ def train_stage3(
     
     # Load datasets
     logger.logger.info("Loading datasets...")
+    train_file = resolve_data_file(
+        data_dir,
+        "stage3_dpo_train.jsonl",
+        data_config.get('train_file', 'stage3_dpo.jsonl'),
+        "stage3_dpo.jsonl",
+    )
+    eval_file = resolve_data_file(
+        data_dir,
+        "stage3_dpo_eval.jsonl",
+        data_config.get('eval_file', 'stage3_dpo_eval.jsonl'),
+        "stage3_dpo_eval.jsonl",
+    )
     train_dpo_dataset = DPODataset.from_jsonl(
-        data_dir / "stage3_dpo.jsonl",
+        train_file,
         tokenizer,
         max_length=config['model']['max_length'],
+        max_prompt_length=data_config.get('max_prompt_length', 1024),
+        system_prompt=data_config.get('system_prompt'),
+        prompt_template=data_config.get('prompt_template'),
     )
     eval_dpo_dataset = DPODataset.from_jsonl(
-        data_dir / "stage3_dpo_eval.jsonl",
+        eval_file,
         tokenizer,
         max_length=config['model']['max_length'],
+        max_prompt_length=data_config.get('max_prompt_length', 1024),
+        system_prompt=data_config.get('system_prompt'),
+        prompt_template=data_config.get('prompt_template'),
     )
     logger.logger.info(f"Train samples: {len(train_dpo_dataset)}")
     logger.logger.info(f"Eval samples: {len(eval_dpo_dataset)}")

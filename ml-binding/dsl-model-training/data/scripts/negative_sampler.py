@@ -32,6 +32,18 @@ from typing import Generator, Callable
 from dataclasses import dataclass
 
 
+MODEL_CANDIDATES = [
+    "gpt-4o",
+    "gpt-4o-mini",
+    "deepseek-r1",
+    "deepseek-coder",
+    "qwen2.5:7b",
+    "qwen2.5:14b",
+    "qwen2.5:32b",
+    "claude-3-sonnet",
+]
+
+
 # 变异类型定义
 @dataclass
 class MutationType:
@@ -760,6 +772,146 @@ def mutate_encoding_bom(dsl: str) -> str:
     return '\ufeff' + dsl
 
 
+def _extract_signal_refs(expr: str) -> list[str]:
+    """提取 WHEN 表达式中的原子信号引用。"""
+    return re.findall(r'\w+\("[^"]+"\)', expr)
+
+
+def _extract_defined_signal_refs(dsl: str) -> list[str]:
+    """提取 DSL 中已定义的信号引用形式。"""
+    refs = []
+    for match in re.finditer(r'SIGNAL\s+(\w+)\s+(\w+)\s*\{', dsl):
+        refs.append(f'{match.group(1)}("{match.group(2)}")')
+    return refs
+
+
+def mutate_intent_wrong_model_binding(dsl: str) -> str:
+    """将模型绑定替换为另一个模型。"""
+    matches = list(re.finditer(r'(MODEL\s+)"([^"]+)"', dsl))
+    if not matches:
+        return dsl
+
+    match = random.choice(matches)
+    current_model = match.group(2)
+    alternatives = [m for m in MODEL_CANDIDATES if m != current_model]
+    if not alternatives:
+        return dsl
+
+    replacement = random.choice(alternatives)
+    return dsl[:match.start(2)] + replacement + dsl[match.end(2):]
+
+
+def mutate_intent_missing_condition(dsl: str) -> str:
+    """删掉或替换部分条件，制造意图缺失。"""
+    when_pattern = r'(WHEN\s+)(.+?)(\n\s*(?:MODEL|PLUGIN|ALGORITHM|$))'
+    match = re.search(when_pattern, dsl, re.DOTALL)
+    if not match:
+        return dsl
+
+    original_expr = match.group(2).strip()
+    refs = _extract_signal_refs(original_expr)
+    if len(refs) >= 2:
+        new_expr = refs[0]
+    else:
+        defined_refs = [ref for ref in _extract_defined_signal_refs(dsl) if ref not in refs]
+        if not defined_refs:
+            return dsl
+        new_expr = random.choice(defined_refs)
+
+    return dsl[:match.start(2)] + new_expr + dsl[match.end(2):]
+
+
+def mutate_intent_wrong_priority(dsl: str) -> str:
+    """交换优先级，或把优先级显著降低。"""
+    matches = list(re.finditer(r'(PRIORITY\s+)(-?\d+)', dsl))
+    if len(matches) >= 2:
+        first, second = matches[0], matches[1]
+        first_value = first.group(2)
+        second_value = second.group(2)
+        mutated = dsl[:first.start(2)] + second_value + dsl[first.end(2):]
+        offset = len(second_value) - len(first_value)
+        second_start = second.start(2) + offset
+        second_end = second.end(2) + offset
+        return mutated[:second_start] + first_value + mutated[second_end:]
+
+    if matches:
+        match = matches[0]
+        lowered = str(max(1, int(match.group(2)) // 10))
+        if lowered == match.group(2):
+            lowered = "1"
+        return dsl[:match.start(2)] + lowered + dsl[match.end(2):]
+
+    return dsl
+
+
+def mutate_intent_missing_fallback(dsl: str) -> str:
+    """删除最低优先级路由或默认模型配置。"""
+    route_pattern = r'(ROUTE\s+\w+[^{]*\{[^}]*\}\n*)'
+    routes = list(re.finditer(route_pattern, dsl, re.DOTALL))
+    if len(routes) >= 2:
+        target = routes[-1]
+        return dsl[:target.start()] + dsl[target.end():]
+
+    default_model_pattern = r'(\n?\s*default_model:\s*"[^"]+"\s*\n?)'
+    match = re.search(default_model_pattern, dsl)
+    if match:
+        return dsl[:match.start()] + dsl[match.end():]
+
+    return dsl
+
+
+def mutate_intent_wrong_reasoning_attr(dsl: str) -> str:
+    """翻转 reasoning 相关属性。"""
+    reasoning_pattern = r'(reasoning\s*=\s*)(true|false)'
+    match = re.search(reasoning_pattern, dsl)
+    if match:
+        flipped = 'false' if match.group(2) == 'true' else 'true'
+        return dsl[:match.start(2)] + flipped + dsl[match.end(2):]
+
+    effort_pattern = r'(effort\s*=\s*)"([^"]+)"'
+    match = re.search(effort_pattern, dsl)
+    if match:
+        options = ['low', 'medium', 'high']
+        replacement = random.choice([opt for opt in options if opt != match.group(2)])
+        return dsl[:match.start(2)] + replacement + dsl[match.end(2):]
+
+    model_pattern = r'(MODEL\s+"[^"]+")'
+    match = re.search(model_pattern, dsl)
+    if match:
+        return dsl[:match.end(1)] + ' (reasoning = false)' + dsl[match.end(1):]
+
+    return dsl
+
+
+def mutate_near_miss_drop_route(dsl: str) -> str:
+    """删除一个非主要路由，制造近似正确但不完整的配置。"""
+    route_pattern = r'(ROUTE\s+\w+[^{]*\{[^}]*\}\n*)'
+    routes = list(re.finditer(route_pattern, dsl, re.DOTALL))
+    if len(routes) < 2:
+        return dsl
+
+    target = random.choice(routes[1:])
+    return dsl[:target.start()] + dsl[target.end():]
+
+
+def mutate_near_miss_over_scope(dsl: str) -> str:
+    """去掉布尔守卫，使路由匹配范围过宽。"""
+    when_pattern = r'(WHEN\s+)(.+?)(\n\s*(?:MODEL|PLUGIN|ALGORITHM|$))'
+    match = re.search(when_pattern, dsl, re.DOTALL)
+    if not match:
+        return dsl
+
+    expr = match.group(2).strip()
+    refs = _extract_signal_refs(expr)
+    if refs:
+        return dsl[:match.start(2)] + refs[0] + dsl[match.end(2):]
+
+    if expr.startswith('NOT '):
+        return dsl[:match.start(2)] + expr[4:] + dsl[match.end(2):]
+
+    return dsl
+
+
 # 变异类型注册
 MUTATION_TYPES: dict[str, list[MutationType]] = {
     'syntax_error': [
@@ -836,7 +988,31 @@ MUTATION_TYPES: dict[str, list[MutationType]] = {
         MutationType('trailing_whitespace', 'Trailing whitespace in lines', mutate_encoding_trailing_whitespace),
         MutationType('bom', 'UTF-8 BOM at file start', mutate_encoding_bom),
     ],
+    'intent_mismatch': [
+        MutationType('wrong_model_binding', 'Route binds to the wrong model for the original intent', mutate_intent_wrong_model_binding),
+        MutationType('missing_condition', 'Critical routing condition removed or replaced', mutate_intent_missing_condition),
+        MutationType('wrong_priority', 'Route priority changed so intent ordering is wrong', mutate_intent_wrong_priority),
+        MutationType('missing_fallback', 'Fallback route or default model removed', mutate_intent_missing_fallback),
+        MutationType('wrong_reasoning_attr', 'Reasoning-related model attributes are flipped', mutate_intent_wrong_reasoning_attr),
+    ],
+    'near_miss': [
+        MutationType('drop_route', 'Configuration is almost correct but missing one route', mutate_near_miss_drop_route),
+        MutationType('over_scope', 'Route condition broadened so it matches too much traffic', mutate_near_miss_over_scope),
+        MutationType('wrong_priority', 'Near miss caused by route priority drift', mutate_intent_wrong_priority),
+        MutationType('wrong_reasoning_attr', 'Near miss caused by reasoning attribute mismatch', mutate_intent_wrong_reasoning_attr),
+    ],
 }
+
+
+def classify_negative_category(mutation_category: str) -> tuple[str, str]:
+    """Map mutation categories to broad error classes and difficulty."""
+    if mutation_category == 'intent_mismatch':
+        return 'intent_mismatch', 'hard'
+    if mutation_category == 'near_miss':
+        return 'near_miss', 'hard'
+    if mutation_category in {'syntax_error', 'encoding_error'}:
+        return 'legality', 'easy'
+    return 'semantic', 'medium'
 
 
 def generate_negative_sample(sample: dict, mutation_category: str) -> dict | None:
@@ -860,6 +1036,7 @@ def generate_negative_sample(sample: dict, mutation_category: str) -> dict | Non
         return None
     
     dsl_hash = hashlib.md5(mutated_dsl.encode()).hexdigest()[:8]
+    error_class, difficulty = classify_negative_category(mutation_category)
     
     return {
         'id': f"neg_{mutation_category}_{mutation.name}_{dsl_hash}",
@@ -868,6 +1045,8 @@ def generate_negative_sample(sample: dict, mutation_category: str) -> dict | Non
         'mutation_category': mutation_category,
         'mutation_type': mutation.name,
         'mutation_description': mutation.description,
+        'error_class': error_class,
+        'difficulty': difficulty,
         'valid': False,
         'original_dsl': dsl,
         'complexity': sample.get('complexity', 'unknown'),

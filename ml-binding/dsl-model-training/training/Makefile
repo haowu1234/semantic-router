@@ -3,7 +3,7 @@
 # Configuration
 DATA_DIR ?= ../data
 OUTPUT_DIR ?= ./checkpoints
-PREPARED_DATA_DIR ?= ./prepared_data
+PREPARED_DATA_DIR ?= $(DATA_DIR)/final
 CONFIG ?= configs/base.yaml
 MODEL ?= Qwen/Qwen2.5-3B
 STAGES ?= 1,2,3
@@ -14,10 +14,8 @@ install:
 
 # Prepare training data
 prepare:
-	@echo "📦 Preparing training data..."
-	python scripts/prepare_data.py \
-		--data-dir $(DATA_DIR) \
-		--output-dir $(PREPARED_DATA_DIR)
+	@echo "📦 Building training data via data pipeline..."
+	$(MAKE) -C $(DATA_DIR) validate
 
 # Train all stages
 train-all: prepare
@@ -68,13 +66,10 @@ evaluate:
 # Quick test (small data, few steps)
 quick-test:
 	@echo "🧪 Running quick test..."
-	python scripts/prepare_data.py \
-		--data-dir $(DATA_DIR) \
-		--output-dir ./test_data \
-		--eval-ratio 0.5
+	$(MAKE) -C $(DATA_DIR) validate-skip
 	python scripts/train_all.py \
 		--config configs/base.yaml \
-		--data-dir ./test_data \
+		--data-dir $(PREPARED_DATA_DIR) \
 		--output-dir ./test_checkpoints \
 		--stages 1 \
 		--skip-eval
@@ -82,9 +77,7 @@ quick-test:
 # Clean
 clean:
 	rm -rf $(OUTPUT_DIR)
-	rm -rf $(PREPARED_DATA_DIR)
 	rm -rf ./logs
-	rm -rf ./test_data
 	rm -rf ./test_checkpoints
 
 # Help

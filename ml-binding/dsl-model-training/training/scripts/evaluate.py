@@ -15,8 +15,31 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from utils.config import load_config
 from utils.logger import setup_logger
-from models.dsl_model import load_model_and_tokenizer
+from models.dsl_model import load_model_and_tokenizer, load_peft_model
 from evaluation.evaluator import DSLEvaluator
+
+
+def load_evaluation_model(model_path: Path, config: dict, logger):
+    """Load either a merged checkpoint or a PEFT adapter checkpoint for evaluation."""
+    adapter_config_path = model_path / "adapter_config.json"
+    if adapter_config_path.exists():
+        base_model_name = config.get('model', {}).get('name', 'Qwen/Qwen2.5-Coder-7B-Instruct')
+        logger.info(f"Detected PEFT checkpoint, loading base model: {base_model_name}")
+        base_model, tokenizer = load_model_and_tokenizer(
+            base_model_name,
+            config,
+            device_map="auto",
+        )
+        logger.info(f"Loading PEFT adapter from: {model_path}")
+        model = load_peft_model(base_model, model_path, is_trainable=False)
+        return model, tokenizer
+
+    logger.info("Detected merged/full checkpoint")
+    return load_model_and_tokenizer(
+        str(model_path),
+        config,
+        device_map="auto",
+    )
 
 
 def main():
@@ -47,10 +70,7 @@ def main():
     logger.info(f"Loading model from: {args.model}")
     
     # Load model
-    model, tokenizer = load_model_and_tokenizer(
-        str(args.model),
-        config,
-    )
+    model, tokenizer = load_evaluation_model(args.model, config, logger)
     model.eval()
     
     # Create evaluator

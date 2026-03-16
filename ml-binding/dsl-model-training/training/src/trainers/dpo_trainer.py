@@ -124,6 +124,7 @@ class DSLDPOTrainer:
         """Build DPO-specific training configuration."""
         training_config = self.config.get('training', {})
         dpo_config = self.config.get('dpo', {})
+        data_config = self.config.get('data', {})
         wandb_config = self.config.get('wandb', {})
         
         output_dir = training_config.get('output_dir', './checkpoints/stage3_dpo')
@@ -179,7 +180,7 @@ class DSLDPOTrainer:
             
             # Max length settings - CRITICAL for proper tokenization
             max_length=self.config.get('model', {}).get('max_length', 2048),
-            max_prompt_length=512,  # Shorter prompt to leave room for response
+            max_prompt_length=data_config.get('max_prompt_length', 1024),
             truncation_mode='keep_end',  # Keep the response end when truncating
             
             # Ensure correct model type detection

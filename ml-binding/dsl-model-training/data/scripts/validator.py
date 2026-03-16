@@ -1,32 +1,29 @@
 #!/usr/bin/env python3
 """
-DSL 数据验证管线
+DSL 数据验证与最终数据集构建管线。
 
-对所有生成的 DSL 数据进行验证，确保标签正确：
-1. 语法验证 (调用 Go parser)
-2. 语义验证 (调用 Go validator)  
-3. 编译验证 (调用 Go compiler)
-
-同时构建最终训练数据集。
-
-用法:
-    python validator.py --input . --output final/ --parser-bin /path/to/parser
+职责:
+1. 验证正样本 DSL（syntax / semantic / compile）
+2. 构建 train/eval/test 的 Stage 2 SFT 数据
+3. 基于同一 NL prompt 构建 conditional DPO 数据
+4. 输出统一的 final/ 数据集文件供训练直接消费
 """
 
 import argparse
 import json
+import random
+import re
 import subprocess
-import os
-import hashlib
-from pathlib import Path
-from typing import Generator
-from dataclasses import dataclass
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass
 class ValidationResult:
-    """验证结果"""
+    """DSL 验证结果。"""
+
     syntax_valid: bool
     semantic_valid: bool
     compile_valid: bool
@@ -35,49 +32,43 @@ class ValidationResult:
 
 
 def validate_dsl_with_go(dsl: str, parser_bin: Path | None) -> ValidationResult:
-    """使用 Go 工具验证 DSL
-    
-    如果 parser_bin 可用，调用它进行验证；
-    否则使用简单的正则检查作为 fallback。
-    """
+    """用 Go parser 做完整验证；不可用时退回简单验证。"""
     if parser_bin and parser_bin.exists():
         try:
-            # 调用 Go parser 进行验证
             result = subprocess.run(
-                [str(parser_bin), '--validate', '--json'],
+                [str(parser_bin), "--validate", "--json"],
                 input=dsl,
                 capture_output=True,
                 text=True,
-                timeout=10
+                timeout=10,
             )
-            
+
             if result.returncode == 0:
                 output = json.loads(result.stdout)
                 return ValidationResult(
-                    syntax_valid=output.get('syntax_valid', True),
-                    semantic_valid=output.get('semantic_valid', True),
-                    compile_valid=output.get('compile_valid', True),
-                    errors=output.get('errors', []),
-                    warnings=output.get('warnings', []),
+                    syntax_valid=output.get("syntax_valid", True),
+                    semantic_valid=output.get("semantic_valid", True),
+                    compile_valid=output.get("compile_valid", True),
+                    errors=output.get("errors", []),
+                    warnings=output.get("warnings", []),
                 )
-            else:
-                return ValidationResult(
-                    syntax_valid=False,
-                    semantic_valid=False,
-                    compile_valid=False,
-                    errors=[result.stderr or 'Parser failed'],
-                    warnings=[],
-                )
+
+            return ValidationResult(
+                syntax_valid=False,
+                semantic_valid=False,
+                compile_valid=False,
+                errors=[result.stderr or "Parser failed"],
+                warnings=[],
+            )
         except subprocess.TimeoutExpired:
             return ValidationResult(
                 syntax_valid=False,
                 semantic_valid=False,
                 compile_valid=False,
-                errors=['Validation timeout'],
+                errors=["Validation timeout"],
                 warnings=[],
             )
         except json.JSONDecodeError:
-            # Parser 可能不支持 JSON 输出，检查返回码
             return ValidationResult(
                 syntax_valid=result.returncode == 0,
                 semantic_valid=False,
@@ -85,59 +76,51 @@ def validate_dsl_with_go(dsl: str, parser_bin: Path | None) -> ValidationResult:
                 errors=[],
                 warnings=[],
             )
-        except Exception as e:
+        except Exception as exc:
             return ValidationResult(
                 syntax_valid=False,
                 semantic_valid=False,
                 compile_valid=False,
-                errors=[str(e)],
+                errors=[str(exc)],
                 warnings=[],
             )
-    
-    # Fallback: 简单的语法检查
+
     return validate_dsl_simple(dsl)
 
 
 def validate_dsl_simple(dsl: str) -> ValidationResult:
-    """简单的 DSL 语法验证 (无 Go 工具时的 fallback)"""
-    import re
-    
+    """轻量级 DSL 验证，用于 fallback 或 skip-validation。"""
     errors = []
     warnings = []
-    
-    # 检查括号匹配
-    brace_count = dsl.count('{') - dsl.count('}')
-    if brace_count != 0:
-        errors.append(f'Brace mismatch: {brace_count} unclosed')
-    
-    # 检查引号匹配 (简化检查)
-    quote_count = dsl.count('"')
-    if quote_count % 2 != 0:
-        errors.append('Unclosed string literal')
-    
-    # 检查关键字拼写
-    keywords = ['SIGNAL', 'ROUTE', 'PLUGIN', 'BACKEND', 'GLOBAL', 'PRIORITY', 'WHEN', 'MODEL', 'ALGORITHM']
-    for kw in keywords:
-        # 检查常见拼写错误
-        wrong_patterns = [kw + 'S', kw[:-1], kw[:3] + kw[4:]]
+
+    brace_delta = dsl.count("{") - dsl.count("}")
+    if brace_delta != 0:
+        errors.append(f"Brace mismatch: {brace_delta} unclosed")
+
+    if dsl.count('"') % 2 != 0:
+        errors.append("Unclosed string literal")
+
+    keywords = ["SIGNAL", "ROUTE", "PLUGIN", "BACKEND", "GLOBAL", "PRIORITY", "WHEN", "MODEL", "ALGORITHM"]
+    for keyword in keywords:
+        wrong_patterns = [keyword + "S", keyword[:-1], keyword[:3] + keyword[4:]]
         for wrong in wrong_patterns:
-            if re.search(rf'\b{wrong}\b', dsl, re.IGNORECASE) and wrong != kw:
-                errors.append(f'Possible typo: {wrong} (should be {kw}?)')
-    
-    # 检查信号引用
+            if re.search(rf"\b{wrong}\b", dsl, re.IGNORECASE) and wrong != keyword:
+                errors.append(f"Possible typo: {wrong} (should be {keyword}?)")
+
     defined_signals = set()
-    for match in re.finditer(r'SIGNAL\s+(\w+)\s+(\w+)', dsl):
-        sig_type, sig_name = match.groups()
-        defined_signals.add((sig_type, sig_name))
-    
-    for match in re.finditer(r'WHEN\s+.*?(\w+)\("(\w+)"\)', dsl):
-        sig_type, sig_name = match.groups()
-        if (sig_type, sig_name) not in defined_signals and (sig_type, sig_name.split(':')[0]) not in defined_signals:
-            warnings.append(f'Reference to undefined signal: {sig_type}("{sig_name}")')
-    
+    for match in re.finditer(r"SIGNAL\s+(\w+)\s+(\w+)", dsl):
+        defined_signals.add((match.group(1), match.group(2)))
+
+    when_blocks = re.finditer(r"WHEN\s+.*?(?=\n\s*(?:MODEL|PLUGIN|ALGORITHM)|$)", dsl, re.DOTALL)
+    for block in when_blocks:
+        for match in re.finditer(r"(\w+)\(\"([^\"]+)\"\)", block.group(0)):
+            ref = (match.group(1), match.group(2))
+            if ref not in defined_signals:
+                warnings.append(f'Reference to undefined signal: {match.group(1)}("{match.group(2)}")')
+
     syntax_valid = len(errors) == 0
-    semantic_valid = len([w for w in warnings if 'undefined' in w.lower()]) == 0
-    
+    semantic_valid = len([w for w in warnings if "undefined" in w.lower()]) == 0
+
     return ValidationResult(
         syntax_valid=syntax_valid,
         semantic_valid=semantic_valid,
@@ -147,268 +130,407 @@ def validate_dsl_simple(dsl: str) -> ValidationResult:
     )
 
 
-def load_samples(input_path: Path) -> Generator[dict, None, None]:
-    """递归加载所有 JSONL 文件中的样本"""
+def validate_dsl(dsl: str, parser_bin: Path | None, force_simple: bool = False) -> ValidationResult:
+    """统一验证入口。"""
+    if force_simple:
+        return validate_dsl_simple(dsl)
+    return validate_dsl_with_go(dsl, parser_bin)
+
+
+def load_samples(input_path: Path):
+    """递归加载目录中的 JSONL 样本。"""
     if input_path.is_file():
-        with open(input_path, 'r', encoding='utf-8') as f:
-            for line in f:
+        with open(input_path, "r", encoding="utf-8") as handle:
+            for line in handle:
                 if line.strip():
                     try:
                         yield json.loads(line)
                     except json.JSONDecodeError:
                         continue
-    elif input_path.is_dir():
-        for jsonl_file in sorted(input_path.rglob('*.jsonl')):
-            # 跳过 final/ 目录
-            if 'final' in str(jsonl_file):
-                continue
-            with open(jsonl_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    if line.strip():
-                        try:
-                            yield json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
+        return
+
+    for jsonl_file in sorted(input_path.rglob("*.jsonl")):
+        if "final" in str(jsonl_file):
+            continue
+        with open(jsonl_file, "r", encoding="utf-8") as handle:
+            for line in handle:
+                if line.strip():
+                    try:
+                        yield json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
 
 
-def validate_sample(sample: dict, parser_bin: Path | None) -> tuple[dict, ValidationResult]:
-    """验证单个样本"""
-    dsl = sample.get('dsl', '')
+def normalize_dsl(dsl: str) -> str:
+    """标准化 DSL，用于 pair 去重和等价过滤。"""
+    dsl = re.sub(r"//.*?$", "", dsl, flags=re.MULTILINE)
+    dsl = re.sub(r"/\*.*?\*/", "", dsl, flags=re.DOTALL)
+    dsl = re.sub(r"\s+", " ", dsl)
+    return dsl.strip()
+
+
+def infer_source_id(sample: dict) -> str:
+    """统一获取样本的 source id。"""
+    if sample.get("source_id"):
+        return sample["source_id"]
+    if sample.get("original_id"):
+        return sample["original_id"]
+    return sample.get("id", "")
+
+
+def save_jsonl(records: list[dict], output_path: Path) -> None:
+    """保存 JSONL 文件。"""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def split_by_source_id(samples: list[dict], seed: int = 42, ratios: tuple[float, float, float] = (0.8, 0.1, 0.1)) -> dict[str, list[dict]]:
+    """按 source_id 分桶，保证同一 DSL 家族不会跨 split。"""
+    grouped = defaultdict(list)
+    for sample in samples:
+        grouped[infer_source_id(sample)].append(sample)
+
+    source_ids = list(grouped.keys())
+    rng = random.Random(seed)
+    rng.shuffle(source_ids)
+
+    total = len(source_ids)
+    train_count = int(total * ratios[0])
+    eval_count = int(total * ratios[1])
+
+    train_ids = set(source_ids[:train_count])
+    eval_ids = set(source_ids[train_count:train_count + eval_count])
+    test_ids = set(source_ids[train_count + eval_count:])
+
+    splits = {"train": [], "eval": [], "test": []}
+    for source_id, items in grouped.items():
+        if source_id in train_ids:
+            splits["train"].extend(items)
+        elif source_id in eval_ids:
+            splits["eval"].extend(items)
+        else:
+            splits["test"].extend(items)
+
+    return splits
+
+
+def validate_stage1_sample(sample: dict, parser_bin: Path | None, force_simple: bool) -> tuple[dict | None, ValidationResult]:
+    """验证 Stage 1 正样本。"""
+    dsl = sample.get("dsl", "")
     if not dsl:
-        return sample, ValidationResult(
-            syntax_valid=False,
-            semantic_valid=False,
-            compile_valid=False,
-            errors=['Empty DSL'],
-            warnings=[],
-        )
-    
-    result = validate_dsl_with_go(dsl, parser_bin)
-    return sample, result
+        return None, ValidationResult(False, False, False, ["Empty DSL"], [])
+
+    result = validate_dsl(dsl, parser_bin, force_simple=force_simple)
+    if not result.syntax_valid or not result.semantic_valid or not result.compile_valid:
+        return None, result
+
+    record = {
+        "id": sample.get("id", ""),
+        "source_id": infer_source_id(sample),
+        "dsl": dsl,
+        "complexity": sample.get("complexity", sample.get("metadata", {}).get("complexity", "unknown")),
+    }
+    return record, result
 
 
-def build_stage1_data(samples: list[dict]) -> list[dict]:
-    """构建 Stage 1 (语法预训练) 数据
-    
-    纯 DSL 文本，用于 Causal LM 训练。
-    """
-    return [
-        {
-            'id': s.get('id', ''),
-            'dsl': s.get('dsl', ''),
-            'complexity': s.get('complexity', s.get('metadata', {}).get('complexity', 'unknown')),
-        }
-        for s in samples
-        if s.get('dsl') and s.get('valid', True)
-    ]
+def validate_stage2_sample(sample: dict, parser_bin: Path | None, force_simple: bool) -> tuple[dict | None, ValidationResult]:
+    """验证 Stage 2 正样本，chosen 必须三重校验通过。"""
+    prompt = (sample.get("input") or "").strip()
+    chosen = (sample.get("output") or sample.get("dsl") or "").strip()
+    if not prompt or not chosen:
+        return None, ValidationResult(False, False, False, ["Missing input/output"], [])
+
+    result = validate_dsl(chosen, parser_bin, force_simple=force_simple)
+    if not (result.syntax_valid and result.semantic_valid and result.compile_valid):
+        return None, result
+
+    record = {
+        "id": sample.get("id", ""),
+        "source_id": infer_source_id(sample),
+        "instruction": sample.get(
+            "instruction",
+            "Convert the following natural language description into Signal DSL configuration.",
+        ),
+        "input": prompt,
+        "output": chosen,
+        "style": sample.get("style", "unknown"),
+        "complexity": sample.get("complexity", "unknown"),
+        "chosen_syntax_valid": result.syntax_valid,
+        "chosen_semantic_valid": result.semantic_valid,
+        "chosen_compile_valid": result.compile_valid,
+    }
+    return record, result
 
 
-def build_stage2_data(samples: list[dict]) -> list[dict]:
-    """构建 Stage 2 (SFT) 数据
-    
-    NL→DSL 配对数据，Chat 格式。
-    """
-    sft_data = []
-    for s in samples:
-        if not s.get('input') or not s.get('output'):
-            continue
-        
-        sft_data.append({
-            'id': s.get('id', ''),
-            'instruction': s.get('instruction', 'Convert the following natural language description into Signal DSL configuration.'),
-            'input': s['input'],
-            'output': s['output'],
-            'style': s.get('style', 'unknown'),
-            'complexity': s.get('complexity', 'unknown'),
-        })
-    
-    return sft_data
+def run_parallel_validation(samples: list[dict], validator, parser_bin: Path | None, force_simple: bool, workers: int, progress_label: str) -> tuple[list[dict], int]:
+    """并行验证样本。"""
+    accepted = []
+    rejected = 0
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [
+            executor.submit(validator, sample, parser_bin, force_simple)
+            for sample in samples
+        ]
+        for index, future in enumerate(as_completed(futures), start=1):
+            record, _ = future.result()
+            if record is not None:
+                accepted.append(record)
+            else:
+                rejected += 1
+
+            if index % 500 == 0:
+                print(f"  {progress_label}: validated {index}/{len(samples)}")
+
+    return accepted, rejected
 
 
-def build_stage3_data(positive_samples: list[dict], negative_samples: list[dict]) -> list[dict]:
-    """构建 Stage 3 (DPO) 数据
-    
-    (prompt, chosen, rejected) 三元组。
-    """
-    dpo_data = []
-    
-    # 为每个负样本找到对应的正样本
-    positive_by_id = {s.get('id', ''): s for s in positive_samples}
-    
-    for neg in negative_samples:
-        orig_id = neg.get('original_id', '')
-        orig_dsl = neg.get('original_dsl', '')
-        
-        if not orig_dsl:
-            # 尝试从 positive_samples 找
-            pos = positive_by_id.get(orig_id)
-            if pos:
-                orig_dsl = pos.get('dsl', '')
-        
-        if not orig_dsl or not neg.get('dsl'):
-            continue
-        
-        # 构建简单的 prompt
-        prompt = f"Generate a valid Signal DSL configuration."
-        
-        dpo_data.append({
-            'id': neg.get('id', ''),
-            'prompt': prompt,
-            'chosen': orig_dsl,
-            'rejected': neg.get('dsl', ''),
-            'mutation_type': neg.get('mutation_type', ''),
-            'mutation_category': neg.get('mutation_category', ''),
-        })
-    
-    return dpo_data
+def classify_negative_sample(sample: dict) -> tuple[str, str]:
+    """归类 negative 的 broad error class 和 difficulty。"""
+    error_class = sample.get("error_class")
+    if error_class:
+        difficulty = sample.get("difficulty")
+        if difficulty:
+            return error_class, difficulty
+
+    category = sample.get("mutation_category", "")
+    if category == "intent_mismatch":
+        return "intent_mismatch", "hard"
+    if category == "near_miss":
+        return "near_miss", "hard"
+    if category in {"syntax_error", "encoding_error"}:
+        return "legality", "easy"
+    return "semantic", "medium"
 
 
-def build_eval_benchmark(samples: list[dict], size: int = 200) -> list[dict]:
-    """构建评估基准集"""
-    import random
-    
-    # 按复杂度分层抽样
-    by_complexity = {}
-    for s in samples:
-        c = s.get('complexity', 'unknown')
-        by_complexity.setdefault(c, []).append(s)
-    
-    # 分配比例
-    allocation = {'L1': 0.05, 'L2': 0.20, 'L3': 0.40, 'L4': 0.25, 'L5': 0.10}
-    
+def negative_priority(sample: dict) -> tuple[int, str]:
+    """优先保留 hard negatives。"""
+    error_class, _ = classify_negative_sample(sample)
+    order = {
+        "intent_mismatch": 0,
+        "near_miss": 1,
+        "semantic": 2,
+        "legality": 3,
+    }
+    return order.get(error_class, 4), sample.get("mutation_type", "")
+
+
+def build_conditional_dpo_pairs(
+    stage2_samples: list[dict],
+    negative_samples: list[dict],
+    parser_bin: Path | None,
+    force_simple: bool,
+    max_pairs_per_source: int = 3,
+) -> list[dict]:
+    """基于同一 NL prompt 构建 conditional DPO 数据。"""
+    negatives_by_source = defaultdict(list)
+    for sample in negative_samples:
+        negatives_by_source[infer_source_id(sample)].append(sample)
+
+    pairs = []
+    for sample in stage2_samples:
+        source_id = sample["source_id"]
+        chosen = sample["output"]
+        chosen_norm = normalize_dsl(chosen)
+        prompt = sample["input"]
+        chosen_instruction = sample["instruction"]
+
+        kept = 0
+        seen = set()
+        for negative in sorted(negatives_by_source.get(source_id, []), key=negative_priority):
+            rejected = (negative.get("dsl") or "").strip()
+            if not rejected:
+                continue
+
+            rejected_norm = normalize_dsl(rejected)
+            if rejected_norm == chosen_norm:
+                continue
+
+            dedupe_key = (rejected_norm, negative.get("mutation_type", ""))
+            if dedupe_key in seen:
+                continue
+
+            rejected_result = validate_dsl(rejected, parser_bin, force_simple=force_simple)
+            error_class, difficulty = classify_negative_sample(negative)
+
+            # Hard negatives 应尽量保持 syntax valid，避免退化成拼写纠错器。
+            if error_class in {"intent_mismatch", "near_miss"} and not rejected_result.syntax_valid:
+                continue
+
+            pair = {
+                "id": f"dpo_{sample['id']}_{negative.get('mutation_type', kept)}",
+                "source_id": source_id,
+                "prompt": prompt,
+                "chosen": chosen,
+                "rejected": rejected,
+                "instruction": chosen_instruction,
+                "style": sample.get("style", "unknown"),
+                "complexity": sample.get("complexity", "unknown"),
+                "error_class": error_class,
+                "error_type": negative.get("mutation_type", "unknown"),
+                "difficulty": difficulty,
+                "chosen_syntax_valid": sample["chosen_syntax_valid"],
+                "chosen_semantic_valid": sample["chosen_semantic_valid"],
+                "chosen_compile_valid": sample["chosen_compile_valid"],
+                "rejected_syntax_valid": rejected_result.syntax_valid,
+                "rejected_semantic_valid": rejected_result.semantic_valid,
+                "rejected_compile_valid": rejected_result.compile_valid,
+                "mutation_category": negative.get("mutation_category", ""),
+            }
+            pairs.append(pair)
+            seen.add(dedupe_key)
+            kept += 1
+
+            if kept >= max_pairs_per_source:
+                break
+
+    return pairs
+
+
+def build_eval_benchmark(samples: list[dict], size: int = 200, seed: int = 42) -> list[dict]:
+    """从 test split 构建 prompt-disjoint benchmark。"""
+    rng = random.Random(seed)
+    by_complexity = defaultdict(list)
+    for sample in samples:
+        by_complexity[sample.get("complexity", "unknown")].append(sample)
+
+    allocation = {"L1": 0.05, "L2": 0.20, "L3": 0.40, "L4": 0.25, "L5": 0.10}
     benchmark = []
-    for comp, ratio in allocation.items():
-        pool = by_complexity.get(comp, [])
+    for complexity, ratio in allocation.items():
+        pool = by_complexity.get(complexity, [])
+        rng.shuffle(pool)
         n = min(int(size * ratio), len(pool))
-        if n > 0:
-            benchmark.extend(random.sample(pool, n))
-    
+        benchmark.extend(pool[:n])
+
+    if len(benchmark) < min(size, len(samples)):
+        remaining_ids = {sample["id"] for sample in benchmark}
+        leftovers = [sample for sample in samples if sample["id"] not in remaining_ids]
+        rng.shuffle(leftovers)
+        benchmark.extend(leftovers[: max(0, min(size, len(samples)) - len(benchmark))])
+
     return benchmark
 
 
+def write_split_records(output_dir: Path, prefix: str, splits: dict[str, list[dict]]) -> None:
+    """统一输出 split 文件，同时保留 legacy 文件名兼容训练脚本。"""
+    save_jsonl(splits["train"], output_dir / f"{prefix}_train.jsonl")
+    save_jsonl(splits["eval"], output_dir / f"{prefix}_eval.jsonl")
+    save_jsonl(splits["test"], output_dir / f"{prefix}_test.jsonl")
+
+    if prefix == "stage2_sft":
+        save_jsonl(splits["train"], output_dir / "stage2_sft.jsonl")
+        save_jsonl(splits["eval"], output_dir / "stage2_sft_eval.jsonl")
+    elif prefix == "stage3_dpo":
+        save_jsonl(splits["train"], output_dir / "stage3_dpo.jsonl")
+        save_jsonl(splits["eval"], output_dir / "stage3_dpo_eval.jsonl")
+
+
 def main():
-    parser = argparse.ArgumentParser(description='Validate DSL data and build training datasets')
-    parser.add_argument('--input', type=Path, required=True,
-                        help='Input directory containing all data subdirectories')
-    parser.add_argument('--output', type=Path, required=True,
-                        help='Output directory for final training data')
-    parser.add_argument('--parser-bin', type=Path, default=None,
-                        help='Path to Go DSL parser binary')
-    parser.add_argument('--workers', type=int, default=4,
-                        help='Number of parallel validation workers')
-    parser.add_argument('--skip-validation', action='store_true',
-                        help='Skip validation, trust existing labels')
+    parser = argparse.ArgumentParser(description="Validate DSL data and build final training datasets")
+    parser.add_argument("--input", type=Path, required=True, help="Input directory containing generated data")
+    parser.add_argument("--output", type=Path, required=True, help="Output directory for final datasets")
+    parser.add_argument("--parser-bin", type=Path, default=None, help="Path to Go DSL parser binary")
+    parser.add_argument("--workers", type=int, default=4, help="Number of validation workers")
+    parser.add_argument("--skip-validation", action="store_true", help="Use simple validation instead of Go parser")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for split reproducibility")
+    parser.add_argument("--max-dpo-pairs-per-source", type=int, default=3, help="Maximum DPO pairs per source id")
     args = parser.parse_args()
-    
-    # 确保输出目录存在
+
     args.output.mkdir(parents=True, exist_ok=True)
-    
+
     print("Loading samples...")
     all_samples = list(load_samples(args.input))
     print(f"Loaded {len(all_samples)} samples")
-    
-    # 分类样本
-    dsl_samples = [s for s in all_samples if s.get('dsl') and not s.get('input')]
-    nl_pair_samples = [s for s in all_samples if s.get('input') and s.get('output')]
-    negative_samples = [s for s in all_samples if s.get('valid') == False]
-    
-    print(f"  DSL-only samples: {len(dsl_samples)}")
-    print(f"  NL-DSL pairs: {len(nl_pair_samples)}")
-    print(f"  Negative samples: {len(negative_samples)}")
-    
-    # 验证 (如果启用)
-    valid_dsl_samples = []
-    if not args.skip_validation and dsl_samples:
-        print("\nValidating DSL samples...")
-        
-        with ThreadPoolExecutor(max_workers=args.workers) as executor:
-            futures = [
-                executor.submit(validate_sample, s, args.parser_bin)
-                for s in dsl_samples
-            ]
-            
-            validated = 0
-            errors = 0
-            for future in as_completed(futures):
-                sample, result = future.result()
-                
-                # 更新验证状态
-                if result.syntax_valid:
-                    sample['valid'] = True
-                    sample['validation'] = {
-                        'syntax': True,
-                        'semantic': result.semantic_valid,
-                        'compile': result.compile_valid,
-                        'warnings': result.warnings,
-                    }
-                    valid_dsl_samples.append(sample)
-                else:
-                    sample['valid'] = False
-                    sample['validation_errors'] = result.errors
-                    errors += 1
-                
-                validated += 1
-                if validated % 500 == 0:
-                    print(f"  Validated {validated}/{len(dsl_samples)} samples...")
-        
-        print(f"  Valid: {len(valid_dsl_samples)}, Invalid: {errors}")
-    else:
-        valid_dsl_samples = [s for s in dsl_samples if s.get('valid', True)]
-        print(f"  Skipping validation, using {len(valid_dsl_samples)} samples marked as valid")
-    
-    # 构建 Stage 1 数据
-    print("\nBuilding Stage 1 (Syntax Pretraining) data...")
-    stage1_data = build_stage1_data(valid_dsl_samples)
-    with open(args.output / 'stage1_syntax_pt.jsonl', 'w', encoding='utf-8') as f:
-        for item in stage1_data:
-            f.write(json.dumps(item, ensure_ascii=False) + '\n')
-    print(f"  Stage 1: {len(stage1_data)} samples")
-    
-    # 构建 Stage 2 数据
-    print("\nBuilding Stage 2 (SFT) data...")
-    stage2_data = build_stage2_data(nl_pair_samples)
-    with open(args.output / 'stage2_sft.jsonl', 'w', encoding='utf-8') as f:
-        for item in stage2_data:
-            f.write(json.dumps(item, ensure_ascii=False) + '\n')
-    print(f"  Stage 2: {len(stage2_data)} samples")
-    
-    # 构建 Stage 3 数据
-    print("\nBuilding Stage 3 (DPO) data...")
-    stage3_data = build_stage3_data(valid_dsl_samples, negative_samples)
-    with open(args.output / 'stage3_dpo.jsonl', 'w', encoding='utf-8') as f:
-        for item in stage3_data:
-            f.write(json.dumps(item, ensure_ascii=False) + '\n')
-    print(f"  Stage 3: {len(stage3_data)} samples")
-    
-    # 构建评估基准
-    print("\nBuilding evaluation benchmark...")
-    benchmark_data = build_eval_benchmark(nl_pair_samples, size=200)
-    with open(args.output / 'eval_benchmark.jsonl', 'w', encoding='utf-8') as f:
-        for item in benchmark_data:
-            f.write(json.dumps(item, ensure_ascii=False) + '\n')
-    print(f"  Benchmark: {len(benchmark_data)} samples")
-    
-    # 总结统计
+
+    raw_dsl_samples = [
+        sample for sample in all_samples
+        if sample.get("dsl") and not sample.get("input") and sample.get("valid") is not False
+    ]
+    nl_pair_samples = [sample for sample in all_samples if sample.get("input") and sample.get("output")]
+    negative_samples = [sample for sample in all_samples if sample.get("valid") is False and sample.get("dsl")]
+
+    print(f"  Raw DSL positives: {len(raw_dsl_samples)}")
+    print(f"  NL-DSL pairs:      {len(nl_pair_samples)}")
+    print(f"  Negative samples:  {len(negative_samples)}")
+
+    force_simple = args.skip_validation
+
+    print("\nValidating Stage 1 positives...")
+    stage1_records, rejected_stage1 = run_parallel_validation(
+        raw_dsl_samples,
+        validate_stage1_sample,
+        args.parser_bin,
+        force_simple,
+        args.workers,
+        "stage1",
+    )
+    print(f"  Accepted: {len(stage1_records)}  Rejected: {rejected_stage1}")
+
+    print("\nValidating Stage 2 positives...")
+    stage2_records, rejected_stage2 = run_parallel_validation(
+        nl_pair_samples,
+        validate_stage2_sample,
+        args.parser_bin,
+        force_simple,
+        args.workers,
+        "stage2",
+    )
+    print(f"  Accepted: {len(stage2_records)}  Rejected: {rejected_stage2}")
+
+    print("\nSplitting Stage 1 and Stage 2 by source_id...")
+    stage1_splits = split_by_source_id(stage1_records, seed=args.seed)
+    stage2_splits = split_by_source_id(stage2_records, seed=args.seed)
+
+    print("\nBuilding conditional DPO splits...")
+    stage3_splits = {}
+    for split_name, records in stage2_splits.items():
+        stage3_splits[split_name] = build_conditional_dpo_pairs(
+            records,
+            negative_samples,
+            args.parser_bin,
+            force_simple,
+            max_pairs_per_source=args.max_dpo_pairs_per_source,
+        )
+        print(f"  Stage3 {split_name}: {len(stage3_splits[split_name])}")
+
+    benchmark = build_eval_benchmark(stage2_splits["test"], seed=args.seed)
+
+    print("\nWriting final datasets...")
+    save_jsonl(stage1_splits["train"], args.output / "stage1_syntax_pt.jsonl")
+    save_jsonl(stage1_splits["eval"], args.output / "stage1_syntax_pt_eval.jsonl")
+    save_jsonl(stage1_splits["test"], args.output / "stage1_syntax_pt_test.jsonl")
+
+    write_split_records(args.output, "stage2_sft", stage2_splits)
+    write_split_records(args.output, "stage3_dpo", stage3_splits)
+    save_jsonl(benchmark, args.output / "eval_benchmark.jsonl")
+
     stats = {
-        'total_input_samples': len(all_samples),
-        'dsl_only': len(dsl_samples),
-        'nl_pairs': len(nl_pair_samples),
-        'negative': len(negative_samples),
-        'valid_dsl': len(valid_dsl_samples),
-        'stage1_size': len(stage1_data),
-        'stage2_size': len(stage2_data),
-        'stage3_size': len(stage3_data),
-        'benchmark_size': len(benchmark_data),
+        "raw_dsl_samples": len(raw_dsl_samples),
+        "nl_pair_samples": len(nl_pair_samples),
+        "negative_samples": len(negative_samples),
+        "stage1_train": len(stage1_splits["train"]),
+        "stage1_eval": len(stage1_splits["eval"]),
+        "stage1_test": len(stage1_splits["test"]),
+        "stage2_train": len(stage2_splits["train"]),
+        "stage2_eval": len(stage2_splits["eval"]),
+        "stage2_test": len(stage2_splits["test"]),
+        "stage3_train": len(stage3_splits["train"]),
+        "stage3_eval": len(stage3_splits["eval"]),
+        "stage3_test": len(stage3_splits["test"]),
+        "benchmark_size": len(benchmark),
+        "validation_mode": "simple" if force_simple else "go_parser",
     }
-    
-    with open(args.output / 'dataset_stats.json', 'w', encoding='utf-8') as f:
-        json.dump(stats, f, indent=2)
-    
-    print(f"\n=== Final Dataset Summary ===")
-    for k, v in stats.items():
-        print(f"  {k}: {v}")
+
+    with open(args.output / "dataset_stats.json", "w", encoding="utf-8") as handle:
+        json.dump(stats, handle, indent=2, ensure_ascii=False)
+
+    print("\n=== Final Dataset Summary ===")
+    for key, value in stats.items():
+        print(f"  {key}: {value}")
     print(f"\nOutput saved to: {args.output}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

@@ -190,6 +190,7 @@ class DSLEvaluator:
         """Generate predictions for all samples."""
         self.model.eval()
         predictions = []
+        original_padding_side = self.tokenizer.padding_side
         
         data_config = self.config.get('data', {})
         system_prompt = data_config.get(
@@ -202,54 +203,56 @@ class DSLEvaluator:
         )
         
         with torch.no_grad():
-            for i in tqdm(range(0, len(samples), batch_size), desc="Generating"):
-                batch = samples[i:i + batch_size]
-                
-                # Build prompts
-                prompts = []
-                for sample in batch:
-                    instruction = sample.get('instruction', default_instruction)
-                    input_text = sample.get('input', '')
+            self.tokenizer.padding_side = 'left'
+            try:
+                for i in tqdm(range(0, len(samples), batch_size), desc="Generating"):
+                    batch = samples[i:i + batch_size]
                     
-                    messages = [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": f"{instruction}\n\n{input_text}"},
-                    ]
+                    # Build prompts
+                    prompts = []
+                    for sample in batch:
+                        instruction = sample.get('instruction', default_instruction)
+                        input_text = sample.get('input', '')
+
+                        messages = [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": f"{instruction}\n\n{input_text}"},
+                        ]
+
+                        prompt = self.tokenizer.apply_chat_template(
+                            messages,
+                            tokenize=False,
+                            add_generation_prompt=True,
+                        )
+                        prompts.append(prompt)
+
+                    # Decoder-only batched generation should use left padding.
+                    inputs = self.tokenizer(
+                        prompts,
+                        return_tensors='pt',
+                        padding=True,
+                        truncation=True,
+                        max_length=self.config.get('model', {}).get('max_length', 2048) - self.max_new_tokens,
+                    ).to(self.model.device)
                     
-                    prompt = self.tokenizer.apply_chat_template(
-                        messages,
-                        tokenize=False,
-                        add_generation_prompt=True,
+                    outputs = self.model.generate(
+                        **inputs,
+                        max_new_tokens=self.max_new_tokens,
+                        num_beams=self.num_beams,
+                        do_sample=self.do_sample,
+                        temperature=self.temperature if self.do_sample else 1.0,
+                        top_p=self.top_p if self.do_sample else 1.0,
+                        pad_token_id=self.tokenizer.pad_token_id,
+                        eos_token_id=self.tokenizer.eos_token_id,
                     )
-                    prompts.append(prompt)
-                
-                # Tokenize
-                inputs = self.tokenizer(
-                    prompts,
-                    return_tensors='pt',
-                    padding=True,
-                    truncation=True,
-                    max_length=self.config.get('model', {}).get('max_length', 2048) - self.max_new_tokens,
-                ).to(self.model.device)
-                
-                # Generate
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=self.max_new_tokens,
-                    num_beams=self.num_beams,
-                    do_sample=self.do_sample,
-                    temperature=self.temperature if self.do_sample else 1.0,
-                    top_p=self.top_p if self.do_sample else 1.0,
-                    pad_token_id=self.tokenizer.pad_token_id,
-                    eos_token_id=self.tokenizer.eos_token_id,
-                )
-                
-                # Decode (only new tokens)
-                for j, output in enumerate(outputs):
-                    input_length = inputs['input_ids'][j].shape[0]
-                    generated = output[input_length:]
-                    decoded = self.tokenizer.decode(generated, skip_special_tokens=True)
-                    predictions.append(decoded.strip())
+
+                    input_seq_length = inputs['input_ids'].shape[1]
+                    for output in outputs:
+                        generated = output[input_seq_length:]
+                        decoded = self.tokenizer.decode(generated, skip_special_tokens=True)
+                        predictions.append(decoded.strip())
+            finally:
+                self.tokenizer.padding_side = original_padding_side
         
         return predictions
     
