@@ -6,6 +6,10 @@
 - AMD loop:
   - `make vllm-sr-dev VLLM_SR_PLATFORM=amd`
   - `vllm-sr serve --image-pull-policy never --platform amd`
+- Builder NL planner local loop:
+  - export `NL_PLANNER_*` in the same shell before `vllm-sr serve`
+  - use the local image flow above; `ghcr.io/...:latest` will not include unbuilt local planner changes
+  - when the planner points at a sibling container on `vllm-sr-network`, use that container DNS name in `NL_PLANNER_BASE_URL`; when it points at a host process, use `host.docker.internal`
 - AMD real-model deployment reference:
   - [deploy/amd/README.md](../../deploy/amd/README.md)
   - [deploy/amd/config.yaml](../../deploy/amd/config.yaml)

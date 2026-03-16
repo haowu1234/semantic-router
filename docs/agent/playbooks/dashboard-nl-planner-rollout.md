@@ -43,6 +43,12 @@ Recommended staging order:
 3. keep `tool-calling-llm` disabled until Builder-domain readonly tools are validated
 4. opt into builtin web tools or MCP tools only behind explicit allowlists
 
+For `vllm-sr serve` local container workflows:
+
+- export `NL_PLANNER_*` in the same shell before `vllm-sr serve`
+- use the local image flow (`make vllm-sr-dev ...` plus `--image-pull-policy never`) when validating local planner changes
+- use container DNS names for sibling services on `vllm-sr-network`, or `host.docker.internal` when the planner targets a host-local provider
+
 ## Tool Policy
 
 Planner tool calling must stay behind the planner-owned registry in [dashboard/backend/nlauthor/planner_tools.go](../../../dashboard/backend/nlauthor/planner_tools.go).
