@@ -129,6 +129,7 @@ func buildStructuredPlannerMessages(manifest SchemaManifest, support PlannerSupp
 
 func manifestSubsetForSupport(manifest SchemaManifest, support PlannerSupport) map[string]any {
 	return map[string]any{
+		"routes":     routeSchemaEntries("", support),
 		"signals":    filterManifestEntries(manifest.Signals, support.SignalTypes),
 		"plugins":    filterManifestEntries(manifest.Plugins, support.PluginTypes),
 		"algorithms": filterManifestEntries(manifest.Algorithms, support.AlgorithmTypes),

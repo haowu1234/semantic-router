@@ -45,6 +45,27 @@ type ProviderToolCall struct {
 	Arguments string
 }
 
+func (c ProviderToolCall) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		ID       string `json:"id"`
+		Type     string `json:"type"`
+		Function struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		} `json:"function"`
+	}{
+		ID:   c.ID,
+		Type: "function",
+		Function: struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		}{
+			Name:      c.Name,
+			Arguments: c.Arguments,
+		},
+	})
+}
+
 type ToolCallingRequest struct {
 	Model           string
 	Messages        []ProviderMessage

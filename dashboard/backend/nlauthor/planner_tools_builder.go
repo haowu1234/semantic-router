@@ -52,6 +52,8 @@ func (s builtinBuilderToolSource) Tools(_ Session, _ TurnRequest) []PlannerTool 
 				construct := strings.TrimSpace(payload.Construct)
 				typeName := strings.TrimSpace(payload.TypeName)
 				switch ConstructKind(construct) {
+				case ConstructRoute:
+					return marshalToolJSON(routeSchemaEntries(typeName, s.support))
 				case ConstructSignal:
 					return marshalToolJSON(filterManifestEntries(s.manifest.Signals, requestedTypes(typeName, s.support.SignalTypes)))
 				case ConstructPlugin:

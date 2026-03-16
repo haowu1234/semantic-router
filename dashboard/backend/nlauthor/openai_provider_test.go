@@ -71,6 +71,44 @@ func TestOpenAICompatibleProviderGenerateToolCalls(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request error = %v", err)
+		}
+
+		messages, ok := payload["messages"].([]any)
+		if !ok || len(messages) != 3 {
+			t.Fatalf("messages = %#v, want 3 chat messages", payload["messages"])
+		}
+		assistantMessage, ok := messages[1].(map[string]any)
+		if !ok {
+			t.Fatalf("assistant message = %#v, want object", messages[1])
+		}
+		toolCalls, ok := assistantMessage["tool_calls"].([]any)
+		if !ok || len(toolCalls) != 1 {
+			t.Fatalf("assistant tool_calls = %#v, want 1 tool call", assistantMessage["tool_calls"])
+		}
+		toolCall, ok := toolCalls[0].(map[string]any)
+		if !ok {
+			t.Fatalf("tool call = %#v, want object", toolCalls[0])
+		}
+		if toolCall["id"] != "call_1" {
+			t.Fatalf("tool call id = %#v, want call_1", toolCall["id"])
+		}
+		if toolCall["type"] != "function" {
+			t.Fatalf("tool call type = %#v, want function", toolCall["type"])
+		}
+		function, ok := toolCall["function"].(map[string]any)
+		if !ok {
+			t.Fatalf("tool call function = %#v, want object", toolCall["function"])
+		}
+		if function["name"] != "list_symbols" {
+			t.Fatalf("tool call function.name = %#v, want list_symbols", function["name"])
+		}
+		if function["arguments"] != "{}" {
+			t.Fatalf("tool call function.arguments = %#v, want {}", function["arguments"])
+		}
+
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"tool_calls":[{"id":"call_1","type":"function","function":{"name":"list_symbols","arguments":"{}"}}]}}]}`))
 	}))
 	defer server.Close()
@@ -84,6 +122,8 @@ func TestOpenAICompatibleProviderGenerateToolCalls(t *testing.T) {
 		Model: "gpt-test",
 		Messages: []ProviderMessage{
 			{Role: "system", Content: "You are a planner."},
+			{Role: "assistant", ToolCalls: []ProviderToolCall{{ID: "call_1", Name: "list_symbols", Arguments: `{}`}}},
+			{Role: "tool", ToolCallID: "call_1", Content: `{"routes":["support_route"]}`},
 		},
 		Tools: []ProviderToolDefinition{
 			{Name: "list_symbols", Description: "List symbols", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},

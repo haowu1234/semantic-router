@@ -45,6 +45,21 @@ ROUTE support_route {
 	if !strings.Contains(result.Content, "urgent_signal") {
 		t.Fatalf("tool content = %q, want urgent_signal snippet", result.Content)
 	}
+
+	routeSchemaResult, err := registry.Invoke(
+		t.Context(),
+		session,
+		TurnRequest{},
+		"get_schema_subset",
+		json.RawMessage(`{"construct":"route"}`),
+		DefaultToolPolicy(),
+	)
+	if err != nil {
+		t.Fatalf("Invoke route schema error = %v", err)
+	}
+	if !strings.Contains(routeSchemaResult.Content, `"typeName": "route"`) {
+		t.Fatalf("route schema content = %q, want route entry", routeSchemaResult.Content)
+	}
 }
 
 func TestPlannerToolRegistryRejectsDisallowedSource(t *testing.T) {
