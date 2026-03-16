@@ -12,6 +12,7 @@ Includes:
 
 import re
 import subprocess
+import tempfile
 from typing import Optional
 from dataclasses import dataclass, field
 
@@ -134,20 +135,7 @@ class DSLMetrics:
     def _validate_with_go_parser(self, dsl: str, level: str) -> bool:
         """Validate DSL using Go parser binary."""
         try:
-            result = subprocess.run(
-                [self.dsl_parser_path, '--validate', '--json'],
-                input=dsl,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            
-            if result.returncode != 0:
-                return False
-            
-            import json
-            validation = json.loads(result.stdout)
-            
+            validation = self._get_go_validation_result(dsl)
             if level == 'syntax':
                 return validation.get('syntax_valid', False)
             elif level == 'semantic':
@@ -158,6 +146,130 @@ class DSLMetrics:
             return False
         except Exception:
             return False
+
+    def _get_go_validation_result(self, dsl: str) -> dict:
+        """Return cached validation result for a DSL string."""
+        cache_key = dsl
+        cached = self._syntax_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        mode = self._detect_go_parser_mode()
+        if mode == 'sr_dsl_cli':
+            validation = self._validate_with_sr_dsl_cli(dsl)
+        else:
+            validation = self._validate_with_legacy_json_parser(dsl)
+
+        self._syntax_cache[cache_key] = validation
+        return validation
+
+    def _detect_go_parser_mode(self) -> str:
+        """Detect whether the configured binary is sr-dsl or the older JSON parser."""
+        cache_key = '__parser_mode__'
+        cached = self._syntax_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        mode = 'legacy_json'
+        try:
+            result = subprocess.run(
+                [self.dsl_parser_path, '--help'],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            help_text = f"{result.stdout}\n{result.stderr}"
+            if 'Usage: sr-dsl <command>' in help_text:
+                mode = 'sr_dsl_cli'
+        except Exception:
+            pass
+
+        self._syntax_cache[cache_key] = mode
+        return mode
+
+    def _validate_with_legacy_json_parser(self, dsl: str) -> dict:
+        """Validate using the old stdin+JSON parser contract."""
+        result = subprocess.run(
+            [self.dsl_parser_path, '--validate', '--json'],
+            input=dsl,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+
+        if result.returncode != 0:
+            return {
+                'syntax_valid': False,
+                'semantic_valid': False,
+                'compile_valid': False,
+            }
+
+        import json
+        return json.loads(result.stdout)
+
+    def _validate_with_sr_dsl_cli(self, dsl: str) -> dict:
+        """Validate using the current file-based sr-dsl CLI."""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.dsl', delete=False, encoding='utf-8') as handle:
+            handle.write(dsl)
+            temp_path = handle.name
+
+        try:
+            validate_result = subprocess.run(
+                [self.dsl_parser_path, 'validate', temp_path],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            errors, warnings, constraints = self._parse_sr_dsl_diagnostics(
+                f"{validate_result.stdout}\n{validate_result.stderr}"
+            )
+
+            syntax_valid = len(errors) == 0
+            semantic_valid = syntax_valid and len(warnings) == 0 and len(constraints) == 0
+            compile_valid = False
+
+            if syntax_valid:
+                compile_result = subprocess.run(
+                    [self.dsl_parser_path, 'compile', temp_path, '-o', '-'],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                compile_valid = compile_result.returncode == 0
+
+            return {
+                'syntax_valid': syntax_valid,
+                'semantic_valid': semantic_valid,
+                'compile_valid': compile_valid,
+            }
+        finally:
+            try:
+                import os
+                os.unlink(temp_path)
+            except OSError:
+                pass
+
+    def _parse_sr_dsl_diagnostics(self, output: str) -> tuple[list[str], list[str], list[str]]:
+        """Parse plain-text diagnostics emitted by sr-dsl validate."""
+        errors = []
+        warnings = []
+        constraints = []
+
+        for raw_line in output.splitlines():
+            line = raw_line.strip()
+            if not line or line == 'No issues found.' or line.startswith('Summary:'):
+                continue
+
+            if '🔴' in line or 'Error:' in line:
+                errors.append(line.split('Error:', 1)[-1].strip() if 'Error:' in line else line)
+            elif '🟡' in line or 'Warning:' in line:
+                warnings.append(line.split('Warning:', 1)[-1].strip() if 'Warning:' in line else line)
+            elif '🟠' in line or 'Constraint:' in line:
+                constraints.append(line.split('Constraint:', 1)[-1].strip() if 'Constraint:' in line else line)
+            else:
+                errors.append(line)
+
+        return errors, warnings, constraints
     
     def _regex_syntax_check(self, dsl: str) -> bool:
         """Basic regex-based syntax check."""

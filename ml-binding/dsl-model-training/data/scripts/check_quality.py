@@ -89,6 +89,7 @@ class GoValidationResult:
 # Go DSL 工具的可能路径
 GO_DSL_PATHS = [
     # 项目内编译的路径
+    Path(__file__).parent.parent.parent.parent.parent / 'bin' / 'sr-dsl',
     Path(__file__).parent.parent.parent.parent.parent / 'src' / 'semantic-router' / 'bin' / 'sr-dsl',
     # go install 安装的路径
     Path.home() / 'go' / 'bin' / 'sr-dsl',

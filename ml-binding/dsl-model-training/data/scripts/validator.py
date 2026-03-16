@@ -10,10 +10,12 @@ DSL 数据验证与最终数据集构建管线。
 """
 
 import argparse
+import functools
 import json
 import random
 import re
 import subprocess
+import tempfile
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -31,35 +33,128 @@ class ValidationResult:
     warnings: list[str]
 
 
-def validate_dsl_with_go(dsl: str, parser_bin: Path | None) -> ValidationResult:
-    """用 Go parser 做完整验证；不可用时退回简单验证。"""
-    if parser_bin and parser_bin.exists():
-        try:
-            result = subprocess.run(
-                [str(parser_bin), "--validate", "--json"],
-                input=dsl,
+@functools.lru_cache(maxsize=None)
+def detect_go_validator_mode(parser_bin: str) -> str:
+    """Detect whether the binary is the legacy JSON parser or the newer sr-dsl CLI."""
+    try:
+        result = subprocess.run(
+            [parser_bin, "--help"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        help_text = f"{result.stdout}\n{result.stderr}"
+        if "Usage: sr-dsl <command>" in help_text:
+            return "sr_dsl_cli"
+    except Exception:
+        pass
+    return "legacy_json"
+
+
+def parse_sr_dsl_diagnostics(output: str) -> tuple[list[str], list[str], list[str]]:
+    """Parse plain-text diagnostics emitted by sr-dsl validate."""
+    errors = []
+    warnings = []
+    constraints = []
+
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line or line == "No issues found." or line.startswith("Summary:"):
+            continue
+
+        if "🔴" in line or "Error:" in line:
+            errors.append(line.split("Error:", 1)[-1].strip() if "Error:" in line else line)
+        elif "🟡" in line or "Warning:" in line:
+            warnings.append(line.split("Warning:", 1)[-1].strip() if "Warning:" in line else line)
+        elif "🟠" in line or "Constraint:" in line:
+            constraints.append(line.split("Constraint:", 1)[-1].strip() if "Constraint:" in line else line)
+        else:
+            errors.append(line)
+
+    return errors, warnings, constraints
+
+
+def validate_dsl_with_legacy_json_parser(dsl: str, parser_bin: Path) -> ValidationResult:
+    """Validate DSL using the old stdin+JSON parser contract."""
+    result = subprocess.run(
+        [str(parser_bin), "--validate", "--json"],
+        input=dsl,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    if result.returncode != 0:
+        return ValidationResult(
+            syntax_valid=False,
+            semantic_valid=False,
+            compile_valid=False,
+            errors=[result.stderr.strip() or result.stdout.strip() or "Parser failed"],
+            warnings=[],
+        )
+
+    output = json.loads(result.stdout)
+    return ValidationResult(
+        syntax_valid=output.get("syntax_valid", True),
+        semantic_valid=output.get("semantic_valid", True),
+        compile_valid=output.get("compile_valid", True),
+        errors=output.get("errors", []),
+        warnings=output.get("warnings", []),
+    )
+
+
+def validate_dsl_with_sr_dsl_cli(dsl: str, parser_bin: Path) -> ValidationResult:
+    """Validate DSL using the current sr-dsl file-based CLI."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".dsl", delete=False, encoding="utf-8") as handle:
+        handle.write(dsl)
+        temp_path = Path(handle.name)
+
+    try:
+        validate_result = subprocess.run(
+            [str(parser_bin), "validate", str(temp_path)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        errors, warnings, constraints = parse_sr_dsl_diagnostics(
+            f"{validate_result.stdout}\n{validate_result.stderr}"
+        )
+
+        syntax_valid = len(errors) == 0
+        semantic_valid = syntax_valid and len(warnings) == 0 and len(constraints) == 0
+        compile_valid = False
+
+        if syntax_valid:
+            compile_result = subprocess.run(
+                [str(parser_bin), "compile", str(temp_path), "-o", "-"],
                 capture_output=True,
                 text=True,
                 timeout=10,
             )
+            compile_valid = compile_result.returncode == 0
+            if compile_result.returncode != 0:
+                compile_error = compile_result.stderr.strip() or compile_result.stdout.strip() or "Compile failed"
+                errors.append(compile_error)
 
-            if result.returncode == 0:
-                output = json.loads(result.stdout)
-                return ValidationResult(
-                    syntax_valid=output.get("syntax_valid", True),
-                    semantic_valid=output.get("semantic_valid", True),
-                    compile_valid=output.get("compile_valid", True),
-                    errors=output.get("errors", []),
-                    warnings=output.get("warnings", []),
-                )
+        return ValidationResult(
+            syntax_valid=syntax_valid,
+            semantic_valid=semantic_valid,
+            compile_valid=compile_valid,
+            errors=errors,
+            warnings=warnings + constraints,
+        )
+    finally:
+        temp_path.unlink(missing_ok=True)
 
-            return ValidationResult(
-                syntax_valid=False,
-                semantic_valid=False,
-                compile_valid=False,
-                errors=[result.stderr or "Parser failed"],
-                warnings=[],
-            )
+
+def validate_dsl_with_go(dsl: str, parser_bin: Path | None) -> ValidationResult:
+    """用 Go parser 做完整验证；不可用时退回简单验证。"""
+    if parser_bin and parser_bin.exists():
+        try:
+            mode = detect_go_validator_mode(str(parser_bin))
+            if mode == "sr_dsl_cli":
+                return validate_dsl_with_sr_dsl_cli(dsl, parser_bin)
+            return validate_dsl_with_legacy_json_parser(dsl, parser_bin)
         except subprocess.TimeoutExpired:
             return ValidationResult(
                 syntax_valid=False,
@@ -223,7 +318,8 @@ def validate_stage1_sample(sample: dict, parser_bin: Path | None, force_simple: 
         return None, ValidationResult(False, False, False, ["Empty DSL"], [])
 
     result = validate_dsl(dsl, parser_bin, force_simple=force_simple)
-    if not result.syntax_valid or not result.semantic_valid or not result.compile_valid:
+    # Stage 1 is syntax pretraining: keep syntactically valid DSL even if it has softer diagnostics.
+    if not result.syntax_valid:
         return None, result
 
     record = {
