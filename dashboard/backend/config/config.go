@@ -57,6 +57,19 @@ type Config struct {
 	OpenClawURL     string // URL of OpenClaw gateway (default: http://localhost:18788)
 	OpenClawDataDir string // workspace generation directory
 	OpenClawToken   string // auth token for OpenClaw gateway
+
+	// NL planner configuration
+	NLPlannerBackend         string
+	NLPlannerProvider        string
+	NLPlannerBaseURL         string
+	NLPlannerAPIKey          string
+	NLPlannerModel           string
+	NLPlannerTimeoutMs       int
+	NLPlannerMaxOutputTokens int
+	NLPlannerToolBudget      int
+	NLPlannerAllowWebTools   bool
+	NLPlannerAllowMCPTools   bool
+	NLPlannerAllowedMCPTools string
 }
 
 // env returns the env var or default
@@ -92,6 +105,36 @@ type openClawFlags struct {
 	url     *string
 	dataDir *string
 	token   *string
+}
+
+type nlPlannerFlags struct {
+	backend         *string
+	provider        *string
+	baseURL         *string
+	apiKey          *string
+	model           *string
+	timeoutMs       *string
+	maxOutputTokens *string
+	toolBudget      *string
+	allowWebTools   *bool
+	allowMCPTools   *bool
+	allowedMCPTools *string
+}
+
+func bindNLPlannerFlags() nlPlannerFlags {
+	return nlPlannerFlags{
+		backend:         flag.String("nl-planner-backend", env("NL_PLANNER_BACKEND", "preview-rulebased"), "NL planner backend (preview-rulebased|structured-llm|tool-calling-llm)"),
+		provider:        flag.String("nl-planner-provider", env("NL_PLANNER_PROVIDER", "openai-compatible"), "NL planner provider backend"),
+		baseURL:         flag.String("nl-planner-base-url", env("NL_PLANNER_BASE_URL", env("OPENAI_BASE_URL", "")), "NL planner provider base URL"),
+		apiKey:          flag.String("nl-planner-api-key", env("NL_PLANNER_API_KEY", env("OPENAI_API_KEY", "")), "NL planner provider API key"),
+		model:           flag.String("nl-planner-model", env("NL_PLANNER_MODEL", ""), "NL planner model name"),
+		timeoutMs:       flag.String("nl-planner-timeout-ms", env("NL_PLANNER_TIMEOUT_MS", "15000"), "NL planner request timeout in milliseconds"),
+		maxOutputTokens: flag.String("nl-planner-max-output-tokens", env("NL_PLANNER_MAX_OUTPUT_TOKENS", "1800"), "NL planner max output tokens"),
+		toolBudget:      flag.String("nl-planner-tool-budget", env("NL_PLANNER_TOOL_BUDGET", "4"), "NL planner max tool calls per turn"),
+		allowWebTools:   flag.Bool("nl-planner-allow-web-tools", env("NL_PLANNER_ALLOW_WEB_TOOLS", "false") == "true", "allow planner builtin web tools"),
+		allowMCPTools:   flag.Bool("nl-planner-allow-mcp-tools", env("NL_PLANNER_ALLOW_MCP_TOOLS", "false") == "true", "allow planner MCP tool source"),
+		allowedMCPTools: flag.String("nl-planner-allowed-mcp-tools", env("NL_PLANNER_ALLOWED_MCP_TOOLS", ""), "comma-separated allowlist of MCP tool names for planner turns"),
+	}
 }
 
 func bindOpenClawFlags() openClawFlags {
@@ -134,6 +177,7 @@ type parsedFlags struct {
 	mlServiceURL         *string
 	auth                 authFlags
 	openClaw             openClawFlags
+	nlPlanner            nlPlannerFlags
 }
 
 func applyCoreConfig(cfg *Config, flags parsedFlags) {
@@ -183,6 +227,34 @@ func applyOpenClawConfig(cfg *Config, flags openClawFlags) {
 	cfg.OpenClawURL = *flags.url
 	cfg.OpenClawDataDir = *flags.dataDir
 	cfg.OpenClawToken = *flags.token
+}
+
+func applyNLPlannerConfig(cfg *Config, flags nlPlannerFlags) error {
+	timeoutMs, err := strconv.Atoi(*flags.timeoutMs)
+	if err != nil {
+		return err
+	}
+	maxOutputTokens, err := strconv.Atoi(*flags.maxOutputTokens)
+	if err != nil {
+		return err
+	}
+	toolBudget, err := strconv.Atoi(*flags.toolBudget)
+	if err != nil {
+		return err
+	}
+
+	cfg.NLPlannerBackend = *flags.backend
+	cfg.NLPlannerProvider = *flags.provider
+	cfg.NLPlannerBaseURL = *flags.baseURL
+	cfg.NLPlannerAPIKey = *flags.apiKey
+	cfg.NLPlannerModel = *flags.model
+	cfg.NLPlannerTimeoutMs = timeoutMs
+	cfg.NLPlannerMaxOutputTokens = maxOutputTokens
+	cfg.NLPlannerToolBudget = toolBudget
+	cfg.NLPlannerAllowWebTools = *flags.allowWebTools
+	cfg.NLPlannerAllowMCPTools = *flags.allowMCPTools
+	cfg.NLPlannerAllowedMCPTools = *flags.allowedMCPTools
+	return nil
 }
 
 func resolveConfigPaths(cfg *Config) error {
@@ -240,6 +312,9 @@ func LoadConfig() (*Config, error) {
 	// OpenClaw configuration
 	openClaw := bindOpenClawFlags()
 
+	// NL planner configuration
+	nlPlanner := bindNLPlannerFlags()
+
 	flags := parsedFlags{
 		port:                 port,
 		staticDir:            staticDir,
@@ -264,6 +339,7 @@ func LoadConfig() (*Config, error) {
 		mlServiceURL:         mlServiceURL,
 		auth:                 auth,
 		openClaw:             openClaw,
+		nlPlanner:            nlPlanner,
 	}
 
 	flag.Parse()
@@ -274,6 +350,9 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 	applyOpenClawConfig(cfg, flags.openClaw)
+	if err := applyNLPlannerConfig(cfg, flags.nlPlanner); err != nil {
+		return nil, err
+	}
 	if err := resolveConfigPaths(cfg); err != nil {
 		return nil, err
 	}

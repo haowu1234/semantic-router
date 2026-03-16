@@ -113,11 +113,11 @@ func validateTypedFieldsIntent(intent map[string]interface{}, typeKey string, al
 	if !ok {
 		return fmt.Errorf("unsupported %s type %q", label, typeName)
 	}
-	if _, ok := requiredString(intent, "name"); !ok {
+	if _, hasName := requiredString(intent, "name"); !hasName {
 		return fmt.Errorf("missing name")
 	}
-	fields, ok := requiredObject(intent, "fields")
-	if !ok {
+	fields, hasFields := requiredObject(intent, "fields")
+	if !hasFields {
 		return fmt.Errorf("missing fields")
 	}
 	return validateFieldMap(fields, schema, true)

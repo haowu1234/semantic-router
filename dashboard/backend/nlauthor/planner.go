@@ -12,10 +12,27 @@ type Planner interface {
 }
 
 // UnavailablePlanner keeps the session API live while no model-backed planner is configured.
-type UnavailablePlanner struct{}
+type UnavailablePlanner struct {
+	backendName    string
+	explanation    string
+	warningCode    string
+	warningMessage string
+}
 
-func (UnavailablePlanner) BackendName() string {
-	return "unconfigured"
+func NewUnavailablePlanner(backendName, explanation, warningCode, warningMessage string) UnavailablePlanner {
+	return UnavailablePlanner{
+		backendName:    backendName,
+		explanation:    explanation,
+		warningCode:    warningCode,
+		warningMessage: warningMessage,
+	}
+}
+
+func (p UnavailablePlanner) BackendName() string {
+	if p.backendName == "" {
+		return "unconfigured"
+	}
+	return p.backendName
 }
 
 func (UnavailablePlanner) Available() bool {
@@ -30,14 +47,26 @@ func (UnavailablePlanner) Support() PlannerSupport {
 	return PlannerSupport{}
 }
 
-func (UnavailablePlanner) Plan(_ context.Context, _ Session, _ TurnRequest) (PlannerResult, error) {
+func (p UnavailablePlanner) Plan(_ context.Context, _ Session, _ TurnRequest) (PlannerResult, error) {
+	explanation := p.explanation
+	if explanation == "" {
+		explanation = "NL planning is not configured on this dashboard yet."
+	}
+	warningCode := p.warningCode
+	if warningCode == "" {
+		warningCode = "planner_unavailable"
+	}
+	warningMessage := p.warningMessage
+	if warningMessage == "" {
+		warningMessage = "The Builder NL session API is live, but the planner backend is still disabled."
+	}
 	return PlannerResult{
 		Status:      PlannerStatusUnsupported,
-		Explanation: "NL planning is not configured on this dashboard yet.",
+		Explanation: explanation,
 		Warnings: []PlannerWarning{
 			{
-				Code:    "planner_unavailable",
-				Message: "The Builder NL session API is live, but the planner backend is still disabled.",
+				Code:    warningCode,
+				Message: warningMessage,
 			},
 		},
 		Error: "planner backend is unavailable",

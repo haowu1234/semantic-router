@@ -122,6 +122,7 @@ docs:
   - docs/agent/plans/pl-0001-harness-roadmap.md
   - docs/agent/plans/pl-0002-e2e-rationalization-roadmap.md
   - docs/agent/plans/pl-0003-dashboard-nl-authoring-roadmap.md
+  - docs/agent/plans/pl-0004-dashboard-nl-llm-planner-roadmap.md
   - docs/agent/tech-debt-register.md
   - docs/agent/tech-debt/README.md
   - docs/agent/tech-debt/td-001-config-surface-fragmentation.md
@@ -155,6 +156,7 @@ docs:
   - docs/agent/playbooks/rust-bindings.md
   - docs/agent/playbooks/vllm-sr-cli-docker.md
   - docs/agent/playbooks/e2e-selection.md
+  - docs/agent/playbooks/dashboard-nl-planner-rollout.md
   - deploy/amd/README.md
 
 local_agent_rules:
@@ -206,6 +208,12 @@ doc_governance:
     - path: docs/agent/plans/pl-0003-dashboard-nl-authoring-roadmap.md
       steward: dashboard
       freshness: update at the start and end of each NL authoring implementation loop and after each completed roadmap task
+    - path: docs/agent/plans/pl-0004-dashboard-nl-llm-planner-roadmap.md
+      steward: dashboard
+      freshness: update at the start and end of each NL planner backend implementation loop and after each completed roadmap task
+    - path: docs/agent/playbooks/dashboard-nl-planner-rollout.md
+      steward: dashboard
+      freshness: update when NL planner backend rollout, fallback, provider, or tool-source guardrails change
     - path: docs/agent/tech-debt-register.md
       steward: agent-contract
       freshness: update when debt workflow or landing-page guidance changes

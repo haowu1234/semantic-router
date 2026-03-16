@@ -54,12 +54,15 @@ const nlSchema = {
   backends: [],
 }
 
-function buildCapabilities(readonlyMode: boolean) {
+function buildCapabilities(
+  readonlyMode: boolean,
+  plannerBackend = 'preview-rulebased',
+) {
   return {
     enabled: true,
     preview: true,
     plannerAvailable: true,
-    plannerBackend: 'preview-rulebased',
+    plannerBackend,
     schemaVersion,
     supportedOperations: ['generate', 'modify'],
     supportedConstructs: ['signal', 'route', 'plugin', 'backend'],
@@ -184,19 +187,27 @@ async function mockBuilderNLPreview(page: Page, readonlyMode: boolean) {
     })
   })
 
-  await page.route('**/api/builder/nl/capabilities', async route => {
-    await route.fulfill({
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(buildCapabilities(readonlyMode)),
-    })
-  })
+  await mockBuilderNLCapabilities(page, readonlyMode)
 
   await page.route('**/api/builder/nl/schema', async route => {
     await route.fulfill({
       status: 200,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(nlSchema),
+    })
+  })
+}
+
+async function mockBuilderNLCapabilities(
+  page: Page,
+  readonlyMode: boolean,
+  plannerBackend = 'preview-rulebased',
+) {
+  await page.route('**/api/builder/nl/capabilities', async route => {
+    await route.fulfill({
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildCapabilities(readonlyMode, plannerBackend)),
     })
   })
 }
@@ -325,6 +336,75 @@ test.describe('Builder NL mode', () => {
     await expect(page.getByTestId('builder-nl-apply-draft')).toBeDisabled()
     await expect(page.getByTestId('builder-nl-apply-draft')).toContainText('Readonly')
     await expect(page.getByTestId('builder-nl-open-in-dsl')).toBeEnabled()
+  })
+
+  test('structured model-backed planner stays on the same Builder review path', async ({
+    page,
+  }) => {
+    await mockBuilderWasm(page)
+    await mockAuthenticatedAppShell(page, {
+      settings: {
+        readonlyMode: false,
+        setupMode: false,
+        platform: '',
+        envoyUrl: '',
+      },
+    })
+
+    await page.route('**/api/router/config/yaml', async route => {
+      await route.fulfill({
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+        body: baseRouterYaml,
+      })
+    })
+    await mockBuilderNLCapabilities(page, false, 'structured-llm')
+    await page.route('**/api/builder/nl/schema', async route => {
+      await route.fulfill({
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(nlSchema),
+      })
+    })
+    await page.route('**/api/builder/nl/sessions', async route => {
+      await route.fulfill({
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId,
+          schemaVersion,
+          expiresAt,
+          capabilities: buildCapabilities(false, 'structured-llm'),
+        }),
+      })
+    })
+    await page.route(`**/api/builder/nl/sessions/${sessionId}/turns`, async route => {
+      await route.fulfill({
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildReadySignalTurn()),
+      })
+    })
+
+    await page.goto('/builder')
+    await page.getByRole('button', { name: 'NL' }).click()
+
+    await expect(page.getByTestId('builder-nl-badge-planner')).toContainText(
+      'Structured LLM planner',
+    )
+
+    await page.getByTestId('builder-nl-prompt').fill(
+      'Create a keyword signal named urgent_signal with keywords "urgent", "asap"',
+    )
+    await page.getByRole('button', { name: 'Generate draft' }).click()
+
+    await expect(page.getByTestId('builder-nl-review')).toContainText(
+      'Create a keyword signal urgent_signal for 2 keyword(s).',
+    )
+    await page.getByTestId('builder-nl-review-tab-changes').click()
+    await expect(page.getByTestId('builder-nl-review')).toContainText(
+      'Signal keyword urgent_signal',
+    )
   })
 
   test('workspace panes can be resized and review viewport exposes a resize control', async ({ page }) => {

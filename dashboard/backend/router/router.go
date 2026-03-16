@@ -12,11 +12,11 @@ func Setup(cfg *config.Config) *http.ServeMux {
 	mux := http.NewServeMux()
 	authSvc := setupAuthRoutes(mux, cfg)
 	openClawHandler := newOpenClawHandler(cfg)
+	mcpManager := SetupMCP(mux, cfg, openClawHandler)
 
 	registerCoreRoutes(mux, cfg)
-	registerNLAuthoringRoutes(mux, cfg)
+	registerNLAuthoringRoutes(mux, cfg, mcpManager)
 	registerEvaluationRoutes(mux, cfg)
-	SetupMCP(mux, cfg, openClawHandler)
 	registerMLPipelineRoutes(mux, cfg)
 	registerOpenClawRoutes(mux, cfg, openClawHandler)
 	registerProxyRoutes(mux, cfg)

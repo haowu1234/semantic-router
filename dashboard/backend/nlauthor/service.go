@@ -176,8 +176,8 @@ func (s *Service) RunTurn(ctx context.Context, sessionID string, request TurnReq
 	}
 	session.UpdatedAt = now
 	session.ExpiresAt = now.Add(s.sessionTTL)
-	if err := s.store.Update(session, now); err != nil {
-		if errors.Is(err, errSessionNotFound) {
+	if updateErr := s.store.Update(session, now); updateErr != nil {
+		if errors.Is(updateErr, errSessionNotFound) {
 			return TurnResponse{}, &ServiceError{
 				Code:    ErrorCodeNotFound,
 				Message: "session not found or expired",

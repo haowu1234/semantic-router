@@ -1182,6 +1182,12 @@ function formatPlannerBackendLabel(backend: string | null | undefined): string {
   if (backend === "preview-rulebased") {
     return "Rule-based planner";
   }
+  if (backend === "structured-llm") {
+    return "Structured LLM planner";
+  }
+  if (backend === "tool-calling-llm") {
+    return "Tool-calling LLM planner";
+  }
   return backend.replace(/[-_]/g, " ");
 }
 

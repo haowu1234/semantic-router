@@ -6,12 +6,11 @@ import (
 
 	"github.com/vllm-project/semantic-router/dashboard/backend/config"
 	"github.com/vllm-project/semantic-router/dashboard/backend/handlers"
-	"github.com/vllm-project/semantic-router/dashboard/backend/nlauthor"
+	"github.com/vllm-project/semantic-router/dashboard/backend/mcp"
 )
 
-func registerNLAuthoringRoutes(mux *http.ServeMux, cfg *config.Config) {
-	manifest := nlauthor.DefaultSchemaManifest()
-	service := nlauthor.NewPreviewService(manifest)
+func registerNLAuthoringRoutes(mux *http.ServeMux, cfg *config.Config, mcpManager *mcp.Manager) {
+	service := newNLAuthoringService(cfg, mcpManager)
 
 	mux.HandleFunc("/api/builder/nl/capabilities", handlers.NLAuthoringCapabilitiesHandler(cfg, service))
 	mux.HandleFunc("/api/builder/nl/schema", handlers.NLAuthoringSchemaHandler(service))

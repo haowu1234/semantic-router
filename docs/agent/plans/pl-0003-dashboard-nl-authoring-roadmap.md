@@ -65,6 +65,7 @@ This document tracks the long-horizon workstream for delivering natural-language
 - Loop status: preview implementation slice completed on 2026-03-13.
 - Current focus:
   - hand off the shipped preview with residual architecture gaps recorded in `TD012`
+  - track the next-stage model-backed planner and tool-calling backend loop in `pl-0004`
   - keep future planner expansion behind the existing Builder-scoped NL contracts
 - Completion rule for this loop:
   - the implementation should not start by copying `feat/nl` wholesale; each adopted piece must be mapped to the ADR's ownership boundaries first.
@@ -88,5 +89,6 @@ This document tracks the long-horizon workstream for delivering natural-language
 ## Follow-up Debt / ADR Links
 
 - [../adr/adr-0003-dashboard-nl-authoring-architecture.md](../adr/adr-0003-dashboard-nl-authoring-architecture.md)
+- [pl-0004-dashboard-nl-llm-planner-roadmap.md](pl-0004-dashboard-nl-llm-planner-roadmap.md)
 - [../tech-debt-register.md](../tech-debt-register.md)
 - [../tech-debt/README.md](../tech-debt/README.md)
