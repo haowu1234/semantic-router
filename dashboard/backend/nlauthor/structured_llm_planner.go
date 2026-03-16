@@ -2,7 +2,6 @@ package nlauthor
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"time"
 )
@@ -111,21 +110,15 @@ func (p StructuredLLMPlanner) Plan(ctx context.Context, session Session, request
 		}, nil
 	}
 
-	result = PlannerResult{}
-	if err := json.Unmarshal([]byte(providerResponse.Content), &result); err != nil {
-		return PlannerResult{
-			Status:      PlannerStatusError,
-			Explanation: "The structured LLM planner returned invalid JSON.",
-			Warnings: []PlannerWarning{
-				{
-					Code:    "planner_provider_output_invalid",
-					Message: err.Error(),
-				},
-			},
-			Error: "invalid structured planner output",
-		}, nil
-	}
-
+	result = decodeValidatedPlannerResult(
+		providerResponse.Content,
+		p.manifest,
+		p.BackendName(),
+		p.providerName(),
+		p.model,
+		"The structured LLM planner returned invalid JSON.",
+		"invalid structured planner output",
+	)
 	return result, nil
 }
 

@@ -115,6 +115,7 @@ func (p ToolCallingPlanner) Plan(ctx context.Context, session Session, request T
 
 	messages := buildToolCallingPlannerMessages(p.manifest, p.supportProfile, session, request)
 	toolDefinitions := definitionsToProviderTools(p.registry.List(session, request, p.toolPolicy))
+	validationRepairAttempted := false
 
 	for iteration := 0; iteration <= p.toolPolicy.MaxCalls; iteration++ {
 		response, err := p.provider.GenerateToolCalls(ctx, ToolCallingRequest{
@@ -136,17 +137,25 @@ func (p ToolCallingPlanner) Plan(ctx context.Context, session Session, request T
 		}
 
 		if len(response.ToolCalls) == 0 {
-			result = PlannerResult{}
-			if err := json.Unmarshal([]byte(response.Content), &result); err != nil {
-				return PlannerResult{
-					Status:      PlannerStatusError,
-					Explanation: "The tool-calling planner returned invalid JSON.",
-					Warnings: []PlannerWarning{
-						{Code: "planner_provider_output_invalid", Message: err.Error()},
-					},
-					Error: "invalid tool-calling planner output",
-				}, nil
+			if validationErr := validatePlannerResultRaw(response.Content, p.manifest); validationErr != nil && !validationRepairAttempted {
+				validationRepairAttempted = true
+				messages = append(messages, ProviderMessage{
+					Role:    "assistant",
+					Content: strings.TrimSpace(response.Content),
+				})
+				messages = append(messages, buildPlannerResultRepairMessage(validationErr))
+				continue
 			}
+
+			result = decodeValidatedPlannerResult(
+				response.Content,
+				p.manifest,
+				p.BackendName(),
+				p.providerName(),
+				p.model,
+				"The tool-calling planner returned invalid JSON.",
+				"invalid tool-calling planner output",
+			)
 			return result, nil
 		}
 

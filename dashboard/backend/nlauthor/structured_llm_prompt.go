@@ -13,6 +13,28 @@ func plannerResultJSONSchema() json.RawMessage {
 		"type":                 "object",
 		"additionalProperties": false,
 		"required":             []string{"status"},
+		"allOf": []map[string]any{
+			{
+				"if": map[string]any{
+					"properties": map[string]any{
+						"status": map[string]any{"const": string(PlannerStatusReady)},
+					},
+				},
+				"then": map[string]any{
+					"required": []string{"intentIr"},
+				},
+			},
+			{
+				"if": map[string]any{
+					"properties": map[string]any{
+						"status": map[string]any{"const": string(PlannerStatusNeedsClarification)},
+					},
+				},
+				"then": map[string]any{
+					"required": []string{"clarification"},
+				},
+			},
+		},
 		"properties": map[string]any{
 			"status": map[string]any{
 				"type": "string",
@@ -40,6 +62,7 @@ func plannerResultJSONSchema() json.RawMessage {
 			"clarification": map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
+				"required":             []string{"question", "options"},
 				"properties": map[string]any{
 					"question": map[string]any{"type": "string"},
 					"options": map[string]any{
@@ -60,6 +83,7 @@ func plannerResultJSONSchema() json.RawMessage {
 			"intentIr": map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
+				"required":             []string{"version", "operation", "intents"},
 				"properties": map[string]any{
 					"version": map[string]any{"type": "string"},
 					"operation": map[string]any{

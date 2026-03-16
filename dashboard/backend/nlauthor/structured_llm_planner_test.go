@@ -31,7 +31,7 @@ func TestStructuredLLMPlannerParsesProviderJSON(t *testing.T) {
 
 	planner := NewStructuredLLMPlanner(DefaultSchemaManifest(), stubProvider{
 		response: StructuredGenerationResponse{
-			Content: `{"status":"ready","explanation":"Create a keyword signal.","intentIr":{"version":"1.0","operation":"generate","intents":[{"type":"signal","signal_type":"keyword","name":"urgent_signal","fields":{"keywords":["urgent","asap"]}}]}}`,
+			Content: `{"status":"ready","explanation":"Create a keyword signal.","intentIr":{"version":"1.0","operation":"generate","intents":[{"type":"signal","signal_type":"keyword","name":"urgent_signal","fields":{"keywords":["urgent","asap"],"operator":"any"}}]}}`,
 		},
 	}, RuntimeConfig{
 		Backend: PlannerBackendStructuredLLM,
@@ -56,7 +56,7 @@ func TestStructuredLLMPlannerRecordsObserverEvent(t *testing.T) {
 	observer := &recordingPlannerObserver{}
 	planner := newStructuredLLMPlannerWithObserver(DefaultSchemaManifest(), stubProvider{
 		response: StructuredGenerationResponse{
-			Content: `{"status":"ready","explanation":"Create a keyword signal.","warnings":[{"code":"default_keyword_operator","message":"Using operator any."}],"intentIr":{"version":"1.0","operation":"generate","intents":[{"type":"signal","signal_type":"keyword","name":"urgent_signal","fields":{"keywords":["urgent","asap"]}}]}}`,
+			Content: `{"status":"ready","explanation":"Create a keyword signal.","warnings":[{"code":"default_keyword_operator","message":"Using operator any."}],"intentIr":{"version":"1.0","operation":"generate","intents":[{"type":"signal","signal_type":"keyword","name":"urgent_signal","fields":{"keywords":["urgent","asap"],"operator":"any"}}]}}`,
 		},
 	}, RuntimeConfig{
 		Backend: PlannerBackendStructuredLLM,
@@ -92,6 +92,33 @@ func TestStructuredLLMPlannerRecordsObserverEvent(t *testing.T) {
 	}
 }
 
+func TestStructuredLLMPlannerRejectsMissingIntentIR(t *testing.T) {
+	t.Parallel()
+
+	planner := NewStructuredLLMPlanner(DefaultSchemaManifest(), stubProvider{
+		response: StructuredGenerationResponse{
+			Content: `{"status":"ready","explanation":"Create a keyword signal.","warnings":[{"code":"default_keyword_operator","message":"Using operator any."}]}`,
+		},
+	}, RuntimeConfig{
+		Backend: PlannerBackendStructuredLLM,
+		Model:   "gpt-test",
+	})
+
+	result, err := planner.Plan(t.Context(), Session{}, TurnRequest{Prompt: "Create a keyword signal"})
+	if err != nil {
+		t.Fatalf("Plan error = %v", err)
+	}
+	if result.Status != PlannerStatusError {
+		t.Fatalf("status = %q, want %q", result.Status, PlannerStatusError)
+	}
+	if !containsWarningCode(result.Warnings, "invalid_planner_result") {
+		t.Fatalf("warnings = %+v, want invalid_planner_result", result.Warnings)
+	}
+	if result.Error == "" {
+		t.Fatal("error is empty, want structured validation error")
+	}
+}
+
 func TestNewPlannerFromRuntimeConfigMarksMissingStructuredProviderUnavailable(t *testing.T) {
 	t.Parallel()
 
@@ -114,4 +141,13 @@ func TestNewPlannerFromRuntimeConfigMarksMissingStructuredProviderUnavailable(t 
 	if result.Status != PlannerStatusUnsupported {
 		t.Fatalf("status = %q, want %q", result.Status, PlannerStatusUnsupported)
 	}
+}
+
+func containsWarningCode(warnings []PlannerWarning, code string) bool {
+	for _, warning := range warnings {
+		if warning.Code == code {
+			return true
+		}
+	}
+	return false
 }

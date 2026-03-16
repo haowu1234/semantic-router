@@ -122,3 +122,49 @@ func TestToolCallingPlannerRecordsToolObserverEvents(t *testing.T) {
 		t.Fatalf("tool source = %q, want %q", toolCalls[0].Source, PlannerToolSourceBuiltinBuilder)
 	}
 }
+
+func TestToolCallingPlannerRepairsInvalidFinalPlannerJSON(t *testing.T) {
+	t.Parallel()
+
+	provider := &stagedProvider{
+		steps: []ToolCallingResponse{
+			{
+				ToolCalls: []ProviderToolCall{
+					{ID: "call_1", Name: "list_symbols", Arguments: `{}`},
+				},
+			},
+			{
+				Content: `{"status":"ready","explanation":"Create a route.","warnings":[{"code":"no_plugins","message":"No plugins attached to the route."}]}`,
+			},
+			{
+				Content: `{"status":"ready","explanation":"Create a route.","warnings":[{"code":"no_plugins","message":"No plugins attached to the route."}],"intentIr":{"version":"1.0","operation":"generate","intents":[{"type":"route","name":"support_route","priority":100,"models":[{"model":"gpt-4o-mini"}],"plugins":[]}]}}`,
+			},
+		},
+	}
+	registry := NewPlannerToolRegistry(
+		NewBuiltinBuilderToolSource(DefaultSchemaManifest(), NewPreviewPlanner(DefaultSchemaManifest()).Support()),
+	)
+	planner := NewToolCallingPlanner(DefaultSchemaManifest(), provider, registry, RuntimeConfig{
+		Backend:    PlannerBackendToolCallingLLM,
+		Model:      "gpt-test",
+		ToolBudget: 2,
+	})
+
+	result, err := planner.Plan(t.Context(), Session{
+		Context: SessionContext{
+			Symbols: &SymbolSnapshot{Models: []string{"gpt-4o-mini"}},
+		},
+	}, TurnRequest{Prompt: "Create route support_route for model gpt-4o-mini"})
+	if err != nil {
+		t.Fatalf("Plan error = %v", err)
+	}
+	if result.Status != PlannerStatusReady {
+		t.Fatalf("status = %q, want %q", result.Status, PlannerStatusReady)
+	}
+	if provider.index != 3 {
+		t.Fatalf("provider steps used = %d, want 3", provider.index)
+	}
+	if result.IntentIR == nil || len(result.IntentIR.Intents) != 1 {
+		t.Fatalf("intentIr = %+v, want one repaired intent", result.IntentIR)
+	}
+}

@@ -18,6 +18,9 @@ func buildToolCallingPlannerMessages(manifest SchemaManifest, support PlannerSup
 			"You must end with strict PlannerResult JSON only.",
 			"Do not call tools that are not necessary to answer the current request.",
 			"If the request is ambiguous, return needs_clarification instead of guessing.",
+			"If status is ready, include intentIr.version=\"1.0\", intentIr.operation, and at least one intent object.",
+			"If status is needs_clarification, include clarification.question and 2-4 options.",
+			"If you cannot produce a valid intentIr, return needs_clarification or unsupported instead of ready.",
 		},
 	}
 
