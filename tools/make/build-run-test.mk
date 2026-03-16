@@ -4,6 +4,10 @@
 
 ##@ Build/Test
 
+DSL_BIN := bin/sr-dsl
+DSL_PARSER_LINK := bin/dsl-parser
+DSL_DECOMPILER_LINK := bin/dsl-decompiler
+
 # Build the Rust library and Golang binding
 build: ## Build the Rust library and Golang binding
 build: $(if $(CI),rust-ci,rust) build-router
@@ -21,6 +25,15 @@ ifdef DEV
 else
 	@cd src/semantic-router && go build -tags=milvus -o ../../bin/router cmd/main.go
 endif
+
+# Build the standalone DSL CLI and compatibility symlinks used by data tooling
+build-dsl: ## Build the DSL CLI and create dsl-parser/dsl-decompiler symlinks
+	@$(LOG_TARGET)
+	@mkdir -p bin
+	@cd src/semantic-router && go build -o ../../$(DSL_BIN) ./cmd/dsl
+	@cd bin && ln -sf sr-dsl dsl-parser
+	@cd bin && ln -sf sr-dsl dsl-decompiler
+	@echo "Built $(DSL_BIN) with compatibility links $(DSL_PARSER_LINK) and $(DSL_DECOMPILER_LINK)"
 
 # Run the router
 run-router: ## Run the router with the specified config
@@ -99,6 +112,7 @@ clean: ## Clean built artifacts
 	@echo "Cleaning build artifacts..."
 	cd candle-binding && cargo clean
 	rm -f bin/router
+	rm -f $(DSL_BIN) $(DSL_PARSER_LINK) $(DSL_DECOMPILER_LINK)
 
 # Test the Envoy extproc
 test-auto-prompt-reasoning: ## Test Envoy extproc with a math prompt (curl)

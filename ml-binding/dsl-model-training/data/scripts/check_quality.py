@@ -291,7 +291,8 @@ def main():
             if not go_bin:
                 print('❌ 未找到 Go 验证器 sr-dsl')
                 print('   请先编译 Go 验证器:')
-                print('   cd src/semantic-router && go build -o bin/sr-dsl ./cmd/dsl')
+                print('   make build-dsl')
+                print('   # 或手动执行: cd src/semantic-router && go build -o ../../bin/sr-dsl ./cmd/dsl')
                 print('   或使用 --go-bin 指定路径')
                 sys.exit(1)
         print(f'🔧 使用 Go 验证器: {go_bin}')
