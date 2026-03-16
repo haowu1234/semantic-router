@@ -327,6 +327,68 @@ test.describe('Builder NL mode', () => {
     await expect(page.getByTestId('builder-nl-open-in-dsl')).toBeEnabled()
   })
 
+  test('workspace panes can be resized and review viewport exposes a resize control', async ({ page }) => {
+    await mockBuilderNLPreview(page, false)
+
+    await page.route('**/api/builder/nl/sessions', async route => {
+      await route.fulfill({
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId,
+          schemaVersion,
+          expiresAt,
+          capabilities: buildCapabilities(false),
+        }),
+      })
+    })
+
+    await page.route(`**/api/builder/nl/sessions/${sessionId}/turns`, async route => {
+      await route.fulfill({
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildReadySignalTurn()),
+      })
+    })
+
+    await page.goto('/builder')
+    await page.getByRole('button', { name: 'NL' }).click()
+
+    const promptPanel = page.getByTestId('builder-nl-prompt-panel')
+    const reviewPanel = page.getByTestId('builder-nl-review')
+
+    const beforePromptBox = await promptPanel.boundingBox()
+    const beforeReviewBox = await reviewPanel.boundingBox()
+    expect(beforePromptBox).not.toBeNull()
+    expect(beforeReviewBox).not.toBeNull()
+
+    await page.getByTestId('builder-nl-layout-splitter').evaluate(node => {
+      node.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }))
+      node.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }))
+    })
+
+    const afterPromptBox = await promptPanel.boundingBox()
+    const afterReviewBox = await reviewPanel.boundingBox()
+    expect(afterPromptBox).not.toBeNull()
+    expect(afterReviewBox).not.toBeNull()
+    expect(afterPromptBox?.width ?? 0).toBeLessThan((beforePromptBox?.width ?? 0) - 40)
+    expect(afterReviewBox?.width ?? 0).toBeGreaterThan((beforeReviewBox?.width ?? 0) + 40)
+
+    await page.getByTestId('builder-nl-prompt').fill(
+      'Create a keyword signal named urgent_signal with keywords "urgent", "asap"',
+    )
+    await page.getByRole('button', { name: 'Generate draft' }).click()
+
+    const viewport = page.getByTestId('builder-nl-review-viewport')
+    await viewport.scrollIntoViewIfNeeded()
+    await expect(page.getByTestId('builder-nl-review-resize')).toBeVisible()
+    await expect(page.getByTestId('builder-nl-review-frame')).toBeVisible()
+    await expect(page.getByTestId('builder-nl-review-resize')).toHaveAttribute(
+      'aria-orientation',
+      'horizontal',
+    )
+  })
+
   test('schema-invalid planner drafts are rejected in review', async ({ page }) => {
     await mockBuilderNLPreview(page, false)
 

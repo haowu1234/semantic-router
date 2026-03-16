@@ -19,6 +19,10 @@ import {
 
 import { buildDraftDiff } from "./builderPageNLDiff";
 import { preparePlannerDraft } from "./builderPageNLDraft";
+import {
+  useResizableHeight,
+  useSplitPaneWidth,
+} from "./builderPageResizeHooks";
 import { buildIntentReviewCards } from "./builderPageNLReviewSupport";
 import styles from "./builderPageNLMode.module.css";
 
@@ -40,6 +44,9 @@ interface RunTurnOptions {
 
 type ReviewTab = "changes" | "diff" | "draft";
 type ApplyState = "idle" | "applying" | "applied";
+
+const MIN_WORKSPACE_PANE_WIDTH = 340;
+const WORKSPACE_SPLITTER_WIDTH = 14;
 
 const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
   dslSource,
@@ -69,8 +76,37 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
   const [draftSummary, setDraftSummary] = useState<string[]>([]);
   const [activeReviewTab, setActiveReviewTab] = useState<ReviewTab>("changes");
   const [applyState, setApplyState] = useState<ApplyState>("idle");
+  const reviewEngaged = Boolean(plannerResult);
+  const workspaceRef = useRef<HTMLDivElement | null>(null);
   const reviewSectionRef = useRef<HTMLElement | null>(null);
   const appliedBannerRef = useRef<HTMLDivElement | null>(null);
+  const preferredPromptPaneRatio = reviewEngaged ? 0.46 : 0.54;
+  const {
+    width: promptPaneWidth,
+    isDragging: isResizingWorkspace,
+    handleDragStart: handleWorkspaceResizeStart,
+    handleKeyDown: handleWorkspaceResizeKeyDown,
+  } = useSplitPaneWidth({
+    containerRef: workspaceRef,
+    preferredRatio: preferredPromptPaneRatio,
+    minStartWidth: MIN_WORKSPACE_PANE_WIDTH,
+    minEndWidth: MIN_WORKSPACE_PANE_WIDTH,
+    dividerWidth: WORKSPACE_SPLITTER_WIDTH,
+  });
+  const {
+    height: reviewViewportHeight,
+    isDragging: isResizingReviewViewport,
+    handleDragStart: handleReviewViewportResizeStart,
+    handleKeyDown: handleReviewViewportResizeKeyDown,
+  } = useResizableHeight({
+    initialHeight: 430,
+    minHeight: 260,
+    getMaxHeight: () =>
+      Math.max(
+        420,
+        typeof window === "undefined" ? 720 : window.innerHeight - 160,
+      ),
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -380,7 +416,6 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
   ).length;
   const draftIssueCount =
     draftErrorCount + draftConstraintCount + draftWarningCount;
-  const reviewEngaged = Boolean(plannerResult);
   const canApplyDraft =
     wasmReady &&
     !!draftDsl.trim() &&
@@ -404,6 +439,21 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
   const previewBadgeMeta = capabilities?.preview
     ? "Draft-only workflow"
     : "Planner can write into the working Builder state";
+  const workspaceStyle = {
+    "--prompt-pane-width": promptPaneWidth
+      ? `${promptPaneWidth}px`
+      : undefined,
+  } as React.CSSProperties;
+  const workspaceMaxPromptWidth = Math.max(
+    MIN_WORKSPACE_PANE_WIDTH,
+    (workspaceRef.current?.clientWidth ?? promptPaneWidth ?? 854) -
+      WORKSPACE_SPLITTER_WIDTH -
+      MIN_WORKSPACE_PANE_WIDTH,
+  );
+  const reviewViewportMaxHeight = Math.max(
+    420,
+    typeof window === "undefined" ? 720 : window.innerHeight - 160,
+  );
 
   const handleApplyDraft = useCallback(() => {
     if (!canApplyDraft) {
@@ -468,11 +518,14 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
       </div>
 
       <div
-        className={`${styles.grid} ${
-          reviewEngaged ? styles.gridReviewActive : styles.gridReviewIdle
-        }`}
+        ref={workspaceRef}
+        className={`${styles.grid} ${styles.gridSplit}`}
+        style={workspaceStyle}
       >
-        <section className={`${styles.card} ${styles.promptCard}`}>
+        <section
+          className={`${styles.card} ${styles.promptCard}`}
+          data-testid="builder-nl-prompt-panel"
+        >
           <div className={styles.sectionHeader}>
             <div>
               <h3 className={styles.sectionTitle}>Prompt</h3>
@@ -597,6 +650,24 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
             </div>
           </div>
         </section>
+
+        <div
+          className={`${styles.layoutResizeHandle} ${
+            isResizingWorkspace ? styles.layoutResizeHandleActive : ""
+          }`}
+          data-testid="builder-nl-layout-splitter"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize NL prompt and review panels"
+          aria-valuemin={MIN_WORKSPACE_PANE_WIDTH}
+          aria-valuemax={workspaceMaxPromptWidth}
+          aria-valuenow={Math.round(promptPaneWidth ?? 0)}
+          tabIndex={0}
+          onMouseDown={handleWorkspaceResizeStart}
+          onKeyDown={handleWorkspaceResizeKeyDown}
+        >
+          <div className={styles.layoutResizeHandleLine} />
+        </div>
 
         <section
           className={`${styles.card} ${!plannerResult ? styles.reviewCardEmpty : ""}`}
@@ -782,7 +853,11 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
                 </div>
               )}
 
-              <div className={styles.reviewFrame}>
+              <div
+                className={styles.reviewFrame}
+                data-testid="builder-nl-review-frame"
+                style={{ height: `${reviewViewportHeight}px` }}
+              >
                 <div className={styles.reviewToolbar}>
                   <div>
                     <div className={styles.contextLabel}>Draft review</div>
@@ -815,158 +890,181 @@ const BuilderNLMode: React.FC<BuilderNLModeProps> = ({
                   </div>
                 </div>
 
-                {activeReviewTab === "changes" && (
-                  <div className={styles.reviewPanel}>
-                    <div className={styles.semanticHighlights}>
-                      <div className={styles.highlightCard}>
-                        <span className={styles.statLabel}>Review mode</span>
-                        <strong>
-                          {draftDiff?.removals
-                            ? "Update existing Builder DSL"
-                            : "Append reviewed draft to Builder DSL"}
-                        </strong>
-                        <p>
-                          {draftMatchesBuilder
-                            ? "Builder already matches this draft."
-                            : "Current Builder DSL remains unchanged until you apply."}
-                        </p>
+                <div
+                  className={styles.reviewViewport}
+                  data-testid="builder-nl-review-viewport"
+                >
+                  {activeReviewTab === "changes" && (
+                    <div className={styles.reviewPanel}>
+                      <div className={styles.semanticHighlights}>
+                        <div className={styles.highlightCard}>
+                          <span className={styles.statLabel}>Review mode</span>
+                          <strong>
+                            {draftDiff?.removals
+                              ? "Update existing Builder DSL"
+                              : "Append reviewed draft to Builder DSL"}
+                          </strong>
+                          <p>
+                            {draftMatchesBuilder
+                              ? "Builder already matches this draft."
+                              : "Current Builder DSL remains unchanged until you apply."}
+                          </p>
+                        </div>
+                        <div className={styles.highlightCard}>
+                          <span className={styles.statLabel}>Primary change</span>
+                          <strong>{draftSummary[0] ?? "Draft change"}</strong>
+                          <p>
+                            {draftDiff?.additions ?? 0} added line(s), {draftDiff?.removals ?? 0} removed line(s).
+                          </p>
+                        </div>
+                        <div className={styles.highlightCard}>
+                          <span className={styles.statLabel}>Apply effect</span>
+                          <strong>
+                            {applyState === "applied" ? "Applied to Builder" : "Replaces working DSL"}
+                          </strong>
+                          <p>
+                            {applyState === "applied"
+                              ? "Compile and deploy now use the applied draft."
+                              : "Apply writes this reviewed draft into Builder, then recompiles it."}
+                          </p>
+                        </div>
                       </div>
-                      <div className={styles.highlightCard}>
-                        <span className={styles.statLabel}>Primary change</span>
-                        <strong>{draftSummary[0] ?? "Draft change"}</strong>
-                        <p>
-                          {draftDiff?.additions ?? 0} added line(s), {draftDiff?.removals ?? 0} removed line(s).
-                        </p>
-                      </div>
-                      <div className={styles.highlightCard}>
-                        <span className={styles.statLabel}>Apply effect</span>
-                        <strong>
-                          {applyState === "applied" ? "Applied to Builder" : "Replaces working DSL"}
-                        </strong>
-                        <p>
-                          {applyState === "applied"
-                            ? "Compile and deploy now use the applied draft."
-                            : "Apply writes this reviewed draft into Builder, then recompiles it."}
-                        </p>
-                      </div>
-                    </div>
 
-                    <div className={styles.statGrid}>
-                      <div className={styles.statCard}>
-                        <span className={styles.statLabel}>Current DSL</span>
-                        <strong>{currentLineCount} line(s)</strong>
+                      <div className={styles.statGrid}>
+                        <div className={styles.statCard}>
+                          <span className={styles.statLabel}>Current DSL</span>
+                          <strong>{currentLineCount} line(s)</strong>
+                        </div>
+                        <div className={styles.statCard}>
+                          <span className={styles.statLabel}>Draft DSL</span>
+                          <strong>{draftLineCount} line(s)</strong>
+                        </div>
+                        <div className={styles.statCard}>
+                          <span className={styles.statLabel}>Added</span>
+                          <strong>+{draftDiff?.additions ?? 0}</strong>
+                        </div>
+                        <div className={styles.statCard}>
+                          <span className={styles.statLabel}>Removed</span>
+                          <strong>-{draftDiff?.removals ?? 0}</strong>
+                        </div>
                       </div>
-                      <div className={styles.statCard}>
-                        <span className={styles.statLabel}>Draft DSL</span>
-                        <strong>{draftLineCount} line(s)</strong>
-                      </div>
-                      <div className={styles.statCard}>
-                        <span className={styles.statLabel}>Added</span>
-                        <strong>+{draftDiff?.additions ?? 0}</strong>
-                      </div>
-                      <div className={styles.statCard}>
-                        <span className={styles.statLabel}>Removed</span>
-                        <strong>-{draftDiff?.removals ?? 0}</strong>
-                      </div>
-                    </div>
 
-                    <div>
-                      <div className={styles.contextLabel}>Structured review</div>
-                      <div className={styles.intentReviewGrid}>
-                        {reviewCards.map((card) => (
-                          <div key={card.id} className={styles.intentReviewCard}>
-                            <div className={styles.intentReviewHeader}>
-                              <span className={styles.intentReviewKicker}>
-                                {card.kicker}
-                              </span>
-                              <strong className={styles.intentReviewTitle}>
-                                {card.title}
-                              </strong>
+                      <div>
+                        <div className={styles.contextLabel}>Structured review</div>
+                        <div className={styles.intentReviewGrid}>
+                          {reviewCards.map((card) => (
+                            <div key={card.id} className={styles.intentReviewCard}>
+                              <div className={styles.intentReviewHeader}>
+                                <span className={styles.intentReviewKicker}>
+                                  {card.kicker}
+                                </span>
+                                <strong className={styles.intentReviewTitle}>
+                                  {card.title}
+                                </strong>
+                              </div>
+                              <p className={styles.intentReviewSummary}>
+                                {card.summary}
+                              </p>
+                              <div className={styles.intentReviewDetails}>
+                                {card.details.map((detail) => (
+                                  <div
+                                    key={`${card.id}-${detail}`}
+                                    className={styles.intentReviewDetail}
+                                  >
+                                    {detail}
+                                  </div>
+                                ))}
+                              </div>
                             </div>
-                            <p className={styles.intentReviewSummary}>
-                              {card.summary}
-                            </p>
-                            <div className={styles.intentReviewDetails}>
-                              {card.details.map((detail) => (
-                                <div
-                                  key={`${card.id}-${detail}`}
-                                  className={styles.intentReviewDetail}
-                                >
-                                  {detail}
-                                </div>
-                              ))}
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className={styles.contextLabel}>Change summary</div>
+                        <div className={styles.summaryList}>
+                          {draftSummary.map((item) => (
+                            <div key={item} className={styles.summaryItem}>
+                              {item}
                             </div>
-                          </div>
-                        ))}
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className={styles.infoBox}>
+                        This draft has not changed the current Builder DSL yet. Use <strong>Apply to Builder</strong> to replace the working DSL with this reviewed draft.
                       </div>
                     </div>
+                  )}
 
-                    <div>
-                      <div className={styles.contextLabel}>Change summary</div>
-                      <div className={styles.summaryList}>
-                        {draftSummary.map((item) => (
-                          <div key={item} className={styles.summaryItem}>
-                            {item}
-                          </div>
-                        ))}
+                  {activeReviewTab === "diff" && (
+                    <div
+                      className={styles.diffPreview}
+                      data-testid="builder-nl-diff-preview"
+                    >
+                      <div className={styles.diffHeader}>
+                        <span>Op</span>
+                        <span>Current</span>
+                        <span>Draft</span>
+                        <span>Line</span>
                       </div>
+                      {draftDiff?.lines.map((line, index) => (
+                        <div
+                          key={`${line.kind}-${line.leftNumber ?? "x"}-${line.rightNumber ?? "y"}-${index}`}
+                          className={
+                            line.kind === "add"
+                              ? styles.diffAdd
+                              : line.kind === "remove"
+                                ? styles.diffRemove
+                                : line.kind === "separator"
+                                  ? styles.diffSeparator
+                                  : styles.diffContext
+                          }
+                        >
+                          <span className={styles.diffMarker}>
+                            {line.kind === "add"
+                              ? "+"
+                              : line.kind === "remove"
+                                ? "-"
+                                : line.kind === "separator"
+                                  ? "..."
+                                  : " "}
+                          </span>
+                          <span className={styles.diffNumber}>{line.leftNumber ?? ""}</span>
+                          <span className={styles.diffNumber}>{line.rightNumber ?? ""}</span>
+                          <code className={styles.diffText}>{line.text || " "}</code>
+                        </div>
+                      ))}
                     </div>
+                  )}
 
-                    <div className={styles.infoBox}>
-                      This draft has not changed the current Builder DSL yet. Use <strong>Apply to Builder</strong> to replace the working DSL with this reviewed draft.
-                    </div>
-                  </div>
-                )}
+                  {activeReviewTab === "draft" && (
+                    <pre
+                      className={styles.codePreview}
+                      data-testid="builder-nl-draft-preview"
+                    >
+                      {draftDsl}
+                    </pre>
+                  )}
+                </div>
+              </div>
 
-                {activeReviewTab === "diff" && (
-                  <div
-                    className={styles.diffPreview}
-                    data-testid="builder-nl-diff-preview"
-                  >
-                    <div className={styles.diffHeader}>
-                      <span>Op</span>
-                      <span>Current</span>
-                      <span>Draft</span>
-                      <span>Line</span>
-                    </div>
-                    {draftDiff?.lines.map((line, index) => (
-                      <div
-                        key={`${line.kind}-${line.leftNumber ?? "x"}-${line.rightNumber ?? "y"}-${index}`}
-                        className={
-                          line.kind === "add"
-                            ? styles.diffAdd
-                            : line.kind === "remove"
-                              ? styles.diffRemove
-                              : line.kind === "separator"
-                                ? styles.diffSeparator
-                                : styles.diffContext
-                        }
-                      >
-                        <span className={styles.diffMarker}>
-                          {line.kind === "add"
-                            ? "+"
-                            : line.kind === "remove"
-                              ? "-"
-                              : line.kind === "separator"
-                                ? "..."
-                                : " "}
-                        </span>
-                        <span className={styles.diffNumber}>{line.leftNumber ?? ""}</span>
-                        <span className={styles.diffNumber}>{line.rightNumber ?? ""}</span>
-                        <code className={styles.diffText}>{line.text || " "}</code>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {activeReviewTab === "draft" && (
-                  <pre
-                    className={styles.codePreview}
-                    data-testid="builder-nl-draft-preview"
-                  >
-                    {draftDsl}
-                  </pre>
-                )}
+              <div
+                className={`${styles.reviewResizeHandle} ${
+                  isResizingReviewViewport ? styles.reviewResizeHandleActive : ""
+                }`}
+                data-testid="builder-nl-review-resize"
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label="Resize NL draft review viewport"
+                aria-valuemin={260}
+                aria-valuemax={reviewViewportMaxHeight}
+                aria-valuenow={Math.round(reviewViewportHeight)}
+                tabIndex={0}
+                onMouseDown={handleReviewViewportResizeStart}
+                onKeyDown={handleReviewViewportResizeKeyDown}
+              >
+                <div className={styles.reviewResizeHandleLine} />
               </div>
 
               <div className={styles.reviewActionBar}>
