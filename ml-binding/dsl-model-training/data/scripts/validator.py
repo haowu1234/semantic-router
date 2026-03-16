@@ -16,6 +16,7 @@ import random
 import re
 import subprocess
 import tempfile
+import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -426,7 +427,10 @@ def build_conditional_dpo_pairs(
         negatives_by_source[infer_source_id(sample)].append(sample)
 
     pairs = []
-    for sample in stage2_samples:
+    started_at = time.time()
+    total = len(stage2_samples)
+
+    for index, sample in enumerate(stage2_samples, start=1):
         source_id = sample["source_id"]
         chosen = sample["output"]
         chosen_norm = normalize_dsl(chosen)
@@ -481,6 +485,15 @@ def build_conditional_dpo_pairs(
 
             if kept >= max_pairs_per_source:
                 break
+
+        if index % 500 == 0 or index == total:
+            elapsed = time.time() - started_at
+            rate = index / elapsed if elapsed > 0 else 0.0
+            eta_seconds = int((total - index) / rate) if rate > 0 else 0
+            print(
+                f"  dpo: processed {index}/{total} sources, "
+                f"built {len(pairs)} pairs, eta ~{eta_seconds}s"
+            )
 
     return pairs
 
