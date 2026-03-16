@@ -1,10 +1,13 @@
 package nlauthor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -140,5 +143,56 @@ func TestOpenAICompatibleProviderGenerateToolCalls(t *testing.T) {
 	}
 	if len(response.ToolCalls) != 1 || response.ToolCalls[0].Name != "list_symbols" {
 		t.Fatalf("toolCalls = %+v, want list_symbols", response.ToolCalls)
+	}
+}
+
+func TestOpenAICompatibleProviderLogsRawBodyOnEmptyContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":""}}]}`))
+	}))
+	defer server.Close()
+
+	provider := NewOpenAICompatibleProvider(RuntimeConfig{
+		BaseURL: server.URL + "/v1",
+		Timeout: 0,
+	})
+
+	var logs bytes.Buffer
+	originalWriter := log.Writer()
+	originalFlags := log.Flags()
+	log.SetOutput(&logs)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(originalWriter)
+		log.SetFlags(originalFlags)
+	}()
+
+	_, err := provider.GenerateToolCalls(context.Background(), ToolCallingRequest{
+		Model: "gpt-test",
+		Messages: []ProviderMessage{
+			{Role: "system", Content: "You are a planner."},
+			{Role: "user", Content: "{}"},
+		},
+		ResponseSchema: StructuredOutputSchema{
+			Name:   "planner_result",
+			Schema: plannerResultJSONSchema(),
+			Strict: true,
+		},
+		MaxOutputTokens: 256,
+	})
+	if err == nil {
+		t.Fatal("GenerateToolCalls error = nil, want provider returned empty content")
+	}
+	if !strings.Contains(err.Error(), "provider returned empty content") {
+		t.Fatalf("error = %q, want provider returned empty content", err.Error())
+	}
+	if !strings.Contains(logs.String(), "[NL-Planner-Provider]") {
+		t.Fatalf("logs = %q, want provider diagnostic entry", logs.String())
+	}
+	if !strings.Contains(logs.String(), "reason=empty_content") {
+		t.Fatalf("logs = %q, want empty_content reason", logs.String())
+	}
+	if !strings.Contains(logs.String(), "body=") || !strings.Contains(logs.String(), `\"content\":\"\"`) {
+		t.Fatalf("logs = %q, want raw provider body excerpt", logs.String())
 	}
 }

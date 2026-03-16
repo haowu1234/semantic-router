@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 )
+
+const providerResponseLogCharBudget = 2000
 
 type openAICompatibleProvider struct {
 	baseURL string
@@ -182,17 +185,21 @@ func (p openAICompatibleProvider) doChatCompletion(ctx context.Context, payload 
 		return ToolCallingResponse{}, fmt.Errorf("read provider response: %w", err)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		logProviderResponseIssue(payload.Model, response.StatusCode, "non_2xx_status", body)
 		return ToolCallingResponse{}, fmt.Errorf("provider returned %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var parsed openAICompatibleResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
+		logProviderResponseIssue(payload.Model, response.StatusCode, "decode_error", body)
 		return ToolCallingResponse{}, fmt.Errorf("decode provider response: %w", err)
 	}
 	if parsed.Error != nil && strings.TrimSpace(parsed.Error.Message) != "" {
+		logProviderResponseIssue(payload.Model, response.StatusCode, "provider_error_field", body)
 		return ToolCallingResponse{}, fmt.Errorf("%s", parsed.Error.Message)
 	}
 	if len(parsed.Choices) == 0 {
+		logProviderResponseIssue(payload.Model, response.StatusCode, "no_choices", body)
 		return ToolCallingResponse{}, fmt.Errorf("provider returned no choices")
 	}
 
@@ -210,7 +217,23 @@ func (p openAICompatibleProvider) doChatCompletion(ctx context.Context, payload 
 
 	content := strings.TrimSpace(parsed.Choices[0].Message.Content)
 	if content == "" {
+		logProviderResponseIssue(payload.Model, response.StatusCode, "empty_content", body)
 		return ToolCallingResponse{}, fmt.Errorf("provider returned empty content")
 	}
 	return ToolCallingResponse{Content: content}, nil
+}
+
+func logProviderResponseIssue(model string, statusCode int, reason string, body []byte) {
+	excerpt := strings.TrimSpace(string(body))
+	if len(excerpt) > providerResponseLogCharBudget {
+		excerpt = excerpt[:providerResponseLogCharBudget] + "... [truncated]"
+	}
+	log.Printf(
+		"[NL-Planner-Provider] provider=%s model=%s status_code=%d reason=%s body=%q",
+		PlannerProviderOpenAICompatible,
+		fallbackPlannerObservationValue(model, "unconfigured"),
+		statusCode,
+		fallbackPlannerObservationValue(reason, "unknown"),
+		excerpt,
+	)
 }
