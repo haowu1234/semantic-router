@@ -101,6 +101,7 @@ def docker_start_split_runtime(
             stack_layout=stack_layout,
             config_dir=config_dir,
             normalized_platform=normalized_platform,
+            source_config_file=config_file,
         )
         if rc != 0:
             log.error(f"Failed to start {service}: {stderr}")
@@ -142,6 +143,7 @@ def _start_service_container(
     stack_layout,
     config_dir,
     normalized_platform,
+    source_config_file,
 ):
     """Start a single service container."""
     container_name = _container_name_for_service(service)
@@ -182,6 +184,7 @@ def _start_service_container(
             openclaw_network_name=openclaw_network_name,
             stack_layout=stack_layout,
             config_dir=config_dir,
+            source_config_file=source_config_file,
         )
     if service == SERVICE_NAME_DASHBOARD_DB:
         return _start_dashboard_db_container(
@@ -344,6 +347,7 @@ def _start_dashboard_container(
     openclaw_network_name,
     stack_layout,
     config_dir,
+    source_config_file,
 ):
     """Start the dashboard container."""
     cmd = [
@@ -360,6 +364,13 @@ def _start_dashboard_container(
     # Port mapping for dashboard
     cmd.extend(["-p", f"{stack_layout.dashboard_port}:{DEFAULT_DASHBOARD_PORT}"])
 
+    # Mount config file to dashboard container
+    abs_config_file = os.path.abspath(source_config_file)
+    cmd.extend(["-v", f"{abs_config_file}:/app/config/config.yaml:ro"])
+
+    # Mount config directory for config editing operations
+    cmd.extend(["-v", f"{config_dir}:/app/workspace:z"])
+
     # Mount dashboard data directory
     dashboard_data_dir = os.path.join(config_dir, ".vllm-sr", "dashboard-data")
     os.makedirs(dashboard_data_dir, exist_ok=True)
@@ -369,17 +380,42 @@ def _start_dashboard_container(
     attach_docker_socket(cmd)
     attach_docker_cli(cmd)
 
-    # Environment variables
+    # Environment variables for dashboard
+    router_api_url = f"http://{VLLM_SR_ROUTER_CONTAINER_NAME}:{DEFAULT_API_PORT}"
+    router_metrics_url = f"http://{VLLM_SR_ROUTER_CONTAINER_NAME}:9190/metrics"
+    envoy_url = f"http://{VLLM_SR_ENVOY_CONTAINER_NAME}:{DEFAULT_LISTENER_PORT}"
+
     dashboard_env = {
+        # Database configuration (use PostgreSQL instead of SQLite)
         "DATABASE_URL": f"postgres://vllm_sr:vllm_sr@{VLLM_SR_DASHBOARD_DB_CONTAINER_NAME}:{DEFAULT_POSTGRES_PORT}/vllm_sr",
-        "ROUTER_API_URL": f"http://{VLLM_SR_ROUTER_CONTAINER_NAME}:{DEFAULT_API_PORT}",
+        "DASHBOARD_DB_DRIVER": "postgres",
+        "DASHBOARD_DB_URL": f"postgres://vllm_sr:vllm_sr@{VLLM_SR_DASHBOARD_DB_CONTAINER_NAME}:{DEFAULT_POSTGRES_PORT}/vllm_sr",
+        "EVALUATION_DB_DRIVER": "postgres",
+        "EVALUATION_DB_URL": f"postgres://vllm_sr:vllm_sr@{VLLM_SR_DASHBOARD_DB_CONTAINER_NAME}:{DEFAULT_POSTGRES_PORT}/vllm_sr",
+        # Router API configuration (connect to router container, not localhost)
+        "TARGET_ROUTER_API_URL": router_api_url,
+        "TARGET_ROUTER_METRICS_URL": router_metrics_url,
+        "TARGET_ENVOY_URL": envoy_url,
+        # Config path
+        "ROUTER_CONFIG_PATH": "/app/config/config.yaml",
+        # OpenClaw network configuration
         "OPENCLAW_DEFAULT_NETWORK_MODE": openclaw_network_name or stack_layout.network_name,
+        # Host config path for split runtime resume
+        "VLLM_SR_HOST_CONFIG_PATH": abs_config_file,
     }
 
     # Add passthrough env vars
-    for key in ["DASHBOARD_READONLY", "DISABLE_DASHBOARD_AUTH"]:
+    for key in ["DASHBOARD_READONLY", "DISABLE_DASHBOARD_AUTH", "DASHBOARD_PLATFORM"]:
         if key in env_vars:
             dashboard_env[key] = env_vars[key]
+
+    # Add observability URLs if configured
+    if stack_layout.grafana_container_name:
+        dashboard_env["TARGET_GRAFANA_URL"] = f"http://{stack_layout.grafana_container_name}:3000"
+    if stack_layout.prometheus_container_name:
+        dashboard_env["TARGET_PROMETHEUS_URL"] = f"http://{stack_layout.prometheus_container_name}:9090"
+    if stack_layout.jaeger_container_name:
+        dashboard_env["TARGET_JAEGER_URL"] = f"http://{stack_layout.jaeger_container_name}:16686"
 
     for key, value in dashboard_env.items():
         cmd.extend(["-e", f"{key}={value}"])
