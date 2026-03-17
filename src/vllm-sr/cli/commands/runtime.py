@@ -28,11 +28,14 @@ from cli.consts import (
     IMAGE_PULL_POLICY_ALWAYS,
     IMAGE_PULL_POLICY_IF_NOT_PRESENT,
     IMAGE_PULL_POLICY_NEVER,
+    LOG_SERVICES,
+    STATUS_SERVICES,
     VLLM_SR_DOCKER_IMAGE_DEFAULT,
 )
 from cli.core import show_logs, show_status, start_vllm_sr, stop_vllm_sr
 from cli.docker_cli import docker_container_status
 from cli.runtime_stack import resolve_runtime_stack
+from cli.runtime_topology import container_name_for_service
 from cli.utils import get_logger
 
 log = get_logger(__name__)
@@ -48,7 +51,11 @@ inject_algorithm_into_config = _inject_algorithm_into_config
 @click.option(
     "--image",
     default=None,
-    help=f"Docker image to use (default: {VLLM_SR_DOCKER_IMAGE_DEFAULT})",
+    help=(
+        "Router runtime image to use for split topology "
+        f"(default: {VLLM_SR_DOCKER_IMAGE_DEFAULT}). "
+        "A legacy monolith vllm-sr image still enables compatibility mode."
+    ),
 )
 @click.option(
     "--image-pull-policy",
@@ -175,9 +182,7 @@ def serve(
 
 
 @click.command()
-@click.argument(
-    "service", type=click.Choice(["envoy", "router", "dashboard", "all"]), default="all"
-)
+@click.argument("service", type=click.Choice(STATUS_SERVICES), default="all")
 @exit_with_logged_error(log)
 def status(service: str) -> None:
     """
@@ -189,12 +194,13 @@ def status(service: str) -> None:
         vllm-sr status envoy        # Show envoy status
         vllm-sr status router       # Show router status
         vllm-sr status dashboard    # Show dashboard status
+        vllm-sr status dashboard-db # Show dashboard database status
     """
     show_status(service)
 
 
 @click.command()
-@click.argument("service", type=click.Choice(["envoy", "router", "dashboard"]))
+@click.argument("service", type=click.Choice(LOG_SERVICES))
 @click.option("--follow", "-f", is_flag=True, help="Follow log output")
 @exit_with_logged_error(log, interrupt_message="\nLog streaming stopped")
 def logs(service: str, follow: bool) -> None:
@@ -205,6 +211,7 @@ def logs(service: str, follow: bool) -> None:
         vllm-sr logs envoy
         vllm-sr logs router
         vllm-sr logs dashboard
+        vllm-sr logs dashboard-db
         vllm-sr logs envoy --follow
         vllm-sr logs router -f
     """
@@ -235,8 +242,12 @@ def dashboard(no_open: bool) -> None:
         vllm-sr dashboard --no-open
     """
     stack_layout = resolve_runtime_stack()
+    # Check if monolith container is running
     status = docker_container_status(stack_layout.container_name)
-    if status != "running":
+    # Also check for split runtime topology
+    dashboard_container = container_name_for_service("dashboard")
+    dashboard_status = docker_container_status(dashboard_container)
+    if status != "running" and dashboard_status != "running":
         raise ValueError("vLLM Semantic Router is not running")
 
     dashboard_url = stack_layout.dashboard_url

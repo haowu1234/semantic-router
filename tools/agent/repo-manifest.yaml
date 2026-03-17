@@ -90,7 +90,7 @@ subsystems:
 
 validation:
   smoke:
-    container_name: vllm-sr-container
+    container_name: vllm-sr-router
     dashboard_url: http://localhost:8700
     status_command: vllm-sr status all
     router_health_path: http://localhost:8000/health
@@ -120,6 +120,7 @@ docs:
   - docs/agent/plans/pl-0001-harness-roadmap.md
   - docs/agent/plans/pl-0002-e2e-rationalization-roadmap.md
   - docs/agent/plans/pl-0003-v0-3-config-contract-rollout.md
+  - docs/agent/plans/pl-0004-vllm-sr-runtime-topology-split.md
   - docs/agent/tech-debt-register.md
   - docs/agent/tech-debt/README.md
   - docs/agent/tech-debt/td-001-config-surface-fragmentation.md
@@ -141,6 +142,9 @@ docs:
   - docs/agent/adr/README.md
   - docs/agent/adr/adr-0001-harness-layering.md
   - docs/agent/adr/adr-0002-tech-debt-index-and-entry-directory.md
+  - docs/agent/adr/adr-0003-vllm-sr-runtime-topology-split.md
+  - docs/agent/adr/adr-0004-vllm-sr-dashboard-database-contract.md
+  - docs/agent/adr/adr-0005-vllm-sr-runtime-control-and-config-ownership.md
   - docs/agent/change-surfaces.md
   - docs/agent/repo-map.md
   - docs/agent/environments.md
@@ -206,6 +210,9 @@ doc_governance:
     - path: docs/agent/plans/pl-0003-v0-3-config-contract-rollout.md
       steward: agent-contract
       freshness: update at the start and end of each v0.3 config rollout loop and after each completed loop task
+    - path: docs/agent/plans/pl-0004-vllm-sr-runtime-topology-split.md
+      steward: vllm-sr-cli
+      freshness: update at the start and end of each runtime topology split loop and after each completed loop task
     - path: docs/agent/tech-debt-register.md
       steward: agent-contract
       freshness: update when debt workflow or landing-page guidance changes
@@ -269,6 +276,15 @@ doc_governance:
     - path: docs/agent/adr/adr-0002-tech-debt-index-and-entry-directory.md
       steward: agent-contract
       freshness: update only if the tech debt documentation model changes materially
+    - path: docs/agent/adr/adr-0003-vllm-sr-runtime-topology-split.md
+      steward: vllm-sr-cli
+      freshness: update only if the split local runtime topology or naming decision changes materially
+    - path: docs/agent/adr/adr-0004-vllm-sr-dashboard-database-contract.md
+      steward: dashboard
+      freshness: update only if the dashboard database ownership or steady-state backend decision changes materially
+    - path: docs/agent/adr/adr-0005-vllm-sr-runtime-control-and-config-ownership.md
+      steward: vllm-sr-cli
+      freshness: update only if the config-compilation owner or runtime-control boundary changes materially
     - path: docs/agent/change-surfaces.md
       steward: agent-contract
       freshness: update when surfaces or their mappings change

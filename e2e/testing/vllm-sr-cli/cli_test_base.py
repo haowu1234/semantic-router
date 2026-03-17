@@ -29,8 +29,15 @@ SUPPORTED_CONTAINER_RUNTIMES = ("docker", "podman")
 class CLITestBase(unittest.TestCase):
     """Base class for vLLM-SR CLI tests."""
 
-    # Container name used by vllm-sr
-    CONTAINER_NAME = "vllm-sr-container"
+    # Managed container names used by vllm-sr
+    CONTAINER_NAMES = (
+        "vllm-sr-router",
+        "vllm-sr-envoy",
+        "vllm-sr-dashboard",
+        "vllm-sr-dashboard-db",
+        "vllm-sr-container",
+    )
+    PRIMARY_CONTAINER_NAME = "vllm-sr-router"
 
     # Default timeout for CLI commands
     DEFAULT_TIMEOUT = 60
@@ -111,14 +118,15 @@ class CLITestBase(unittest.TestCase):
 
     @classmethod
     def _cleanup_container(cls):
-        """Stop and remove any existing vllm-sr container."""
+        """Stop and remove any existing vllm-sr containers."""
         runtime = cls.container_runtime
-        for command in (
-            [runtime, "stop", cls.CONTAINER_NAME],
-            [runtime, "rm", "-f", cls.CONTAINER_NAME],
-        ):
-            with suppress(Exception):
-                cls._run_subprocess(command, timeout=30)
+        for container_name in cls.CONTAINER_NAMES:
+            for command in (
+                [runtime, "stop", container_name],
+                [runtime, "rm", "-f", container_name],
+            ):
+                with suppress(Exception):
+                    cls._run_subprocess(command, timeout=30)
 
     def run_cli(
         self,
@@ -241,7 +249,7 @@ class CLITestBase(unittest.TestCase):
 
     def container_status(self) -> str:
         """
-        Get the status of the vllm-sr container.
+        Get the status of the primary vllm-sr router container.
 
         Returns:
             'running', 'exited', 'paused', 'not found', or 'error'
@@ -253,7 +261,7 @@ class CLITestBase(unittest.TestCase):
                     "ps",
                     "-a",
                     "--filter",
-                    f"name={self.CONTAINER_NAME}",
+                    "name=vllm-sr-router",
                     "--format",
                     "{{.Status}}",
                 ],
@@ -325,7 +333,7 @@ class CLITestBase(unittest.TestCase):
                     "logs",
                     "--tail",
                     str(tail),
-                    self.CONTAINER_NAME,
+                    self.PRIMARY_CONTAINER_NAME,
                 ],
                 timeout=10,
             )
@@ -343,7 +351,7 @@ class CLITestBase(unittest.TestCase):
                 "inspect",
                 "--format",
                 format_string,
-                self.CONTAINER_NAME,
+                self.PRIMARY_CONTAINER_NAME,
             ],
             timeout=timeout,
         )

@@ -131,7 +131,10 @@ docker-help: ## Show help for Docker-related make targets and environment variab
 # vLLM-SR specific variables
 VLLM_SR_IMAGE ?= ghcr.io/vllm-project/semantic-router/vllm-sr:latest
 VLLM_SR_IMAGE_ROCM ?= ghcr.io/vllm-project/semantic-router/vllm-sr-rocm:latest
-VLLM_SR_CONTAINER ?= vllm-sr-container
+VLLM_SR_ROUTER_IMAGE ?= ghcr.io/vllm-project/semantic-router/extproc:latest
+VLLM_SR_ROUTER_IMAGE_ROCM ?= ghcr.io/vllm-project/semantic-router/extproc-rocm:latest
+VLLM_SR_DASHBOARD_IMAGE ?= ghcr.io/vllm-project/semantic-router/dashboard:latest
+VLLM_SR_CONTAINER ?= vllm-sr-router
 VLLM_SR_PLATFORM ?=
 VLLM_SR_PLATFORM_NORMALIZED := $(shell echo "$(VLLM_SR_PLATFORM)" | tr '[:upper:]' '[:lower:]')
 VLLM_SR_DOCKERFILE ?= src/vllm-sr/Dockerfile
@@ -153,6 +156,9 @@ ifeq ($(VLLM_SR_PLATFORM_NORMALIZED),amd)
 ifeq ($(origin VLLM_SR_IMAGE),file)
 VLLM_SR_IMAGE := $(VLLM_SR_IMAGE_ROCM)
 endif
+ifeq ($(origin VLLM_SR_ROUTER_IMAGE),file)
+VLLM_SR_ROUTER_IMAGE := $(VLLM_SR_ROUTER_IMAGE_ROCM)
+endif
 ifeq ($(origin VLLM_SR_DOCKERFILE),file)
 VLLM_SR_DOCKERFILE := $(VLLM_SR_DOCKERFILE_AMD)
 endif
@@ -171,7 +177,7 @@ ifeq ($(GIT_SSL_NO_VERIFY),1)
 VLLM_SR_BUILD_ARGS += --build-arg GIT_SSL_NO_VERIFY=1
 endif
 
-vllm-sr-dev: ## Rebuild vLLM Semantic Router image and install CLI
+vllm-sr-dev: ## Rebuild split-runtime images and install CLI
 vllm-sr-dev:
 	@$(LOG_TARGET)
 	@echo "=========================================="
@@ -180,23 +186,32 @@ vllm-sr-dev:
 	@echo ""
 	@echo "This will:"
 	@echo "  1. Clean up old containers"
-	@echo "  2. Rebuild Docker image with all dependencies"
+	@echo "  2. Rebuild split-runtime router and dashboard images"
 	@echo "  3. Install vLLM-SR CLI in development mode"
 	@echo ""
 	@echo "1. Cleaning up old containers..."
-	@$(CONTAINER_RUNTIME) rm -f $(VLLM_SR_CONTAINER) 2>/dev/null || echo "  No container to remove"
+	@$(CONTAINER_RUNTIME) rm -f vllm-sr-router vllm-sr-envoy vllm-sr-dashboard vllm-sr-dashboard-db vllm-sr-container 2>/dev/null || echo "  No containers to remove"
 	@echo ""
-	@echo "2. Rebuilding Docker image..."
+	@echo "2. Rebuilding split-runtime router image..."
 	@echo "  Building from: $(PWD)"
 	@echo "  Platform: $(if $(VLLM_SR_PLATFORM_NORMALIZED),$(VLLM_SR_PLATFORM_NORMALIZED),default)"
 	@echo "  Target arch: $(VLLM_SR_TARGETARCH)"
 	@echo "  Build platform: $(VLLM_SR_BUILDPLATFORM)"
-	@echo "  Dockerfile: $(VLLM_SR_DOCKERFILE)"
-	@echo "  Image: $(VLLM_SR_IMAGE)"
+	@echo "  Dockerfile: tools/docker/Dockerfile.extproc$(if $(filter amd,$(VLLM_SR_PLATFORM_NORMALIZED)),-rocm,)"
+	@echo "  Image: $(VLLM_SR_ROUTER_IMAGE)"
 	@echo ""
-	@$(CONTAINER_RUNTIME) build $(VLLM_SR_BUILD_ARGS) -t $(VLLM_SR_IMAGE) -f $(VLLM_SR_DOCKERFILE) .
+	@$(CONTAINER_RUNTIME) build $(VLLM_SR_BUILD_ARGS) -t $(VLLM_SR_ROUTER_IMAGE) -f $(if $(filter amd,$(VLLM_SR_PLATFORM_NORMALIZED)),tools/docker/Dockerfile.extproc-rocm,tools/docker/Dockerfile.extproc) .
 	@echo ""
-	@echo "Image built: $(VLLM_SR_IMAGE)"
+	@echo "Router image built: $(VLLM_SR_ROUTER_IMAGE)"
+	@echo ""
+	@echo "Building dashboard image..."
+	@$(CONTAINER_RUNTIME) build -t $(VLLM_SR_DASHBOARD_IMAGE) -f dashboard/backend/Dockerfile .
+	@echo "Dashboard image built: $(VLLM_SR_DASHBOARD_IMAGE)"
+	@echo ""
+	@echo "Pulling split-runtime dependency images..."
+	@$(CONTAINER_RUNTIME) pull envoyproxy/envoy:v1.34-latest
+	@$(CONTAINER_RUNTIME) pull postgres:16-alpine
+	@echo "Dependency images ready"
 	@echo ""
 	@echo "3. Installing vLLM-SR CLI in development mode..."
 	@pip install -e src/vllm-sr
@@ -211,10 +226,10 @@ vllm-sr-dev:
 	@echo "  Or use:        make vllm-sr-start"
 	@echo ""
 
-vllm-sr-build: ## Build vLLM Semantic Router Docker image
+vllm-sr-build: ## Build legacy monolith Docker image
 vllm-sr-build:
 	@$(LOG_TARGET)
-	@echo "Building vLLM Semantic Router Docker image..."
+	@echo "Building legacy monolith vLLM Semantic Router Docker image..."
 	@echo "  Platform: $(if $(VLLM_SR_PLATFORM_NORMALIZED),$(VLLM_SR_PLATFORM_NORMALIZED),default)"
 	@echo "  Target arch: $(VLLM_SR_TARGETARCH)"
 	@echo "  Build platform: $(VLLM_SR_BUILDPLATFORM)"
@@ -226,7 +241,7 @@ vllm-sr-start: ## Start vLLM Semantic Router service
 vllm-sr-start: vllm-sr-dev
 	@$(LOG_TARGET)
 	@echo "Starting vLLM Semantic Router service..."
-	@vllm-sr serve --image-pull-policy=ifnotpresent --image $(VLLM_SR_IMAGE)
+	@vllm-sr serve --image-pull-policy=ifnotpresent
 	@vllm-sr dashboard
 
 ##@ vLLM-SR Tests (e2e tests for vllm-sr CLI)
@@ -241,8 +256,8 @@ vllm-sr-test: vllm-sr-install-cli
 	@$(LOG_TARGET)
 	@cd e2e/testing/vllm-sr-cli && python run_cli_tests.py --verbose
 
-vllm-sr-test-integration: ## Run CLI unit + integration tests (requires Docker image)
-vllm-sr-test-integration: vllm-sr-build vllm-sr-install-cli
+vllm-sr-test-integration: ## Run CLI unit + integration tests (requires split-runtime images)
+vllm-sr-test-integration: vllm-sr-dev vllm-sr-install-cli
 	@$(LOG_TARGET)
 	@cd e2e/testing/vllm-sr-cli && RUN_INTEGRATION_TESTS=true python run_cli_tests.py --verbose --integration
 

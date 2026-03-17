@@ -1,8 +1,10 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -118,24 +120,9 @@ func isWebSocketUpgrade(r *http.Request) bool {
 }
 
 func proxyWebSocket(w http.ResponseWriter, r *http.Request, target *url.URL, stripPrefix string, staticHeaders map[string]string) {
-	// Build the target address
-	targetHost := target.Host
-	if !strings.Contains(targetHost, ":") {
-		if target.Scheme == "https" || target.Scheme == "wss" {
-			targetHost += ":443"
-		} else {
-			targetHost += ":80"
-		}
-	}
+	targetHost := resolveTargetHost(target)
+	path := rewritePath(r.URL.Path, stripPrefix)
 
-	// Strip prefix from path
-	path := r.URL.Path
-	path = strings.TrimPrefix(path, stripPrefix)
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-
-	// Connect to target
 	targetConn, err := net.DialTimeout("tcp", targetHost, 10*time.Second)
 	if err != nil {
 		log.Printf("WebSocket proxy: failed to connect to %s: %v", targetHost, err)
@@ -144,22 +131,52 @@ func proxyWebSocket(w http.ResponseWriter, r *http.Request, target *url.URL, str
 	}
 	defer targetConn.Close()
 
-	// Hijack the client connection
-	hijacker, ok := w.(http.Hijacker)
-	if !ok {
-		log.Printf("WebSocket proxy: hijacking not supported")
-		http.Error(w, "WebSocket proxy error", http.StatusInternalServerError)
-		return
-	}
-	clientConn, clientBuf, err := hijacker.Hijack()
+	const wsIdleTimeout = 30 * time.Minute
+	_ = targetConn.SetDeadline(time.Now().Add(wsIdleTimeout))
+
+	clientConn, clientBuf, err := hijackClientConnection(w)
 	if err != nil {
-		log.Printf("WebSocket proxy: hijack failed: %v", err)
+		log.Printf("WebSocket proxy: %v", err)
 		http.Error(w, "WebSocket proxy error", http.StatusInternalServerError)
 		return
 	}
 	defer clientConn.Close()
+	_ = clientConn.SetDeadline(time.Now().Add(wsIdleTimeout))
 
-	// Rebuild the original HTTP request and forward to target
+	upgradeReq := buildUpgradeRequest(r, target, path, staticHeaders)
+	if _, err := targetConn.Write([]byte(upgradeReq)); err != nil {
+		log.Printf("WebSocket proxy: failed to write upgrade request: %v", err)
+		return
+	}
+
+	log.Printf("WebSocket proxy: %s %s -> %s%s", r.Method, r.URL.Path, target.Host, path)
+	bidirectionalCopy(targetConn, clientConn, clientBuf, wsIdleTimeout)
+}
+
+func resolveTargetHost(target *url.URL) string {
+	targetHost := target.Host
+	if strings.Contains(targetHost, ":") {
+		return targetHost
+	}
+	if target.Scheme == "https" || target.Scheme == "wss" {
+		return targetHost + ":443"
+	}
+	return targetHost + ":80"
+}
+
+func hijackClientConnection(w http.ResponseWriter) (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("hijacking not supported")
+	}
+	clientConn, clientBuf, err := hijacker.Hijack()
+	if err != nil {
+		return nil, nil, fmt.Errorf("hijack failed: %v", err)
+	}
+	return clientConn, clientBuf, nil
+}
+
+func buildUpgradeRequest(r *http.Request, target *url.URL, path string, staticHeaders map[string]string) string {
 	reqURL := path
 	if r.URL.RawQuery != "" {
 		reqURL += "?" + r.URL.RawQuery
@@ -169,63 +186,77 @@ func proxyWebSocket(w http.ResponseWriter, r *http.Request, target *url.URL, str
 	reqBuf.WriteString(r.Method + " " + reqURL + " HTTP/1.1\r\n")
 	reqBuf.WriteString("Host: " + target.Host + "\r\n")
 
-	effectiveStaticHeaders := map[string]string{}
+	effectiveHeaders := normalizeStaticHeaders(staticHeaders)
+	overriddenKeys := makeOverriddenKeySet(effectiveHeaders)
+	writeOriginalHeaders(&reqBuf, r.Header, overriddenKeys)
+	writeStaticHeaders(&reqBuf, effectiveHeaders)
+	reqBuf.WriteString("\r\n")
+
+	return reqBuf.String()
+}
+
+func normalizeStaticHeaders(staticHeaders map[string]string) map[string]string {
+	effective := make(map[string]string)
 	for key, value := range staticHeaders {
-		normalizedKey := strings.TrimSpace(key)
-		normalizedValue := strings.TrimSpace(value)
-		if normalizedKey == "" || normalizedValue == "" {
-			continue
-		}
-		effectiveStaticHeaders[normalizedKey] = normalizedValue
-	}
-
-	normalizedStaticHeaderKeys := map[string]struct{}{}
-	for key := range effectiveStaticHeaders {
-		trimmed := strings.ToLower(strings.TrimSpace(key))
-		if trimmed != "" {
-			normalizedStaticHeaderKeys[trimmed] = struct{}{}
+		k := strings.TrimSpace(key)
+		v := strings.TrimSpace(value)
+		if k != "" && v != "" {
+			effective[k] = v
 		}
 	}
+	return effective
+}
 
-	for key, vals := range r.Header {
+func makeOverriddenKeySet(effectiveHeaders map[string]string) map[string]struct{} {
+	overridden := make(map[string]struct{})
+	for key := range effectiveHeaders {
+		overridden[strings.ToLower(strings.TrimSpace(key))] = struct{}{}
+	}
+	return overridden
+}
+
+func writeOriginalHeaders(buf *strings.Builder, headers http.Header, overridden map[string]struct{}) {
+	for key, vals := range headers {
 		if strings.EqualFold(key, "Host") {
 			continue
 		}
-		if _, overridden := normalizedStaticHeaderKeys[strings.ToLower(strings.TrimSpace(key))]; overridden {
+		if _, skip := overridden[strings.ToLower(strings.TrimSpace(key))]; skip {
 			continue
 		}
 		for _, val := range vals {
-			reqBuf.WriteString(key + ": " + val + "\r\n")
+			buf.WriteString(key + ": " + val + "\r\n")
 		}
 	}
-	for key, value := range effectiveStaticHeaders {
-		normalizedKey := strings.TrimSpace(key)
-		normalizedValue := strings.TrimSpace(value)
-		if normalizedKey == "" || normalizedValue == "" {
-			continue
-		}
-		reqBuf.WriteString(normalizedKey + ": " + normalizedValue + "\r\n")
+}
+
+func writeStaticHeaders(buf *strings.Builder, headers map[string]string) {
+	for key, value := range headers {
+		buf.WriteString(key + ": " + value + "\r\n")
 	}
-	reqBuf.WriteString("\r\n")
+}
 
-	if _, err := targetConn.Write([]byte(reqBuf.String())); err != nil {
-		log.Printf("WebSocket proxy: failed to write upgrade request: %v", err)
-		return
-	}
-
-	log.Printf("WebSocket proxy: %s %s -> %s%s", r.Method, r.URL.Path, target.Host, path)
-
-	// Bidirectional copy
+func bidirectionalCopy(targetConn, clientConn net.Conn, clientBuf *bufio.ReadWriter, idleTimeout time.Duration) {
 	done := make(chan struct{}, 2)
 
-	go func() {
-		_, _ = io.Copy(targetConn, clientBuf)
+	copyFn := func(dst net.Conn, src io.Reader) {
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := src.Read(buf)
+			if n > 0 {
+				_ = targetConn.SetDeadline(time.Now().Add(idleTimeout))
+				_ = clientConn.SetDeadline(time.Now().Add(idleTimeout))
+				if _, wErr := dst.Write(buf[:n]); wErr != nil {
+					break
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
 		done <- struct{}{}
-	}()
-	go func() {
-		_, _ = io.Copy(clientConn, targetConn)
-		done <- struct{}{}
-	}()
+	}
 
+	go copyFn(targetConn, clientBuf)
+	go copyFn(clientConn, targetConn)
 	<-done
 }

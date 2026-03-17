@@ -3,11 +3,8 @@ package handlers
 import (
 	"bufio"
 	"fmt"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/startupstatus"
@@ -324,26 +321,11 @@ func cleanModelPath(value string) string {
 }
 
 func readRouterLogContentInContainer() string {
-	var parts []string
-	for _, path := range []string{"/var/log/supervisor/router.log", "/var/log/supervisor/router-error.log"} {
-		data, err := os.ReadFile(path)
-		if err == nil && len(data) > 0 {
-			parts = append(parts, string(data))
-		}
-	}
-
-	return tailText(strings.Join(parts, "\n"), 400)
+	return runtimeController().TailServiceLogs("router", 400)
 }
 
 func getContainerLogsTail(lines int) string {
-	// #nosec G204 -- vllmSrContainerName is a compile-time constant, lines is converted from int.
-	tailArg := strconv.Itoa(lines)
-	cmd := exec.Command("docker", "logs", "--tail", tailArg, vllmSrContainerName)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return ""
-	}
-	return string(output)
+	return runtimeController().TailContainerLogs(lines)
 }
 
 func tailText(content string, maxLines int) string {

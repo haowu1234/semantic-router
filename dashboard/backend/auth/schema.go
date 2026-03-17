@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+
+	backendconfig "github.com/vllm-project/semantic-router/dashboard/backend/config"
 )
 
 const (
@@ -124,7 +126,7 @@ func scanUserRows(rows *sql.Rows) (*User, error) {
 	return u, nil
 }
 
-const createUsersSchema = `
+const createUsersSchemaSQLite = `
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,
@@ -167,3 +169,54 @@ CREATE TABLE IF NOT EXISTS user_audit_logs (
   FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL
 );
 `
+
+const createUsersSchemaPostgres = `
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'read',
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at BIGINT NOT NULL,
+  updated_at BIGINT NOT NULL,
+  last_login_at BIGINT
+);
+
+CREATE TABLE IF NOT EXISTS role_permissions (
+  role TEXT NOT NULL,
+  permission_key TEXT NOT NULL,
+  allowed INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (role, permission_key)
+);
+
+CREATE TABLE IF NOT EXISTS user_permissions (
+  user_id TEXT NOT NULL,
+  permission_key TEXT NOT NULL,
+  allowed INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (user_id, permission_key),
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS user_audit_logs (
+  id BIGSERIAL PRIMARY KEY,
+  user_id TEXT,
+  action TEXT NOT NULL,
+  resource TEXT NOT NULL,
+  method TEXT,
+  path TEXT,
+  ip TEXT,
+  user_agent TEXT,
+  status_code INTEGER,
+  created_at BIGINT NOT NULL,
+  extra_json TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+`
+
+func createUsersSchemaForDriver(driver string) string {
+	if driver == backendconfig.DatabaseDriverPostgres {
+		return createUsersSchemaPostgres
+	}
+	return createUsersSchemaSQLite
+}

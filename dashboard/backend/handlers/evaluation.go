@@ -208,7 +208,7 @@ func (h *EvaluationHandler) CreateTaskHandler() http.HandlerFunc {
 				if h.envoyURL != "" {
 					req.Config.Endpoint = h.envoyURL
 				} else {
-					req.Config.Endpoint = "http://localhost:8801"
+					req.Config.Endpoint = envoyListenerEndpoint()
 				}
 			}
 		}

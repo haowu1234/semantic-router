@@ -24,7 +24,7 @@ var dashboardAuthRouteSpecs = []authRouteSpec{
 const authUnavailableResponse = `{"error":"Service not available","message":"Authentication service is not configured"}`
 
 func setupAuthRoutes(mux *http.ServeMux, cfg *config.Config) *auth.Service {
-	store, err := auth.NewStore(cfg.AuthDBPath)
+	store, err := auth.NewStoreWithConfig(cfg.EffectiveAuthDB())
 	if err != nil {
 		log.Printf("failed to init auth store: %v", err)
 		registerAuthUnavailableRoutes(mux)

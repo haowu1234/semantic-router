@@ -1,6 +1,14 @@
 #!/bin/sh
 set -eu
 
+if [ "${VLLM_SR_PRESERVE_RUN_USER:-}" = "1" ] || [ "${VLLM_SR_PRESERVE_RUN_USER:-}" = "true" ]; then
+    exec "$@"
+fi
+
+if [ "$(id -u)" -ne 0 ]; then
+    exec "$@"
+fi
+
 # Fix ownership and permissions for config file before switching to nonroot user
 # This allows the dashboard to write to the mounted config.yaml file
 CONFIG_FILE_PATH=${ROUTER_CONFIG_PATH:-/app/config/config.yaml}

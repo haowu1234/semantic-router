@@ -12,6 +12,7 @@ import (
 type Config struct {
 	Port                   string
 	AuthDBPath             string
+	AuthDB                 DatabaseConfig
 	JWTSecret              string
 	JWTExpiryHours         int
 	BootstrapAdminEmail    string
@@ -40,6 +41,7 @@ type Config struct {
 	// Evaluation configuration
 	EvaluationEnabled    bool
 	EvaluationDBPath     string
+	EvaluationDB         DatabaseConfig
 	EvaluationResultsDir string
 	PythonPath           string
 
@@ -68,6 +70,8 @@ func env(key, def string) string {
 }
 
 type authFlags struct {
+	dbDriver          *string
+	dbURL             *string
 	dbPath            *string
 	jwtSecret         *string
 	jwtTTL            *string
@@ -78,7 +82,9 @@ type authFlags struct {
 
 func bindAuthFlags() authFlags {
 	return authFlags{
-		dbPath:            flag.String("auth-db", env("DASHBOARD_AUTH_DB_PATH", "./data/auth.db"), "auth database path"),
+		dbDriver:          flag.String("auth-db-driver", env("DASHBOARD_AUTH_DB_DRIVER", env("DASHBOARD_DB_DRIVER", "")), "auth database driver (sqlite3 or postgres)"),
+		dbURL:             flag.String("auth-db-url", env("DASHBOARD_AUTH_DB_URL", env("DASHBOARD_DB_URL", "")), "auth database connection URL"),
+		dbPath:            flag.String("auth-db", env("DASHBOARD_AUTH_DB_PATH", DefaultAuthDBPath), "auth database path"),
 		jwtSecret:         flag.String("auth-jwt-secret", env("DASHBOARD_JWT_SECRET", ""), "JWT signing secret"),
 		jwtTTL:            flag.String("auth-jwt-expiry-hours", env("DASHBOARD_JWT_EXPIRY_HOURS", "12"), "JWT expiry in hours"),
 		bootstrapEmail:    flag.String("bootstrap-admin-email", env("DASHBOARD_ADMIN_EMAIL", ""), "bootstrap admin email"),
@@ -124,6 +130,8 @@ type parsedFlags struct {
 	setupMode            *bool
 	platform             *string
 	evaluationEnabled    *bool
+	evaluationDBDriver   *string
+	evaluationDBURL      *string
 	evaluationDBPath     *string
 	evaluationResultsDir *string
 	pythonPath           *string
@@ -154,6 +162,11 @@ func applyCoreConfig(cfg *Config, flags parsedFlags) {
 func applyFeatureConfig(cfg *Config, flags parsedFlags) {
 	cfg.EvaluationEnabled = *flags.evaluationEnabled
 	cfg.EvaluationDBPath = *flags.evaluationDBPath
+	cfg.EvaluationDB = DatabaseConfig{
+		Driver: *flags.evaluationDBDriver,
+		URL:    *flags.evaluationDBURL,
+		Path:   *flags.evaluationDBPath,
+	}
 	cfg.EvaluationResultsDir = *flags.evaluationResultsDir
 	cfg.PythonPath = *flags.pythonPath
 	cfg.MCPEnabled = *flags.mcpEnabled
@@ -165,6 +178,11 @@ func applyFeatureConfig(cfg *Config, flags parsedFlags) {
 
 func applyAuthConfig(cfg *Config, flags authFlags) error {
 	cfg.AuthDBPath = *flags.dbPath
+	cfg.AuthDB = DatabaseConfig{
+		Driver: *flags.dbDriver,
+		URL:    *flags.dbURL,
+		Path:   *flags.dbPath,
+	}
 	cfg.JWTSecret = *flags.jwtSecret
 	cfg.BootstrapAdminEmail = *flags.bootstrapEmail
 	cfg.BootstrapAdminPassword = *flags.bootstrapPassword
@@ -221,7 +239,9 @@ func LoadConfig() (*Config, error) {
 
 	// Evaluation configuration
 	evaluationEnabled := flag.Bool("evaluation", env("EVALUATION_ENABLED", "true") == "true", "enable evaluation feature")
-	evaluationDBPath := flag.String("evaluation-db", env("EVALUATION_DB_PATH", "./data/evaluations.db"), "evaluation database path")
+	evaluationDBDriver := flag.String("evaluation-db-driver", env("EVALUATION_DB_DRIVER", env("DASHBOARD_DB_DRIVER", "")), "evaluation database driver (sqlite3 or postgres)")
+	evaluationDBURL := flag.String("evaluation-db-url", env("EVALUATION_DB_URL", env("DASHBOARD_DB_URL", "")), "evaluation database connection URL")
+	evaluationDBPath := flag.String("evaluation-db", env("EVALUATION_DB_PATH", DefaultEvaluationDBPath), "evaluation database path")
 	evaluationResultsDir := flag.String("evaluation-results", env("EVALUATION_RESULTS_DIR", "./data/results"), "evaluation results directory")
 	pythonPath := flag.String("python", env("PYTHON_PATH", defaultPythonBinary()), "path to Python interpreter")
 
@@ -254,6 +274,8 @@ func LoadConfig() (*Config, error) {
 		setupMode:            setupMode,
 		platform:             platform,
 		evaluationEnabled:    evaluationEnabled,
+		evaluationDBDriver:   evaluationDBDriver,
+		evaluationDBURL:      evaluationDBURL,
 		evaluationDBPath:     evaluationDBPath,
 		evaluationResultsDir: evaluationResultsDir,
 		pythonPath:           pythonPath,

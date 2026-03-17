@@ -270,7 +270,11 @@ func defaultOpenClawModelBaseURL() string {
 	if candidate := strings.TrimSpace(os.Getenv("OPENCLAW_MODEL_BASE_URL")); candidate != "" {
 		return candidate
 	}
-	return "http://127.0.0.1:8801/v1"
+	// Derive from the Envoy listener endpoint when available, appending /v1.
+	if envoyURL := strings.TrimSpace(os.Getenv("TARGET_ENVOY_URL")); envoyURL != "" {
+		return strings.TrimSuffix(envoyURL, "/") + "/v1"
+	}
+	return "http://127.0.0.1:8899/v1"
 }
 
 func defaultOpenClawModelContextWindow() int {

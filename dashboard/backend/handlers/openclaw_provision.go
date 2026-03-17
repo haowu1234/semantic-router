@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/vllm-project/semantic-router/dashboard/backend/runtimecontrol"
 )
 
 // --- Provision ---
@@ -73,18 +75,31 @@ func (h *OpenClawHandler) ProvisionHandler() http.HandlerFunc {
 		// When using a user-defined bridge network, the OpenClaw container
 		// reaches the SR router via container-name DNS, not localhost.
 		// Automatically rewrite loopback addresses in modelBaseUrl to the
-		// dashboard container name so users don't have to do it manually.
+		// correct target container. In split runtime the LLM API lives on the
+		// Envoy container (the OpenAI-compatible listener), NOT the Dashboard.
+		// Fall back to the Dashboard / monolith container name only when the
+		// Envoy container name is not configured.
 		if nm := req.Container.NetworkMode; nm != "host" && !strings.HasPrefix(nm, "container:") {
-			dashboardContainer := strings.TrimSpace(os.Getenv("OPENCLAW_DASHBOARD_CONTAINER_NAME"))
-			if dashboardContainer == "" {
-				dashboardContainer = vllmSrContainerName
+			// Prefer the Envoy container (split runtime) for loopback rewrite,
+			// because it hosts the OpenAI-compatible listener that proxies to
+			// LLM backends. Fall back to Dashboard / monolith container only
+			// when Envoy container name is not available.
+			rewriteTarget := strings.TrimSpace(os.Getenv("VLLM_SR_ENVOY_CONTAINER_NAME"))
+			if rewriteTarget == "" {
+				rewriteTarget = strings.TrimSpace(os.Getenv("OPENCLAW_DASHBOARD_CONTAINER_NAME"))
+			}
+			if rewriteTarget == "" {
+				rewriteTarget = strings.TrimSpace(os.Getenv("VLLM_SR_DASHBOARD_CONTAINER_NAME"))
+			}
+			if rewriteTarget == "" {
+				rewriteTarget = runtimecontrol.DefaultContainerName()
 			}
 			if req.Container.ModelBaseURL == "" {
 				req.Container.ModelBaseURL = h.resolveOpenClawModelBaseURL()
 			}
-			req.Container.ModelBaseURL = rewriteLoopbackHost(req.Container.ModelBaseURL, dashboardContainer)
+			req.Container.ModelBaseURL = rewriteLoopbackHost(req.Container.ModelBaseURL, rewriteTarget)
 			if req.Container.MemoryBaseURL != "" {
-				req.Container.MemoryBaseURL = rewriteLoopbackHost(req.Container.MemoryBaseURL, dashboardContainer)
+				req.Container.MemoryBaseURL = rewriteLoopbackHost(req.Container.MemoryBaseURL, rewriteTarget)
 			}
 		} else if req.Container.ModelBaseURL == "" {
 			req.Container.ModelBaseURL = h.resolveOpenClawModelBaseURL()

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -76,6 +78,13 @@ func (h *OpenClawHandler) StartHandler() http.HandlerFunc {
 			writeJSONError(w, "containerName required", http.StatusBadRequest)
 			return
 		}
+
+		// Before restarting, refresh openclaw.json so that environment-derived
+		// values (e.g. OPENCLAW_MODEL_BASE_URL) are propagated into the config
+		// that the container bind-mounts. Without this, a restarted container
+		// will keep using stale model URLs from the original provision.
+		h.refreshOpenClawConfigBeforeStart(req.ContainerName)
+
 		out, err := h.containerCombinedOutput("start", req.ContainerName)
 		if err != nil {
 			writeJSONError(w, fmt.Sprintf("Failed to start: %s (%v)", strings.TrimSpace(string(out)), err), http.StatusInternalServerError)
@@ -89,6 +98,67 @@ func (h *OpenClawHandler) StartHandler() http.HandlerFunc {
 			log.Printf("openclaw: start encode error: %v", err)
 		}
 	}
+}
+
+// refreshOpenClawConfigBeforeStart re-resolves the model base URL from the
+// current environment and patches the on-disk openclaw.json so that a
+// restarted container picks up any URL changes (e.g. after a split-runtime
+// topology change or Envoy container rename).
+func (h *OpenClawHandler) refreshOpenClawConfigBeforeStart(containerName string) {
+	entry := h.findEntry(containerName)
+	if entry == nil || strings.TrimSpace(entry.DataDir) == "" {
+		return
+	}
+	configPath := filepath.Join(strings.TrimSpace(entry.DataDir), "openclaw.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		log.Printf("openclaw: refresh config: cannot read %s: %v", configPath, err)
+		return
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		log.Printf("openclaw: refresh config: cannot parse %s: %v", configPath, err)
+		return
+	}
+
+	// Resolve the current model base URL (reads OPENCLAW_MODEL_BASE_URL env
+	// var which runtime_stack.py sets based on the Envoy container name).
+	currentBaseURL := h.resolveOpenClawModelBaseURL()
+	if currentBaseURL == "" {
+		return
+	}
+
+	// Patch models.providers.vllm.baseUrl in the config.
+	models, _ := cfg["models"].(map[string]interface{})
+	if models == nil {
+		return
+	}
+	providers, _ := models["providers"].(map[string]interface{})
+	if providers == nil {
+		return
+	}
+	vllm, _ := providers["vllm"].(map[string]interface{})
+	if vllm == nil {
+		return
+	}
+
+	oldURL, _ := vllm["baseUrl"].(string)
+	if oldURL == currentBaseURL {
+		return // No change needed
+	}
+
+	vllm["baseUrl"] = currentBaseURL
+	updated, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		log.Printf("openclaw: refresh config: cannot marshal: %v", err)
+		return
+	}
+	if err := os.WriteFile(configPath, updated, 0o644); err != nil {
+		log.Printf("openclaw: refresh config: cannot write %s: %v", configPath, err)
+		return
+	}
+	log.Printf("openclaw: refreshed modelBaseUrl in %s: %s -> %s", configPath, oldURL, currentBaseURL)
 }
 
 func (h *OpenClawHandler) StopHandler() http.HandlerFunc {

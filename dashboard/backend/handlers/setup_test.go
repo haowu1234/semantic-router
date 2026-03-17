@@ -3,10 +3,12 @@ package handlers
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -42,8 +44,8 @@ func createBootstrapSetupConfig(t *testing.T, dir string) string {
 	return configPath
 }
 
-func createValidSetupPatch() map[string]interface{} {
-	return map[string]interface{}{
+func createValidSetupPatch() json.RawMessage {
+	patchData := map[string]interface{}{
 		"providers": map[string]interface{}{
 			"defaults": map[string]interface{}{
 				"default_model": "test-model",
@@ -113,6 +115,8 @@ func createValidSetupPatch() map[string]interface{} {
 			},
 		},
 	}
+	data, _ := json.Marshal(patchData)
+	return json.RawMessage(data)
 }
 
 func mustJSONRaw(t *testing.T, value interface{}) json.RawMessage {
@@ -284,6 +288,11 @@ routing:
 func TestSetupActivateHandler(t *testing.T) {
 	tempDir := t.TempDir()
 	configPath := createBootstrapSetupConfig(t, tempDir)
+	previousRestart := restartSetupServices
+	restartSetupServices = func(string) error { return nil }
+	t.Cleanup(func() {
+		restartSetupServices = previousRestart
+	})
 
 	body, err := json.Marshal(SetupConfigRequest{Config: mustJSONRaw(t, createValidSetupPatch())})
 	if err != nil {
@@ -315,5 +324,32 @@ func TestSetupActivateHandler(t *testing.T) {
 
 	if info, err := os.Stat(filepath.Join(tempDir, ".vllm-sr")); err != nil || !info.IsDir() {
 		t.Fatalf(".vllm-sr output directory should exist after activation: %v", err)
+	}
+}
+
+func TestSetupActivateHandlerReturnsRestartFailure(t *testing.T) {
+	tempDir := t.TempDir()
+	configPath := createBootstrapSetupConfig(t, tempDir)
+	previousRestart := restartSetupServices
+	restartSetupServices = func(string) error { return fmt.Errorf("envoy not running") }
+	t.Cleanup(func() {
+		restartSetupServices = previousRestart
+	})
+
+	body, err := json.Marshal(SetupConfigRequest{Config: createValidSetupPatch()})
+	if err != nil {
+		t.Fatalf("failed to marshal request: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/setup/activate", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	SetupActivateHandler(configPath, false, tempDir)(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status 500, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "Failed to restart router/envoy after activation") {
+		t.Fatalf("expected restart failure in response body, got %q", w.Body.String())
 	}
 }

@@ -256,7 +256,8 @@ func TestDeriveContainerName(t *testing.T) {
 
 func TestDefaultOpenClawModelBaseURL(t *testing.T) {
 	t.Setenv("OPENCLAW_MODEL_BASE_URL", "")
-	if got := defaultOpenClawModelBaseURL(); got != "http://127.0.0.1:8801/v1" {
+	t.Setenv("TARGET_ENVOY_URL", "") // Ensure envoy URL is not set
+	if got := defaultOpenClawModelBaseURL(); got != "http://127.0.0.1:8899/v1" {
 		t.Fatalf("expected fallback model base URL, got %q", got)
 	}
 

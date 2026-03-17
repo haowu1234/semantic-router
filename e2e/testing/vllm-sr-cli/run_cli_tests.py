@@ -24,7 +24,7 @@ import sys
 import unittest
 from pathlib import Path
 
-DEFAULT_IMAGE = "ghcr.io/vllm-project/semantic-router/vllm-sr:latest"
+DEFAULT_IMAGE = "ghcr.io/vllm-project/semantic-router/extproc:latest"
 SECTION_DIVIDER = "=" * 60
 
 

@@ -40,6 +40,9 @@ def _detect_container_runtime():
             log.warning(f"CONTAINER_RUNTIME set to {env_runtime} but not found in PATH")
 
     if shutil.which("docker"):
+        if _docker_cli_is_podman() and shutil.which("podman"):
+            log.info("Detected Podman via docker-compatible CLI; using podman runtime")
+            return "podman"
         log.info("Detected container runtime: docker")
         return "docker"
     if shutil.which("podman"):
@@ -53,6 +56,22 @@ def _detect_container_runtime():
     log.error("  Docker: https://docs.docker.com/get-docker/")
     log.error("  Podman: https://podman.io/getting-started/installation")
     sys.exit(1)
+
+
+def _docker_cli_is_podman():
+    """Return True when the docker CLI is backed by Podman compatibility mode."""
+    try:
+        result = subprocess.run(
+            ["docker", "version"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except Exception:
+        return False
+
+    output = f"{result.stdout}\n{result.stderr}"
+    return "Podman Engine" in output
 
 
 def docker_image_exists(image_name):

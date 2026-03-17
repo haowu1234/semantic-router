@@ -3,9 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
-	"os"
-	"os/exec"
-	"strings"
 	"time"
 )
 
@@ -41,6 +38,7 @@ type SystemStatus struct {
 }
 
 // vllmSrContainerName is the container name used by the Python vllm-sr CLI
+// for the monolith container in single-container mode.
 const vllmSrContainerName = "vllm-sr-container"
 
 // StatusHandler returns the status of vLLM-SR services
@@ -65,61 +63,17 @@ func StatusHandler(routerAPIURL, configDir string) http.HandlerFunc {
 // getDockerContainerStatus checks the status of a Docker container
 // Returns: "running", "exited", "not found", or other Docker status
 func getDockerContainerStatus(containerName string) string {
-	cmd := exec.Command("docker", "inspect", "-f", "{{.State.Status}}", containerName)
-	output, err := cmd.Output()
-	if err != nil {
-		return "not found"
-	}
-	return strings.TrimSpace(string(output))
+	return runtimeControllerForContainer(containerName).DockerContainerStatus()
 }
 
 // isRunningInContainer checks if the current process is running inside a Docker container
 func isRunningInContainer() bool {
-	// Check for /.dockerenv file (common indicator)
-	if _, err := os.Stat("/.dockerenv"); err == nil {
-		return true
-	}
-
-	// Check /proc/1/cgroup for docker/containerd
-	data, err := os.ReadFile("/proc/1/cgroup")
-	if err == nil {
-		content := string(data)
-		if strings.Contains(content, "docker") || strings.Contains(content, "containerd") {
-			return true
-		}
-	}
-
-	return false
+	return runtimeController().RunningInContainer()
 }
 
 // checkServiceFromContainerLogs checks service status from supervisorctl within the same container
 func checkServiceFromContainerLogs(service string) (bool, string) {
-	// Use supervisorctl to check service status
-	cmd := exec.Command("supervisorctl", "status", service)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		// If supervisorctl fails, service might not be configured
-		return false, "Status unknown"
-	}
-
-	outputStr := string(output)
-
-	// Parse supervisorctl output
-	// Format: "service_name  RUNNING   pid 123, uptime 0:01:23"
-	// or:     "service_name  STOPPED   Not started"
-	// or:     "service_name  FATAL     Exited too quickly"
-
-	if strings.Contains(outputStr, "RUNNING") {
-		return true, "Running"
-	} else if strings.Contains(outputStr, "STOPPED") {
-		return false, "Stopped"
-	} else if strings.Contains(outputStr, "FATAL") || strings.Contains(outputStr, "EXITED") {
-		return false, "Failed"
-	} else if strings.Contains(outputStr, "STARTING") {
-		return false, "Starting"
-	}
-
-	return false, "Status unknown"
+	return runtimeController().SupervisorServiceStatus(service)
 }
 
 // boolToStatus converts a boolean to a status string
@@ -128,6 +82,16 @@ func boolToStatus(healthy bool) string {
 		return "running"
 	}
 	return "unknown"
+}
+
+func buildServiceStatus(name, serviceStatus string, healthy bool, message, component string) ServiceStatus {
+	return ServiceStatus{
+		Name:      name,
+		Status:    serviceStatus,
+		Healthy:   healthy,
+		Message:   message,
+		Component: component,
+	}
 }
 
 // checkHTTPHealth performs an HTTP health check

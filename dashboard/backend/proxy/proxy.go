@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 )
 
 // NewReverseProxy creates a reverse proxy to targetBase and strips the given prefix from the incoming path
@@ -22,180 +23,168 @@ func NewReverseProxy(targetBase, stripPrefix string, forwardAuth bool) (*httputi
 	}
 
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+	proxy.Transport = newProxyTransport()
+	proxy.FlushInterval = -1 // flush immediately for SSE streaming
 
-	// Enable streaming responses (critical for SSE)
-	// FlushInterval = 0 means flush immediately, supporting real-time streaming
-	proxy.FlushInterval = -1 // -1 means flush immediately after each write
-
-	// Optional behavior: override Origin header to target for non-idempotent requests
-	// This helps when the upstream enforces strict Origin checking (e.g., CSRF protections)
 	overrideOrigin := strings.EqualFold(os.Getenv("PROXY_OVERRIDE_ORIGIN"), "true")
-
-	// Customize the director to rewrite the request
 	origDirector := proxy.Director
-	proxy.Director = func(r *http.Request) {
+	proxy.Director = makeProxyDirector(origDirector, targetURL, stripPrefix, forwardAuth, overrideOrigin)
+	proxy.ErrorHandler = proxyErrorHandler
+	proxy.ModifyResponse = proxyModifyResponse
+
+	return proxy, nil
+}
+
+func newProxyTransport() *http.Transport {
+	return &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   20,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 0, // no limit — SSE streams can be long-lived
+		WriteBufferSize:       32 * 1024,
+		ReadBufferSize:        32 * 1024,
+	}
+}
+
+func makeProxyDirector(origDirector func(*http.Request), targetURL *url.URL, stripPrefix string, forwardAuth, overrideOrigin bool) func(*http.Request) {
+	return func(r *http.Request) {
 		origDirector(r)
-		// Preserve original path then strip prefix
-		p := r.URL.Path
-		p = strings.TrimPrefix(p, stripPrefix)
-		// Ensure leading slash
-		if !strings.HasPrefix(p, "/") {
-			p = "/" + p
-		}
+		p := rewritePath(r.URL.Path, stripPrefix)
 		r.URL.Path = p
 
-		// Capture incoming Origin for downstream CORS decisions
-		incomingOrigin := r.Header.Get("Origin")
-
-		// If no Origin header, try to extract from Referer (for iframe requests)
-		if incomingOrigin == "" {
-			if referer := r.Header.Get("Referer"); referer != "" {
-				if refererURL, err := url.Parse(referer); err == nil {
-					incomingOrigin = refererURL.Scheme + "://" + refererURL.Host
-				}
-			}
-		}
-
-		// Forward the original Origin for response CORS handling
-		// This is critical: we must preserve the actual client origin, not the target URL
+		incomingOrigin := extractOrigin(r)
 		if incomingOrigin != "" {
 			r.Header.Set("X-Forwarded-Origin", incomingOrigin)
 		}
-		// If still no origin, don't set X-Forwarded-Origin (will use wildcard in response)
 
-		// Set Origin header to match the target URL for iframe embedding
-		// This is required for embedded services to accept iframe embedding
-		// and pass CSRF/Origin validation checks.
-		if overrideOrigin && (r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch || r.Method == http.MethodDelete) {
-			// Force Origin to target to satisfy upstream Origin/CSRF checks for write requests
-			r.Header.Set("Origin", targetURL.Scheme+"://"+targetURL.Host)
-		} else if r.Header.Get("Origin") == "" {
-			// If no Origin present, set to target origin to avoid empty Origin edge cases
-			r.Header.Set("Origin", targetURL.Scheme+"://"+targetURL.Host)
-		}
-
-		// Preserve Access-Control-Request-Private-Network header for PNA preflight requests
-		// This header is sent by Chrome when making preflight requests to private network resources
-		// from public pages. We need to forward it to the upstream service.
-		if pnaHeader := r.Header.Get("Access-Control-Request-Private-Network"); pnaHeader != "" {
-			log.Printf("PNA preflight request detected: %s", pnaHeader)
-		}
-
-		// Set X-Forwarded-* headers to preserve client information
-		// These headers should reflect the original client request, not the target service
-		r.Header.Set("X-Forwarded-Host", r.Host)
-
-		// Determine the original protocol (http or https)
-		proto := "http"
-		if r.TLS != nil {
-			proto = "https"
-		}
-		// Also check X-Forwarded-Proto from upstream (if we're behind another proxy)
-		if forwardedProto := r.Header.Get("X-Forwarded-Proto"); forwardedProto != "" {
-			proto = forwardedProto
-		}
-		r.Header.Set("X-Forwarded-Proto", proto)
-
-		// Extract client IP from RemoteAddr (strip port if present)
-		var clientIP string
-		if r.RemoteAddr != "" {
-			ip, _, err := net.SplitHostPort(r.RemoteAddr)
-			if err != nil {
-				// If SplitHostPort fails, RemoteAddr might not have a port
-				clientIP = r.RemoteAddr
-			} else {
-				clientIP = ip
-			}
-		}
-
-		// Append to existing X-Forwarded-For if present (we might be behind another proxy)
-		if clientIP != "" {
-			if existing := r.Header.Get("X-Forwarded-For"); existing != "" {
-				r.Header.Set("X-Forwarded-For", existing+", "+clientIP)
-			} else {
-				r.Header.Set("X-Forwarded-For", clientIP)
-			}
-		}
-
-		// Set Host header to match target (some services check this)
+		setOriginHeader(r, targetURL, overrideOrigin)
+		setForwardedHeaders(r)
 		r.Host = targetURL.Host
 
-		// Optionally forward Authorization header
 		if !forwardAuth {
 			r.Header.Del("Authorization")
 		}
-
-		// Log the proxied request for debugging
 		log.Printf("Proxying: %s %s -> %s://%s%s", r.Method, stripPrefix, targetURL.Scheme, targetURL.Host, p)
 	}
+}
 
-	// Add error handler for proxy failures
-	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		log.Printf("Proxy error for %s: %v", r.URL.Path, err)
-		http.Error(w, fmt.Sprintf("Bad Gateway: %v", err), http.StatusBadGateway)
+func rewritePath(path, stripPrefix string) string {
+	p := strings.TrimPrefix(path, stripPrefix)
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
 	}
+	return p
+}
 
-	// Sanitize response headers for iframe embedding and enable CORS
-	// This approach is based on the Grafana proxy implementation
-	proxy.ModifyResponse = func(resp *http.Response) error {
-		// Remove frame-busting headers that prevent iframe embedding
-		resp.Header.Del("X-Frame-Options")
+func extractOrigin(r *http.Request) string {
+	origin := r.Header.Get("Origin")
+	if origin != "" {
+		return origin
+	}
+	if referer := r.Header.Get("Referer"); referer != "" {
+		if refererURL, err := url.Parse(referer); err == nil {
+			return refererURL.Scheme + "://" + refererURL.Host
+		}
+	}
+	return ""
+}
 
-		// Handle Content-Security-Policy for iframe embedding
-		// Allow iframe from self (dashboard origin)
-		csp := resp.Header.Get("Content-Security-Policy")
-		if csp == "" {
-			// If no CSP exists, set a permissive one for self
-			resp.Header.Set("Content-Security-Policy", "frame-ancestors 'self'")
+func setOriginHeader(r *http.Request, targetURL *url.URL, overrideOrigin bool) {
+	targetOrigin := targetURL.Scheme + "://" + targetURL.Host
+	if overrideOrigin && isWriteMethod(r.Method) {
+		r.Header.Set("Origin", targetOrigin)
+	} else if r.Header.Get("Origin") == "" {
+		r.Header.Set("Origin", targetOrigin)
+	}
+}
+
+func isWriteMethod(method string) bool {
+	return method == http.MethodPost || method == http.MethodPut ||
+		method == http.MethodPatch || method == http.MethodDelete
+}
+
+func setForwardedHeaders(r *http.Request) {
+	r.Header.Set("X-Forwarded-Host", r.Host)
+
+	proto := "http"
+	if r.TLS != nil {
+		proto = "https"
+	}
+	if forwardedProto := r.Header.Get("X-Forwarded-Proto"); forwardedProto != "" {
+		proto = forwardedProto
+	}
+	r.Header.Set("X-Forwarded-Proto", proto)
+
+	clientIP := extractClientIP(r.RemoteAddr)
+	if clientIP != "" {
+		if existing := r.Header.Get("X-Forwarded-For"); existing != "" {
+			r.Header.Set("X-Forwarded-For", existing+", "+clientIP)
 		} else {
-			// If CSP exists, modify frame-ancestors directive
-			// This ensures the embedded service can be displayed in an iframe
-			lower := strings.ToLower(csp)
-			if strings.Contains(lower, "frame-ancestors") {
-				// Split directives by ';'
-				parts := strings.Split(csp, ";")
-				for i, d := range parts {
-					if strings.Contains(strings.ToLower(d), "frame-ancestors") {
-						parts[i] = "frame-ancestors 'self'"
-					}
-				}
-				resp.Header.Set("Content-Security-Policy", strings.Join(parts, ";"))
-			} else {
-				// Append frame-ancestors directive
-				resp.Header.Set("Content-Security-Policy", csp+"; frame-ancestors 'self'")
+			r.Header.Set("X-Forwarded-For", clientIP)
+		}
+	}
+}
+
+func extractClientIP(remoteAddr string) string {
+	if remoteAddr == "" {
+		return ""
+	}
+	ip, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return remoteAddr
+	}
+	return ip
+}
+
+func proxyErrorHandler(w http.ResponseWriter, r *http.Request, err error) {
+	log.Printf("Proxy error for %s: %v", r.URL.Path, err)
+	http.Error(w, fmt.Sprintf("Bad Gateway: %v", err), http.StatusBadGateway)
+}
+
+func proxyModifyResponse(resp *http.Response) error {
+	resp.Header.Del("X-Frame-Options")
+	updateCSPHeader(resp)
+	setCORSHeaders(resp)
+	resp.Header.Set("Access-Control-Allow-Private-Network", "true")
+	return nil
+}
+
+func updateCSPHeader(resp *http.Response) {
+	csp := resp.Header.Get("Content-Security-Policy")
+	if csp == "" {
+		resp.Header.Set("Content-Security-Policy", "frame-ancestors 'self'")
+		return
+	}
+	if strings.Contains(strings.ToLower(csp), "frame-ancestors") {
+		parts := strings.Split(csp, ";")
+		for i, d := range parts {
+			if strings.Contains(strings.ToLower(d), "frame-ancestors") {
+				parts[i] = "frame-ancestors 'self'"
 			}
 		}
-
-		// Add permissive CORS headers for proxied responses
-		// This allows the frontend to make API calls through the proxy
-		// Always override CORS headers to ensure iframe embedding works correctly
-
-		// Get the original request's Origin header from X-Forwarded-Origin
-		origin := resp.Request.Header.Get("X-Forwarded-Origin")
-		if origin != "" {
-			// If we have an origin, echo it back and allow credentials
-			resp.Header.Set("Access-Control-Allow-Origin", origin)
-			resp.Header.Set("Access-Control-Allow-Credentials", "true")
-			resp.Header.Set("Vary", "Origin")
-		} else {
-			// If no origin, use wildcard (but can't use credentials with wildcard)
-			resp.Header.Set("Access-Control-Allow-Origin", "*")
-		}
-
-		resp.Header.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-		resp.Header.Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept, Origin")
-		resp.Header.Set("Access-Control-Expose-Headers", "Content-Length, Content-Range")
-
-		// Add Private Network Access (PNA) headers to allow public pages to access private network resources
-		// This is required when accessing the dashboard via a public domain that proxies to local services
-		// Chrome's Private Network Access policy requires these headers for cross-origin requests to private networks
-		// See: https://developer.chrome.com/blog/private-network-access-preflight/
-		resp.Header.Set("Access-Control-Allow-Private-Network", "true")
-
-		return nil
+		resp.Header.Set("Content-Security-Policy", strings.Join(parts, ";"))
+	} else {
+		resp.Header.Set("Content-Security-Policy", csp+"; frame-ancestors 'self'")
 	}
+}
 
-	return proxy, nil
+func setCORSHeaders(resp *http.Response) {
+	origin := resp.Request.Header.Get("X-Forwarded-Origin")
+	if origin != "" {
+		resp.Header.Set("Access-Control-Allow-Origin", origin)
+		resp.Header.Set("Access-Control-Allow-Credentials", "true")
+		resp.Header.Set("Vary", "Origin")
+	} else {
+		resp.Header.Set("Access-Control-Allow-Origin", "*")
+	}
+	resp.Header.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+	resp.Header.Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept, Origin")
+	resp.Header.Set("Access-Control-Expose-Headers", "Content-Length, Content-Range")
 }
 
 // NewJaegerProxy creates a reverse proxy specifically for Jaeger UI with dark theme injection

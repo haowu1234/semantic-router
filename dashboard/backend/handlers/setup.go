@@ -64,6 +64,10 @@ type setupConfigSummary struct {
 	Signals   int
 }
 
+// restartSetupServices is a function variable to restart services after setup activation.
+// It's a variable rather than direct function call to allow mocking in tests.
+var restartSetupServices = restartSetupRuntimeServices
+
 func SetupStateHandler(configPath string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -206,8 +210,10 @@ func SetupActivateHandler(configPath string, readonlyMode bool, configDir string
 			return
 		}
 
-		if err := restartSetupRuntimeServices(configPath); err != nil {
-			log.Printf("Warning: failed to restart router/envoy after activation: %v", err)
+		if err := restartSetupServices(configPath); err != nil {
+			log.Printf("Failed to restart router/envoy after activation: %v", err)
+			http.Error(w, "Failed to restart router/envoy after activation", http.StatusInternalServerError)
+			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")

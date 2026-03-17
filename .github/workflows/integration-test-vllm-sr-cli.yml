@@ -77,12 +77,13 @@ jobs:
         run: |
           echo "=== Container Status ==="
           docker ps -a
-          echo "=== vllm-sr Container Logs ==="
-          docker logs vllm-sr-container 2>&1 | tail -200 || true
+          echo "=== Router Logs ==="
+          docker logs vllm-sr-router 2>&1 | tail -200 || true
+          echo "=== Dashboard Logs ==="
+          docker logs vllm-sr-dashboard 2>&1 | tail -200 || true
 
       - name: Clean up
         if: always()
         run: |
-          docker stop vllm-sr-container 2>/dev/null || true
-          docker rm vllm-sr-container 2>/dev/null || true
+          vllm-sr stop 2>/dev/null || true
           docker system prune -f || true

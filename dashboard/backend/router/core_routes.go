@@ -103,7 +103,7 @@ func registerEvaluationRoutes(mux *http.ServeMux, cfg *config.Config) {
 	projectRoot := resolveEvaluationProjectRoot(cfg)
 	log.Printf("Evaluation project root: %s", projectRoot)
 
-	evalDB, err := evaluation.NewDB(cfg.EvaluationDBPath)
+	evalDB, err := evaluation.NewDBWithConfig(cfg.EffectiveEvaluationDB())
 	if err != nil {
 		log.Printf("Warning: failed to initialize evaluation database: %v (other evaluation endpoints disabled)", err)
 		return

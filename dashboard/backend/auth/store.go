@@ -4,13 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	_ "github.com/mattn/go-sqlite3"
+
+	backendconfig "github.com/vllm-project/semantic-router/dashboard/backend/config"
+	"github.com/vllm-project/semantic-router/dashboard/backend/dbsupport"
 )
 
 const (
@@ -19,7 +19,8 @@ const (
 )
 
 type Store struct {
-	db *sql.DB
+	db     *sql.DB
+	driver string
 }
 
 type AuditLog struct {
@@ -37,25 +38,27 @@ type AuditLog struct {
 }
 
 func NewStore(path string) (*Store, error) {
-	dir := filepath.Dir(path)
-	if dir != "." && dir != "" && dir != "/" {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return nil, fmt.Errorf("create auth db directory: %w", err)
-		}
-	}
-	db, err := sql.Open("sqlite3", path)
+	return NewStoreWithConfig(backendconfig.DatabaseConfig{
+		Driver: backendconfig.DatabaseDriverSQLite,
+		Path:   path,
+	})
+}
+
+func NewStoreWithConfig(dbCfg backendconfig.DatabaseConfig) (*Store, error) {
+	db, resolved, err := dbsupport.Open(dbCfg, backendconfig.DefaultAuthDBPath, dbsupport.OpenOptions{
+		SQLiteMaxOpenConns:   1,
+		PostgresMaxOpenConns: 5,
+		ConnMaxLifetime:      time.Minute,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("open auth db: %w", err)
 	}
-	db.SetMaxOpenConns(1)
-	db.SetConnMaxLifetime(time.Minute)
 
-	if _, err := db.ExecContext(context.Background(), createUsersSchema); err != nil {
+	store := &Store{db: db, driver: resolved.Driver}
+	if _, err := store.execContext(context.Background(), createUsersSchemaForDriver(resolved.Driver)); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate schema: %w", err)
 	}
-
-	store := &Store{db: db}
 	if err := store.normalizeStoredRoles(); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -75,8 +78,32 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+func (s *Store) execContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+	return s.db.ExecContext(ctx, dbsupport.Rebind(s.driver, query), args...)
+}
+
+func (s *Store) queryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
+	return s.db.QueryContext(ctx, dbsupport.Rebind(s.driver, query), args...)
+}
+
+func (s *Store) queryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row {
+	return s.db.QueryRowContext(ctx, dbsupport.Rebind(s.driver, query), args...)
+}
+
+func (s *Store) begin() (*sql.Tx, error) {
+	return s.db.Begin()
+}
+
+func execTx(tx *sql.Tx, driver string, query string, args ...interface{}) (sql.Result, error) {
+	return tx.Exec(dbsupport.Rebind(driver, query), args...)
+}
+
+func queryTx(tx *sql.Tx, driver string, query string, args ...interface{}) (*sql.Rows, error) {
+	return tx.Query(dbsupport.Rebind(driver, query), args...)
+}
+
 func (s *Store) normalizeStoredRoles() error {
-	tx, err := s.db.Begin()
+	tx, err := s.begin()
 	if err != nil {
 		return err
 	}
@@ -84,7 +111,7 @@ func (s *Store) normalizeStoredRoles() error {
 		_ = tx.Rollback()
 	}()
 
-	rows, err := tx.Query(`SELECT id, role FROM users`)
+	rows, err := queryTx(tx, s.driver, `SELECT id, role FROM users`)
 	if err != nil {
 		return err
 	}
@@ -115,7 +142,7 @@ func (s *Store) normalizeStoredRoles() error {
 	}
 
 	for _, update := range updates {
-		if _, err := tx.Exec(`UPDATE users SET role = ?, updated_at = ? WHERE id = ?`, update.role, nowUnix(), update.userID); err != nil {
+		if _, err := execTx(tx, s.driver, `UPDATE users SET role = ?, updated_at = ? WHERE id = ?`, update.role, nowUnix(), update.userID); err != nil {
 			return err
 		}
 	}
@@ -124,7 +151,7 @@ func (s *Store) normalizeStoredRoles() error {
 }
 
 func (s *Store) syncDefaultRolePermissions() error {
-	tx, err := s.db.Begin()
+	tx, err := s.begin()
 	if err != nil {
 		return err
 	}
@@ -133,7 +160,9 @@ func (s *Store) syncDefaultRolePermissions() error {
 	}()
 
 	for legacyRole, targetRole := range legacyRoleAliases {
-		if _, err := tx.Exec(
+		if _, err := execTx(
+			tx,
+			s.driver,
 			`INSERT INTO role_permissions(role, permission_key, allowed)
 SELECT ?, permission_key, allowed FROM role_permissions WHERE role = ?
 ON CONFLICT(role, permission_key) DO UPDATE SET allowed = excluded.allowed`,
@@ -143,18 +172,18 @@ ON CONFLICT(role, permission_key) DO UPDATE SET allowed = excluded.allowed`,
 			return err
 		}
 
-		if _, err := tx.Exec(`DELETE FROM role_permissions WHERE role = ?`, legacyRole); err != nil {
+		if _, err := execTx(tx, s.driver, `DELETE FROM role_permissions WHERE role = ?`, legacyRole); err != nil {
 			return err
 		}
 	}
 
 	for role, perms := range DefaultRolePermissions {
-		if _, err := tx.Exec(`DELETE FROM role_permissions WHERE role = ?`, role); err != nil {
+		if _, err := execTx(tx, s.driver, `DELETE FROM role_permissions WHERE role = ?`, role); err != nil {
 			return err
 		}
 
 		for _, perm := range perms {
-			if _, err := tx.Exec(`INSERT INTO role_permissions(role, permission_key, allowed) VALUES(?,?,1)
+			if _, err := execTx(tx, s.driver, `INSERT INTO role_permissions(role, permission_key, allowed) VALUES(?,?,1)
 ON CONFLICT(role, permission_key) DO UPDATE SET allowed = 1`, role, strings.TrimSpace(perm)); err != nil {
 				return err
 			}
@@ -165,7 +194,7 @@ ON CONFLICT(role, permission_key) DO UPDATE SET allowed = 1`, role, strings.Trim
 
 func (s *Store) CountUsers(ctx context.Context) (int, error) {
 	var n int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&n); err != nil {
+	if err := s.queryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&n); err != nil {
 		return 0, err
 	}
 	return n, nil
@@ -187,7 +216,7 @@ func (s *Store) CreateUser(ctx context.Context, email, name, hash, role, status 
 	}
 	id := uuid.NewString()
 	createdAt := nowUnix()
-	_, err = s.db.ExecContext(ctx, `INSERT INTO users(id, email, name, password_hash, role, status, created_at, updated_at)
+	_, err = s.execContext(ctx, `INSERT INTO users(id, email, name, password_hash, role, status, created_at, updated_at)
 		VALUES(?,?,?,?,?,?,?,?)`, id, strings.ToLower(email), name, hash, role, status, createdAt, createdAt)
 	if err != nil {
 		return nil, err
@@ -196,7 +225,7 @@ func (s *Store) CreateUser(ctx context.Context, email, name, hash, role, status 
 }
 
 func (s *Store) GetUserByEmail(ctx context.Context, email string) (id, emailOut, name, role, status string, createdAt, updatedAt int64, lastLogin *int64, hash string, err error) {
-	row := s.db.QueryRowContext(
+	row := s.queryRowContext(
 		ctx,
 		`SELECT id, email, name, role, status, created_at, updated_at, last_login_at, password_hash FROM users WHERE email = ?`,
 		strings.ToLower(email),
@@ -215,7 +244,7 @@ func (s *Store) GetUserByEmail(ctx context.Context, email string) (id, emailOut,
 }
 
 func (s *Store) GetUserByID(ctx context.Context, userID string) (*User, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, email, name, role, status, created_at, updated_at, last_login_at FROM users WHERE id = ?`, userID)
+	row := s.queryRowContext(ctx, `SELECT id, email, name, role, status, created_at, updated_at, last_login_at FROM users WHERE id = ?`, userID)
 	return scanUser(row)
 }
 
@@ -232,7 +261,7 @@ func (s *Store) ListUsers(ctx context.Context, statusFilter string, limit, offse
 	q += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
 	args = append(args, limit, offset)
 
-	rows, err := s.db.QueryContext(ctx, q, args...)
+	rows, err := s.queryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -271,7 +300,7 @@ func (s *Store) UpdateUserRoleOrStatus(ctx context.Context, userID, role, status
 		if normalizeErr != nil {
 			return nil, normalizeErr
 		}
-		res, err = s.db.ExecContext(
+		res, err = s.execContext(
 			ctx,
 			`UPDATE users SET role = ?, status = ?, updated_at = ? WHERE id = ?`,
 			normalizedRole,
@@ -284,7 +313,7 @@ func (s *Store) UpdateUserRoleOrStatus(ctx context.Context, userID, role, status
 		if normalizeErr != nil {
 			return nil, normalizeErr
 		}
-		res, err = s.db.ExecContext(
+		res, err = s.execContext(
 			ctx,
 			`UPDATE users SET role = ?, updated_at = ? WHERE id = ?`,
 			normalizedRole,
@@ -292,7 +321,7 @@ func (s *Store) UpdateUserRoleOrStatus(ctx context.Context, userID, role, status
 			userID,
 		)
 	default:
-		res, err = s.db.ExecContext(
+		res, err = s.execContext(
 			ctx,
 			`UPDATE users SET status = ?, updated_at = ? WHERE id = ?`,
 			status,
@@ -312,7 +341,7 @@ func (s *Store) UpdateUserRoleOrStatus(ctx context.Context, userID, role, status
 }
 
 func (s *Store) DeleteUser(ctx context.Context, userID string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, userID)
+	res, err := s.execContext(ctx, `DELETE FROM users WHERE id = ?`, userID)
 	if err != nil {
 		return err
 	}
@@ -324,7 +353,7 @@ func (s *Store) DeleteUser(ctx context.Context, userID string) error {
 }
 
 func (s *Store) UpdatePassword(ctx context.Context, userID, passwordHash string) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?`, passwordHash, nowUnix(), userID)
+	res, err := s.execContext(ctx, `UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?`, passwordHash, nowUnix(), userID)
 	if err != nil {
 		return err
 	}
@@ -336,13 +365,13 @@ func (s *Store) UpdatePassword(ctx context.Context, userID, passwordHash string)
 }
 
 func (s *Store) UpdateLoginTime(ctx context.Context, userID string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?`, nowUnix(), nowUnix(), userID)
+	_, err := s.execContext(ctx, `UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?`, nowUnix(), nowUnix(), userID)
 	return err
 }
 
 func (s *Store) GetEffectivePermissions(ctx context.Context, role string, userID string) (map[string]bool, error) {
 	permMap := map[string]bool{}
-	rows, err := s.db.QueryContext(ctx, `SELECT permission_key FROM role_permissions WHERE role = ? AND allowed = 1`, role)
+	rows, err := s.queryContext(ctx, `SELECT permission_key FROM role_permissions WHERE role = ? AND allowed = 1`, role)
 	if err != nil {
 		return nil, err
 	}
@@ -360,7 +389,7 @@ func (s *Store) GetEffectivePermissions(ctx context.Context, role string, userID
 	}
 
 	if userID != "" {
-		uRows, err := s.db.QueryContext(ctx, `SELECT permission_key FROM user_permissions WHERE user_id = ? AND allowed = 1`, userID)
+		uRows, err := s.queryContext(ctx, `SELECT permission_key FROM user_permissions WHERE user_id = ? AND allowed = 1`, userID)
 		if err != nil {
 			return nil, err
 		}
@@ -388,7 +417,7 @@ func (s *Store) CountActiveUsersWithPermission(ctx context.Context, permission s
 		args = append(args, excludeUserID)
 	}
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return 0, err
 	}
@@ -429,7 +458,7 @@ func (s *Store) CountActiveUsersWithPermission(ctx context.Context, permission s
 }
 
 func (s *Store) ListRolePermissions(ctx context.Context) (map[string][]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT role, permission_key FROM role_permissions WHERE allowed = 1 ORDER BY role, permission_key`)
+	rows, err := s.queryContext(ctx, `SELECT role, permission_key FROM role_permissions WHERE allowed = 1 ORDER BY role, permission_key`)
 	if err != nil {
 		return nil, err
 	}
@@ -452,7 +481,7 @@ func (s *Store) ListRolePermissions(ctx context.Context) (map[string][]string, e
 }
 
 func (s *Store) AddAuditLog(ctx context.Context, logRow AuditLog) error {
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.execContext(ctx, `
 		INSERT INTO user_audit_logs(user_id, action, resource, method, path, ip, user_agent, status_code, created_at, extra_json)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		nilOrString(logRow.UserID), logRow.Action, logRow.Resource, logRow.Method, logRow.Path, logRow.IP, logRow.UserAgent, logRow.StatusCode, nowUnix(), logRow.ExtraJSON)
@@ -484,7 +513,7 @@ func (s *Store) ListAuditLogs(ctx context.Context, userID, action, resource stri
 	q += " ORDER BY id DESC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
 
-	rows, err := s.db.QueryContext(ctx, q, args...)
+	rows, err := s.queryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -241,7 +241,7 @@ routing:
         # In CI, the image should already be built and loaded
 
         # Check if the default image exists
-        default_image = "ghcr.io/vllm-project/semantic-router/vllm-sr:latest"
+        default_image = "ghcr.io/vllm-project/semantic-router/extproc:latest"
         image_exists = self.image_exists(default_image)
 
         print(f"Default image exists locally: {image_exists}")

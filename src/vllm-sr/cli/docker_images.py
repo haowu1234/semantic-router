@@ -2,6 +2,7 @@
 
 import os
 import sys
+from dataclasses import dataclass
 
 from cli.consts import (
     DEFAULT_IMAGE_PULL_POLICY,
@@ -9,8 +10,13 @@ from cli.consts import (
     IMAGE_PULL_POLICY_IF_NOT_PRESENT,
     IMAGE_PULL_POLICY_NEVER,
     PLATFORM_AMD,
+    VLLM_SR_DASHBOARD_DB_IMAGE_DEFAULT,
+    VLLM_SR_DASHBOARD_IMAGE_DEFAULT,
     VLLM_SR_DOCKER_IMAGE_DEFAULT,
     VLLM_SR_DOCKER_IMAGE_ROCM,
+    VLLM_SR_ENVOY_IMAGE_DEFAULT,
+    VLLM_SR_MONOLITH_IMAGE_DEFAULT,
+    VLLM_SR_MONOLITH_IMAGE_ROCM,
 )
 from cli.docker_runtime import (
     docker_image_exists,
@@ -22,11 +28,27 @@ from cli.utils import get_logger
 log = get_logger(__name__)
 
 
+@dataclass(frozen=True)
+class SplitRuntimeImages:
+    """Container images used by the split local runtime."""
+
+    router: str
+    dashboard: str
+    envoy: str
+    dashboard_db: str
+
+
 def _normalize_platform(platform):
     """Normalize platform input for comparisons."""
     if platform is None:
         return ""
     return str(platform).strip().lower()
+
+
+def _resolve_platform_hint(platform):
+    return _normalize_platform(platform) or _normalize_platform(
+        os.getenv("VLLM_SR_PLATFORM")
+    )
 
 
 def _is_rocm_image(image_name):
@@ -36,13 +58,13 @@ def _is_rocm_image(image_name):
     return "rocm" in image_name.lower()
 
 
-def _derive_rocm_variant(image_name):
-    """Return a ROCm variant for official vllm-sr image references."""
+def _derive_rocm_variant(image_name, base_image):
+    """Return a ROCm variant for official image references."""
     if not image_name:
         return ""
 
     image_name = image_name.strip()
-    default_repo = VLLM_SR_DOCKER_IMAGE_DEFAULT.rsplit(":", 1)[0]
+    default_repo = base_image.rsplit(":", 1)[0]
     if not image_name.startswith(default_repo):
         return ""
 
@@ -54,37 +76,13 @@ def _derive_rocm_variant(image_name):
     return ""
 
 
-def _resolve_platform_hint(platform):
-    return _normalize_platform(platform) or _normalize_platform(
-        os.getenv("VLLM_SR_PLATFORM")
-    )
-
-
-def _select_image_source(image, normalized_platform):
-    if image:
-        log.info(f"Using specified image: {image}")
-        return image
-    env_image = os.getenv("VLLM_SR_IMAGE")
-    if env_image:
-        log.info(f"Using image from VLLM_SR_IMAGE: {env_image}")
-        return env_image
-    if normalized_platform == PLATFORM_AMD:
-        amd_image = os.getenv("VLLM_SR_IMAGE_AMD", VLLM_SR_DOCKER_IMAGE_ROCM).strip()
-        selected_image = amd_image or VLLM_SR_DOCKER_IMAGE_ROCM
-        log.info(
-            f"Platform '{normalized_platform}' detected, using AMD ROCm default image: "
-            f"{selected_image}"
-        )
-        return selected_image
-    log.info(f"Using default image: {VLLM_SR_DOCKER_IMAGE_DEFAULT}")
-    return VLLM_SR_DOCKER_IMAGE_DEFAULT
-
-
-def _maybe_upgrade_to_rocm_image(selected_image, normalized_platform, source_name):
+def _maybe_upgrade_to_rocm_image(
+    selected_image, normalized_platform, source_name, default_image
+):
     if normalized_platform != PLATFORM_AMD or _is_rocm_image(selected_image):
         return selected_image
 
-    rocm_variant = _derive_rocm_variant(selected_image)
+    rocm_variant = _derive_rocm_variant(selected_image, default_image)
     if rocm_variant:
         log.warning(
             f"Platform 'amd' selected with non-ROCm official {source_name}. "
@@ -97,25 +95,6 @@ def _maybe_upgrade_to_rocm_image(selected_image, normalized_platform, source_nam
         "GPU acceleration may not be enabled. Prefer a '*-rocm' image."
     )
     return selected_image
-
-
-def _resolve_selected_image(image, normalized_platform):
-    if image:
-        return _maybe_upgrade_to_rocm_image(
-            _select_image_source(image, normalized_platform),
-            normalized_platform,
-            "vllm-sr image",
-        )
-
-    env_image = os.getenv("VLLM_SR_IMAGE")
-    if env_image:
-        return _maybe_upgrade_to_rocm_image(
-            _select_image_source(None, normalized_platform),
-            normalized_platform,
-            "vllm-sr image in VLLM_SR_IMAGE",
-        )
-
-    return _select_image_source(None, normalized_platform)
 
 
 def _ensure_image_available(selected_image, pull_policy):
@@ -148,34 +127,145 @@ def _pull_or_exit(selected_image, show_not_found=False):
     sys.exit(1)
 
 
+def _resolve_router_image(image, normalized_platform):
+    if image:
+        log.info(f"Using specified router image: {image}")
+        selected = image
+    else:
+        env_image = os.getenv("VLLM_SR_IMAGE")
+        if env_image:
+            log.info(f"Using router image from VLLM_SR_IMAGE: {env_image}")
+            selected = env_image
+        elif normalized_platform == PLATFORM_AMD:
+            amd_image = os.getenv(
+                "VLLM_SR_IMAGE_AMD", VLLM_SR_DOCKER_IMAGE_ROCM
+            ).strip()
+            selected = amd_image or VLLM_SR_DOCKER_IMAGE_ROCM
+            log.info(
+                f"Platform '{normalized_platform}' detected, using AMD router image: "
+                f"{selected}"
+            )
+        else:
+            selected = VLLM_SR_DOCKER_IMAGE_DEFAULT
+            log.info(f"Using default router image: {selected}")
+
+    source_name = "router image"
+    if image:
+        source_name = "specified router image"
+    elif os.getenv("VLLM_SR_IMAGE"):
+        source_name = "router image in VLLM_SR_IMAGE"
+    return _maybe_upgrade_to_rocm_image(
+        selected, normalized_platform, source_name, VLLM_SR_DOCKER_IMAGE_DEFAULT
+    )
+
+
 def get_docker_image(image=None, pull_policy=None, platform=None):
     """
-    Determine which Docker image to use and handle pulling if needed.
-
-    Priority:
-    1. Explicit image parameter (--image)
-    2. VLLM_SR_IMAGE environment variable
-    3. Platform-specific default image (e.g. AMD -> ROCm image)
-    4. Default image
-
-    Args:
-        image: Explicit image name (optional)
-        pull_policy: Image pull policy - 'always', 'ifnotpresent', 'never'
-        platform: Platform hint from CLI/environment (e.g. 'amd')
-
-    Returns:
-        Docker image name
+    Resolve the split-runtime router image and ensure it is available locally.
     """
-    if pull_policy is None:
+    if not pull_policy:
         pull_policy = DEFAULT_IMAGE_PULL_POLICY
     normalized_platform = _resolve_platform_hint(platform)
-    selected_image = _resolve_selected_image(image, normalized_platform)
+    selected_image = _resolve_router_image(image, normalized_platform)
     _ensure_image_available(selected_image, pull_policy)
     return selected_image
 
 
+def get_monolith_image(image=None, pull_policy=None, platform=None):
+    """
+    Resolve the legacy all-in-one runtime image and ensure it is available locally.
+    """
+    if not pull_policy:
+        pull_policy = DEFAULT_IMAGE_PULL_POLICY
+
+    normalized_platform = _resolve_platform_hint(platform)
+    if image:
+        log.info(f"Using specified legacy monolith image: {image}")
+        selected_image = image
+    else:
+        env_image = os.getenv("VLLM_SR_IMAGE")
+        if env_image:
+            log.info(f"Using legacy monolith image from VLLM_SR_IMAGE: {env_image}")
+            selected_image = env_image
+        elif normalized_platform == PLATFORM_AMD:
+            selected_image = (
+                os.getenv(
+                    "VLLM_SR_MONOLITH_IMAGE_AMD", VLLM_SR_MONOLITH_IMAGE_ROCM
+                ).strip()
+                or VLLM_SR_MONOLITH_IMAGE_ROCM
+            )
+            log.info(
+                f"Platform '{normalized_platform}' detected, using AMD monolith image: "
+                f"{selected_image}"
+            )
+        else:
+            selected_image = VLLM_SR_MONOLITH_IMAGE_DEFAULT
+            log.info(f"Using default legacy monolith image: {selected_image}")
+
+    selected_image = _maybe_upgrade_to_rocm_image(
+        selected_image,
+        normalized_platform,
+        "legacy monolith image",
+        VLLM_SR_MONOLITH_IMAGE_DEFAULT,
+    )
+    _ensure_image_available(selected_image, pull_policy)
+    return selected_image
+
+
+def resolve_split_runtime_images(
+    image=None,
+    pull_policy=None,
+    platform=None,
+    include_router=True,
+    include_dashboard=True,
+    include_envoy=True,
+    include_dashboard_db=True,
+):
+    """
+    Resolve all images required by the split local runtime.
+    """
+    if not pull_policy:
+        pull_policy = DEFAULT_IMAGE_PULL_POLICY
+
+    normalized_platform = _resolve_platform_hint(platform)
+    router_image = _resolve_router_image(image, normalized_platform)
+
+    dashboard_image = (
+        os.getenv("VLLM_SR_DASHBOARD_IMAGE", VLLM_SR_DASHBOARD_IMAGE_DEFAULT).strip()
+        or VLLM_SR_DASHBOARD_IMAGE_DEFAULT
+    )
+    envoy_image = (
+        os.getenv("VLLM_SR_ENVOY_IMAGE", VLLM_SR_ENVOY_IMAGE_DEFAULT).strip()
+        or VLLM_SR_ENVOY_IMAGE_DEFAULT
+    )
+    dashboard_db_image = (
+        os.getenv(
+            "VLLM_SR_DASHBOARD_DB_IMAGE", VLLM_SR_DASHBOARD_DB_IMAGE_DEFAULT
+        ).strip()
+        or VLLM_SR_DASHBOARD_DB_IMAGE_DEFAULT
+    )
+
+    if include_router:
+        _ensure_image_available(router_image, pull_policy)
+    for enabled, selected_image in (
+        (include_dashboard, dashboard_image),
+        (include_envoy, envoy_image),
+        (include_dashboard_db, dashboard_db_image),
+    ):
+        if not enabled:
+            continue
+        _ensure_image_available(selected_image, pull_policy)
+
+    return SplitRuntimeImages(
+        router=router_image,
+        dashboard=dashboard_image,
+        envoy=envoy_image,
+        dashboard_db=dashboard_db_image,
+    )
+
+
 def _show_image_not_found_error(image_name):
-    """Show helpful error message when image is not found."""
+    """Show helpful error message when an image is not found."""
     runtime = get_container_runtime()
     log.error("=" * 70)
     log.error("Container image not found!")
@@ -189,9 +279,9 @@ def _show_image_not_found_error(image_name):
     log.error(f"     {runtime} pull {image_name}")
     log.error("")
     log.error("  2. Use custom image:")
-    log.error("     vllm-sr serve config.yaml --image your-image:tag")
+    log.error("     vllm-sr serve --image your-image:tag")
     log.error("")
     log.error("  3. Change pull policy to always:")
-    log.error("     vllm-sr serve config.yaml --image-pull-policy always")
+    log.error("     vllm-sr serve --image-pull-policy always")
     log.error("")
     log.error("=" * 70)

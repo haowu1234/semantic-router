@@ -6,53 +6,107 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
-	_ "github.com/mattn/go-sqlite3"
 
+	backendconfig "github.com/vllm-project/semantic-router/dashboard/backend/config"
+	"github.com/vllm-project/semantic-router/dashboard/backend/dbsupport"
 	"github.com/vllm-project/semantic-router/dashboard/backend/models"
 )
 
 // DB handles SQLite database operations for evaluations.
 type DB struct {
-	db *sql.DB
-	mu sync.RWMutex
+	db     *sql.DB
+	driver string
+	mu     sync.RWMutex
 }
 
 // NewDB creates a new database connection and initializes the schema.
 func NewDB(dbPath string) (*DB, error) {
-	// Ensure directory exists
-	dir := filepath.Dir(dbPath)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, fmt.Errorf("failed to create database directory: %w", err)
-	}
+	return NewDBWithConfig(backendconfig.DatabaseConfig{
+		Driver: backendconfig.DatabaseDriverSQLite,
+		Path:   dbPath,
+	})
+}
 
-	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+func NewDBWithConfig(dbCfg backendconfig.DatabaseConfig) (*DB, error) {
+	db, resolved, err := dbsupport.Open(dbCfg, backendconfig.DefaultEvaluationDBPath, dbsupport.OpenOptions{
+		SQLiteDSNSuffix:      "?_journal_mode=WAL&_busy_timeout=5000",
+		SQLiteMaxOpenConns:   1,
+		PostgresMaxOpenConns: 10,
+		ConnMaxLifetime:      time.Minute,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	// Test connection
-	if err := db.Ping(); err != nil {
-		return nil, fmt.Errorf("failed to ping database: %w", err)
-	}
-
-	evalDB := &DB{db: db}
+	evalDB := &DB{db: db, driver: resolved.Driver}
 	if err := evalDB.initSchema(); err != nil {
+		_ = db.Close()
 		return nil, fmt.Errorf("failed to initialize schema: %w", err)
 	}
 
-	log.Printf("Evaluation database initialized at: %s", dbPath)
+	log.Printf("Evaluation database initialized with driver %s", resolved.Driver)
 	return evalDB, nil
 }
 
 // initSchema creates the database tables if they don't exist.
 func (d *DB) initSchema() error {
-	schema := `
+	schema := evaluationSchemaForDriver(d.driver)
+	_, err := d.exec(schema)
+	return err
+}
+
+func evaluationSchemaForDriver(driver string) string {
+	if driver == backendconfig.DatabaseDriverPostgres {
+		return `
+	-- Tasks table
+	CREATE TABLE IF NOT EXISTS evaluation_tasks (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		description TEXT,
+		status TEXT NOT NULL DEFAULT 'pending',
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		started_at TIMESTAMP,
+		completed_at TIMESTAMP,
+		config_json TEXT NOT NULL,
+		error_message TEXT,
+		progress_percent INTEGER DEFAULT 0,
+		current_step TEXT
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_tasks_status ON evaluation_tasks(status);
+	CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON evaluation_tasks(created_at DESC);
+
+	CREATE TABLE IF NOT EXISTS evaluation_results (
+		id TEXT PRIMARY KEY,
+		task_id TEXT NOT NULL,
+		dimension TEXT NOT NULL,
+		dataset_name TEXT NOT NULL,
+		metrics_json TEXT NOT NULL,
+		raw_results_path TEXT,
+		FOREIGN KEY (task_id) REFERENCES evaluation_tasks(id) ON DELETE CASCADE
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_results_task_id ON evaluation_results(task_id);
+
+	CREATE TABLE IF NOT EXISTS evaluation_history (
+		id BIGSERIAL PRIMARY KEY,
+		result_id TEXT NOT NULL,
+		metric_name TEXT NOT NULL,
+		metric_value DOUBLE PRECISION NOT NULL,
+		recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (result_id) REFERENCES evaluation_results(id) ON DELETE CASCADE
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_history_result_id ON evaluation_history(result_id);
+	CREATE INDEX IF NOT EXISTS idx_history_recorded_at ON evaluation_history(recorded_at DESC);
+	`
+	}
+
+	return `
 	-- Tasks table
 	CREATE TABLE IF NOT EXISTS evaluation_tasks (
 		id TEXT PRIMARY KEY,
@@ -98,9 +152,18 @@ func (d *DB) initSchema() error {
 	CREATE INDEX IF NOT EXISTS idx_history_result_id ON evaluation_history(result_id);
 	CREATE INDEX IF NOT EXISTS idx_history_recorded_at ON evaluation_history(recorded_at DESC);
 	`
+}
 
-	_, err := d.db.Exec(schema)
-	return err
+func (d *DB) exec(query string, args ...interface{}) (sql.Result, error) {
+	return d.db.Exec(dbsupport.Rebind(d.driver, query), args...)
+}
+
+func (d *DB) query(query string, args ...interface{}) (*sql.Rows, error) {
+	return d.db.Query(dbsupport.Rebind(d.driver, query), args...)
+}
+
+func (d *DB) queryRow(query string, args ...interface{}) *sql.Row {
+	return d.db.QueryRow(dbsupport.Rebind(d.driver, query), args...)
 }
 
 // Close closes the database connection.
@@ -129,7 +192,7 @@ func (d *DB) CreateTask(task *models.EvaluationTask) error {
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
-	_, err = d.db.Exec(query, task.ID, task.Name, task.Description, task.Status, task.CreatedAt, string(configJSON), 0, "")
+	_, err = d.exec(query, task.ID, task.Name, task.Description, task.Status, task.CreatedAt, string(configJSON), 0, "")
 	if err != nil {
 		return fmt.Errorf("failed to insert task: %w", err)
 	}
@@ -153,7 +216,7 @@ func (d *DB) GetTask(id string) (*models.EvaluationTask, error) {
 	var startedAt, completedAt sql.NullTime
 	var errorMessage, currentStep sql.NullString
 
-	err := d.db.QueryRow(query, id).Scan(
+	err := d.queryRow(query, id).Scan(
 		&task.ID, &task.Name, &task.Description, &task.Status, &task.CreatedAt,
 		&startedAt, &completedAt, &configJSON, &errorMessage, &task.ProgressPercent, &currentStep,
 	)
@@ -208,7 +271,7 @@ func (d *DB) ListTasks(status string) ([]*models.EvaluationTask, error) {
 		`
 	}
 
-	rows, err := d.db.Query(query, args...)
+	rows, err := d.query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query tasks: %w", err)
 	}
@@ -278,7 +341,7 @@ func (d *DB) UpdateTaskStatus(id string, status models.EvaluationStatus, errorMe
 		args = []interface{}{status, errorMessage, id}
 	}
 
-	result, err := d.db.Exec(query, args...)
+	result, err := d.exec(query, args...)
 	if err != nil {
 		return fmt.Errorf("failed to update task status: %w", err)
 	}
@@ -301,7 +364,7 @@ func (d *DB) UpdateTaskProgress(id string, percent int, currentStep string) erro
 
 	query := `UPDATE evaluation_tasks SET progress_percent = ?, current_step = ? WHERE id = ?`
 
-	result, err := d.db.Exec(query, percent, currentStep, id)
+	result, err := d.exec(query, percent, currentStep, id)
 	if err != nil {
 		return fmt.Errorf("failed to update task progress: %w", err)
 	}
@@ -325,7 +388,7 @@ func (d *DB) DeleteTask(id string) error {
 	// SQLite foreign keys with ON DELETE CASCADE should handle results
 	query := `DELETE FROM evaluation_tasks WHERE id = ?`
 
-	result, err := d.db.Exec(query, id)
+	result, err := d.exec(query, id)
 	if err != nil {
 		return fmt.Errorf("failed to delete task: %w", err)
 	}
@@ -360,7 +423,7 @@ func (d *DB) SaveResult(result *models.EvaluationResult) error {
 		VALUES (?, ?, ?, ?, ?, ?)
 	`
 
-	_, err = d.db.Exec(query, result.ID, result.TaskID, result.Dimension, result.DatasetName, string(metricsJSON), result.RawResultsPath)
+	_, err = d.exec(query, result.ID, result.TaskID, result.Dimension, result.DatasetName, string(metricsJSON), result.RawResultsPath)
 	if err != nil {
 		return fmt.Errorf("failed to insert result: %w", err)
 	}
@@ -379,7 +442,7 @@ func (d *DB) GetResults(taskID string) ([]*models.EvaluationResult, error) {
 		WHERE task_id = ?
 	`
 
-	rows, err := d.db.Query(query, taskID)
+	rows, err := d.query(query, taskID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query results: %w", err)
 	}
@@ -424,7 +487,19 @@ func (d *DB) SaveHistoryEntry(entry *models.EvaluationHistoryEntry) error {
 		VALUES (?, ?, ?, ?)
 	`
 
-	result, err := d.db.Exec(query, entry.ResultID, entry.MetricName, entry.MetricValue, time.Now())
+	if d.driver == backendconfig.DatabaseDriverPostgres {
+		query = `
+			INSERT INTO evaluation_history (result_id, metric_name, metric_value, recorded_at)
+			VALUES (?, ?, ?, ?)
+			RETURNING id
+		`
+		if err := d.queryRow(query, entry.ResultID, entry.MetricName, entry.MetricValue, time.Now()).Scan(&entry.ID); err != nil {
+			return fmt.Errorf("failed to insert history entry: %w", err)
+		}
+		return nil
+	}
+
+	result, err := d.exec(query, entry.ResultID, entry.MetricName, entry.MetricValue, time.Now())
 	if err != nil {
 		return fmt.Errorf("failed to insert history entry: %w", err)
 	}
@@ -451,7 +526,7 @@ func (d *DB) GetHistoryForMetric(metricName string, limit int) ([]*models.Evalua
 		LIMIT ?
 	`
 
-	rows, err := d.db.Query(query, metricName, limit)
+	rows, err := d.query(query, metricName, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query history: %w", err)
 	}
@@ -486,7 +561,7 @@ func (d *DB) GetHistoryForResult(resultID string) ([]*models.EvaluationHistoryEn
 		ORDER BY recorded_at DESC
 	`
 
-	rows, err := d.db.Query(query, resultID)
+	rows, err := d.query(query, resultID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query history: %w", err)
 	}

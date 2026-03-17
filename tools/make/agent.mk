@@ -151,7 +151,9 @@ agent-smoke-local: ## Validate local container, router, envoy, and dashboard hea
 		sleep 5; \
 	done; \
 	curl -fsS "http://localhost:$$STACK_DASHBOARD_PORT" >/dev/null; \
-	$(CONTAINER_RUNTIME) ps --filter "name=$$STACK_CONTAINER" --format '{{.Names}}' | grep -q "^$$STACK_CONTAINER$$"; \
+	$(CONTAINER_RUNTIME) ps --filter "name=$$STACK_CONTAINER" --format '{{.Names}}' | grep -q "^$$STACK_CONTAINER$$" || \
+		($(CONTAINER_RUNTIME) ps --filter "name=vllm-sr-router" --format '{{.Names}}' | grep -q '^vllm-sr-router$$' && \
+		$(CONTAINER_RUNTIME) ps --filter "name=vllm-sr-dashboard" --format '{{.Names}}' | grep -q '^vllm-sr-dashboard$$'); \
 	if $(CONTAINER_RUNTIME) logs $$STACK_CONTAINER 2>&1 | grep -E "Image not found locally|Failed to pull image|Container exited unexpectedly" >/dev/null; then \
 		echo "Detected startup failure in container logs"; \
 		exit 1; \

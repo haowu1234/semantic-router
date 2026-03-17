@@ -105,11 +105,19 @@ func (h *OpenClawHandler) gatewayHostCandidates(containerName string) []string {
 		}
 	}
 
-	candidates = append(candidates,
-		"127.0.0.1",
-		"host.docker.internal",
-		"host.containers.internal",
-	)
+	// In bridge network mode (Dashboard running inside a container on a
+	// user-defined bridge), loopback addresses like 127.0.0.1 and
+	// host.docker.internal are either unreachable or resolve to the wrong
+	// host. Only add them when the Dashboard is likely running on the host
+	// itself (no container name available, or explicit env override).
+	networkMode := strings.TrimSpace(os.Getenv("OPENCLAW_DEFAULT_NETWORK_MODE"))
+	if !isBridgeNetwork(networkMode) {
+		candidates = append(candidates,
+			"127.0.0.1",
+			"host.docker.internal",
+			"host.containers.internal",
+		)
+	}
 
 	seen := map[string]bool{}
 	out := make([]string, 0, len(candidates))
