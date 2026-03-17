@@ -364,11 +364,12 @@ def _start_dashboard_container(
     # Port mapping for dashboard
     cmd.extend(["-p", f"{stack_layout.dashboard_port}:{DEFAULT_DASHBOARD_PORT}"])
 
-    # Mount config file to dashboard container
+    # Mount config directory (read-write for setup mode to write config.yaml)
     abs_config_file = os.path.abspath(source_config_file)
-    cmd.extend(["-v", f"{abs_config_file}:/app/config/config.yaml:ro"])
+    config_file_dir = os.path.dirname(abs_config_file)
+    cmd.extend(["-v", f"{config_file_dir}:/app/config:z"])
 
-    # Mount config directory for config editing operations
+    # Mount workspace directory for config editing operations
     cmd.extend(["-v", f"{config_dir}:/app/workspace:z"])
 
     # Mount dashboard data directory
