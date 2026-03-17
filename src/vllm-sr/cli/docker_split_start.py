@@ -250,11 +250,9 @@ def _start_router_container(
     append_amd_gpu_passthrough(cmd, normalized_platform)
     append_host_gateway(cmd, runtime)
 
-    # Port mappings for router
-    for listener in listeners:
-        port = listener.get("port")
-        if port:
-            cmd.extend(["-p", f"{port + stack_layout.port_offset}:{port}"])
+    # In split runtime mode, listener ports are exposed through Envoy, not Router.
+    # Router's listener port is only accessible within the container network.
+    # Only expose gRPC, metrics, and API ports for the router.
 
     cmd.extend(["-p", f"{stack_layout.router_port}:{DEFAULT_ROUTER_PORT}"])
     cmd.extend(["-p", f"{stack_layout.metrics_port}:{DEFAULT_METRICS_PORT}"])
