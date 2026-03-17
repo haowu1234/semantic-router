@@ -35,8 +35,12 @@ def is_monolith_image(image_name):
         return False
 
     repository = str(image_name).strip().split("@", 1)[0].split(":", 1)[0]
-    return repository.endswith("/vllm-sr") or repository in {
+    # Check for monolith image patterns (vllm-sr or vllm-sr-rocm)
+    if repository.endswith("/vllm-sr") or repository.endswith("/vllm-sr-rocm"):
+        return True
+    return repository in {
         "vllm-sr",
+        "vllm-sr-rocm",
         "semantic-router",
     }
 

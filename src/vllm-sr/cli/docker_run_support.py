@@ -11,9 +11,9 @@ from cli.consts import (
     PLATFORM_AMD,
 )
 from cli.docker_images import _normalize_platform
-from cli.utils import getLogger
+from cli.utils import get_logger
 
-log = getLogger(__name__)
+log = get_logger(__name__)
 
 
 def resolve_platform(env_vars):
