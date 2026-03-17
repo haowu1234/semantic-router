@@ -391,6 +391,9 @@ def _start_dashboard_container(
     # PostgreSQL connection string with sslmode=disable (internal network, no SSL needed)
     postgres_url = f"postgres://vllm_sr:vllm_sr@{VLLM_SR_DASHBOARD_DB_CONTAINER_NAME}:{DEFAULT_POSTGRES_PORT}/vllm_sr?sslmode=disable"
 
+    # Envoy admin URL for health checks (port 9901 is Envoy's admin interface)
+    envoy_admin_url = f"http://{VLLM_SR_ENVOY_CONTAINER_NAME}:9901"
+
     dashboard_env = {
         # Database configuration (use PostgreSQL instead of SQLite)
         "DATABASE_URL": postgres_url,
@@ -402,6 +405,8 @@ def _start_dashboard_container(
         "TARGET_ROUTER_API_URL": router_api_url,
         "TARGET_ROUTER_METRICS_URL": router_metrics_url,
         "TARGET_ENVOY_URL": envoy_url,
+        # Envoy admin URL for health checks
+        "ENVOY_ADMIN_URL": envoy_admin_url,
         # Config path
         "ROUTER_CONFIG_PATH": "/app/config/config.yaml",
         # OpenClaw network configuration
