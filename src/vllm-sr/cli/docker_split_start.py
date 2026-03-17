@@ -356,6 +356,10 @@ def _start_dashboard_container(
         "-d",
         "--name",
         container_name,
+        # Run as root to allow writing to mounted config directory
+        # TODO: Remove this after dashboard image is updated with fixed entrypoint.sh
+        "--user",
+        "root",
     ]
 
     if network_name:
