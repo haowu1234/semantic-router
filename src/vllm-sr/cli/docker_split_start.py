@@ -413,6 +413,11 @@ def _start_dashboard_container(
         "OPENCLAW_DEFAULT_NETWORK_MODE": openclaw_network_name or stack_layout.network_name,
         # Host config path for split runtime resume
         "VLLM_SR_HOST_CONFIG_PATH": abs_config_file,
+        # Split topology container names (required for Dashboard to detect split runtime mode)
+        "VLLM_SR_ROUTER_CONTAINER_NAME": VLLM_SR_ROUTER_CONTAINER_NAME,
+        "VLLM_SR_ENVOY_CONTAINER_NAME": VLLM_SR_ENVOY_CONTAINER_NAME,
+        "VLLM_SR_DASHBOARD_CONTAINER_NAME": VLLM_SR_DASHBOARD_CONTAINER_NAME,
+        "VLLM_SR_DASHBOARD_DB_CONTAINER_NAME": VLLM_SR_DASHBOARD_DB_CONTAINER_NAME,
     }
 
     # Add passthrough env vars
