@@ -385,13 +385,16 @@ def _start_dashboard_container(
     router_metrics_url = f"http://{VLLM_SR_ROUTER_CONTAINER_NAME}:9190/metrics"
     envoy_url = f"http://{VLLM_SR_ENVOY_CONTAINER_NAME}:{DEFAULT_LISTENER_PORT}"
 
+    # PostgreSQL connection string with sslmode=disable (internal network, no SSL needed)
+    postgres_url = f"postgres://vllm_sr:vllm_sr@{VLLM_SR_DASHBOARD_DB_CONTAINER_NAME}:{DEFAULT_POSTGRES_PORT}/vllm_sr?sslmode=disable"
+
     dashboard_env = {
         # Database configuration (use PostgreSQL instead of SQLite)
-        "DATABASE_URL": f"postgres://vllm_sr:vllm_sr@{VLLM_SR_DASHBOARD_DB_CONTAINER_NAME}:{DEFAULT_POSTGRES_PORT}/vllm_sr",
+        "DATABASE_URL": postgres_url,
         "DASHBOARD_DB_DRIVER": "postgres",
-        "DASHBOARD_DB_URL": f"postgres://vllm_sr:vllm_sr@{VLLM_SR_DASHBOARD_DB_CONTAINER_NAME}:{DEFAULT_POSTGRES_PORT}/vllm_sr",
+        "DASHBOARD_DB_URL": postgres_url,
         "EVALUATION_DB_DRIVER": "postgres",
-        "EVALUATION_DB_URL": f"postgres://vllm_sr:vllm_sr@{VLLM_SR_DASHBOARD_DB_CONTAINER_NAME}:{DEFAULT_POSTGRES_PORT}/vllm_sr",
+        "EVALUATION_DB_URL": postgres_url,
         # Router API configuration (connect to router container, not localhost)
         "TARGET_ROUTER_API_URL": router_api_url,
         "TARGET_ROUTER_METRICS_URL": router_metrics_url,
