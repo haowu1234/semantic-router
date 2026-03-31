@@ -89,6 +89,8 @@ const DashboardPageFlow: React.FC<DashboardPageFlowProps> = React.memo(({
               strokeWidth={1}
               opacity={0.35}
               markerEnd={`url(#${markerId})`}
+              className={styles.flowSignalLink}
+              style={{ animationDelay: `${index * 0.28}s` }}
             />
           </g>
         )
@@ -117,6 +119,12 @@ const DashboardPageFlow: React.FC<DashboardPageFlowProps> = React.memo(({
         fillOpacity={0.12}
         stroke="var(--color-primary)"
         strokeWidth={1.5}
+      />
+      <circle
+        cx={colDecision}
+        cy={midY}
+        r="44"
+        className={styles.flowPulseRing}
       />
       <text
         x={colDecision}
@@ -147,6 +155,7 @@ const DashboardPageFlow: React.FC<DashboardPageFlowProps> = React.memo(({
         stroke="var(--color-border-hover)"
         strokeWidth={1.5}
         markerEnd={`url(#${markerId})`}
+        className={styles.flowCoreLink}
       />
 
       <rect
@@ -159,6 +168,12 @@ const DashboardPageFlow: React.FC<DashboardPageFlowProps> = React.memo(({
         fillOpacity={0.1}
         stroke="var(--color-accent-cyan)"
         strokeWidth={1.5}
+      />
+      <circle
+        cx={colModel}
+        cy={midY}
+        r="44"
+        className={`${styles.flowPulseRing} ${styles.flowPulseRingSecondary}`}
       />
       <text
         x={colModel}

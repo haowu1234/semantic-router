@@ -55,6 +55,36 @@
   gap: var(--spacing-md);
 }
 
+.surfaceReveal {
+  opacity: 0;
+  transform: translateY(18px) scale(0.985);
+  animation: surfaceReveal 760ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.revealHero {
+  animation-delay: 0.04s;
+}
+
+.revealTelemetry {
+  animation-delay: 0.12s;
+}
+
+.revealStats {
+  animation-delay: 0.18s;
+}
+
+.revealMain {
+  animation-delay: 0.24s;
+}
+
+.revealInventory {
+  animation-delay: 0.3s;
+}
+
+.revealBottom {
+  animation-delay: 0.36s;
+}
+
 .spinner {
   width: 36px;
   height: 36px;
@@ -67,6 +97,13 @@
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes surfaceReveal {
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }
 
@@ -124,6 +161,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 0.42rem;
   min-height: 32px;
   padding: 0.35rem 0.72rem;
   border-radius: 999px;
@@ -131,6 +169,18 @@
   font-size: 0.74rem;
   font-weight: 700;
   letter-spacing: 0.03em;
+  position: relative;
+  overflow: hidden;
+}
+
+.heroStatusPill::before {
+  content: '';
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 12px currentColor;
+  animation: statusPulse 2.6s ease-out infinite;
 }
 
 .heroStatusOk {
@@ -155,6 +205,12 @@
   border-color: rgba(255, 255, 255, 0.1);
   background: rgba(255, 255, 255, 0.04);
   color: var(--color-text-secondary);
+}
+
+.heroStatusNeutral::before {
+  animation: none;
+  opacity: 0.55;
+  box-shadow: none;
 }
 
 .heroTimestamp {
@@ -217,6 +273,203 @@
   background: rgba(0, 212, 255, 0.08);
 }
 
+.telemetryStrip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.telemetryCard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  min-height: 9.1rem;
+  padding: 0.95rem 1rem 1rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0)),
+    color-mix(in srgb, var(--color-surface) 95%, #060806 5%);
+  overflow: hidden;
+  text-align: left;
+  appearance: none;
+  font: inherit;
+  color: inherit;
+  transition:
+    transform var(--transition-base),
+    border-color var(--transition-base),
+    box-shadow var(--transition-base),
+    background var(--transition-base);
+}
+
+.telemetryCard::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(120deg, transparent 18%, rgba(255, 255, 255, 0.1) 42%, transparent 70%);
+  transform: translateX(-135%);
+  animation: telemetrySweep 7.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.telemetryCard::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+  opacity: 0.55;
+}
+
+.telemetryCard:hover {
+  transform: translateY(-2px);
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: 0 18px 32px rgba(0, 0, 0, 0.24);
+}
+
+.telemetryCardLime {
+  background:
+    radial-gradient(circle at top right, rgba(118, 185, 0, 0.2), transparent 44%),
+    linear-gradient(180deg, rgba(118, 185, 0, 0.07), rgba(255, 255, 255, 0)),
+    color-mix(in srgb, var(--color-surface) 95%, #0f150b 5%);
+}
+
+.telemetryCardCyan {
+  background:
+    radial-gradient(circle at top right, rgba(0, 212, 255, 0.2), transparent 44%),
+    linear-gradient(180deg, rgba(0, 212, 255, 0.07), rgba(255, 255, 255, 0)),
+    color-mix(in srgb, var(--color-surface) 95%, #09141a 5%);
+}
+
+.telemetryCardPurple {
+  background:
+    radial-gradient(circle at top right, rgba(168, 85, 247, 0.2), transparent 44%),
+    linear-gradient(180deg, rgba(168, 85, 247, 0.07), rgba(255, 255, 255, 0)),
+    color-mix(in srgb, var(--color-surface) 95%, #140c18 5%);
+}
+
+.telemetryCardAmber {
+  background:
+    radial-gradient(circle at top right, rgba(245, 158, 11, 0.2), transparent 44%),
+    linear-gradient(180deg, rgba(245, 158, 11, 0.07), rgba(255, 255, 255, 0)),
+    color-mix(in srgb, var(--color-surface) 95%, #181108 5%);
+}
+
+.telemetryTopline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+}
+
+.telemetryLabel {
+  color: #c4c8d0;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.telemetryStatus {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.6rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.telemetryStatusStable {
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.22);
+  color: #86efac;
+}
+
+.telemetryStatusWarming {
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.22);
+  color: #fcd34d;
+}
+
+.telemetryStatusAttention {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.22);
+  color: #fda4af;
+}
+
+.telemetryValueRow {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.telemetryValue {
+  color: var(--color-text);
+  font-size: clamp(1.5rem, 1.7vw, 2rem);
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  line-height: 1;
+}
+
+.telemetryPercent {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.78rem;
+  font-family: var(--font-mono);
+}
+
+.telemetryDetail {
+  margin: 0;
+  color: #b1b7c1;
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.telemetryProgressTrack {
+  position: relative;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  overflow: hidden;
+}
+
+.telemetryProgressFill {
+  position: relative;
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+}
+
+.telemetryProgressFill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.45), transparent);
+  transform: translateX(-110%);
+  animation: telemetryFlow 2.8s linear infinite;
+}
+
+.telemetryCardLime .telemetryProgressFill {
+  background: linear-gradient(90deg, rgba(118, 185, 0, 0.72), rgba(190, 242, 100, 0.96));
+}
+
+.telemetryCardCyan .telemetryProgressFill {
+  background: linear-gradient(90deg, rgba(0, 212, 255, 0.72), rgba(103, 232, 249, 0.96));
+}
+
+.telemetryCardPurple .telemetryProgressFill {
+  background: linear-gradient(90deg, rgba(147, 51, 234, 0.72), rgba(196, 181, 253, 0.96));
+}
+
+.telemetryCardAmber .telemetryProgressFill {
+  background: linear-gradient(90deg, rgba(245, 158, 11, 0.72), rgba(253, 224, 71, 0.96));
+}
+
 .statsGrid {
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
@@ -265,6 +518,7 @@
   background: radial-gradient(circle, rgba(255, 255, 255, 0.08), transparent 68%);
   opacity: 0.35;
   transform: translateZ(0);
+  animation: statGlow 6.6s ease-in-out infinite;
 }
 
 .statCard:hover {
@@ -445,6 +699,15 @@
   box-shadow: 0 18px 34px rgba(0, 0, 0, 0.18);
 }
 
+.card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.18), transparent);
+  opacity: 0.7;
+}
+
 .cardHeader {
   display: flex;
   align-items: center;
@@ -516,18 +779,57 @@
   animation: flowGridDrift 18s linear infinite;
 }
 
+.flowContainer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent, rgba(118, 185, 0, 0.08), transparent);
+  transform: translateY(-120%);
+  animation: flowSweep 7.4s linear infinite;
+  pointer-events: none;
+}
+
 .flowSvg {
   width: 100%;
   max-height: 360px;
   filter: drop-shadow(0 18px 26px rgba(0, 0, 0, 0.16));
+  overflow: visible;
 }
 
 .flowNode rect {
   transition: fill-opacity 0.2s ease;
 }
 
+.flowNode text {
+  text-shadow: 0 0 16px rgba(255, 255, 255, 0.08);
+}
+
 .flowNode:hover rect {
   fill-opacity: 0.35;
+}
+
+.flowSignalLink {
+  stroke-dasharray: 8 12;
+  animation: flowLineTravel 14s linear infinite;
+}
+
+.flowCoreLink {
+  stroke-dasharray: 12 10;
+  animation: flowLineTravel 9s linear infinite;
+}
+
+.flowPulseRing {
+  fill: none;
+  stroke: rgba(118, 185, 0, 0.2);
+  stroke-width: 1.2;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: flowPulse 2.8s ease-out infinite;
+}
+
+.flowPulseRingSecondary {
+  stroke: rgba(0, 212, 255, 0.22);
+  animation-delay: 0.9s;
 }
 
 @keyframes flowGridDrift {
@@ -536,6 +838,79 @@
   }
   100% {
     background-position: center, center, center, 34px 0, 0 34px;
+  }
+}
+
+@keyframes telemetrySweep {
+  0%,
+  64%,
+  100% {
+    transform: translateX(-135%);
+  }
+
+  82% {
+    transform: translateX(135%);
+  }
+}
+
+@keyframes telemetryFlow {
+  to {
+    transform: translateX(120%);
+  }
+}
+
+@keyframes statusPulse {
+  0%,
+  100% {
+    transform: scale(0.9);
+    opacity: 0.85;
+  }
+
+  50% {
+    transform: scale(1.14);
+    opacity: 1;
+  }
+}
+
+@keyframes statGlow {
+  0%,
+  100% {
+    opacity: 0.24;
+    transform: translate3d(0, 0, 0) scale(0.92);
+  }
+
+  50% {
+    opacity: 0.42;
+    transform: translate3d(-2%, -1%, 0) scale(1.04);
+  }
+}
+
+@keyframes flowSweep {
+  to {
+    transform: translateY(120%);
+  }
+}
+
+@keyframes flowLineTravel {
+  to {
+    stroke-dashoffset: -96;
+  }
+}
+
+@keyframes flowPulse {
+  0% {
+    opacity: 0.08;
+    transform: scale(0.92);
+  }
+
+  45% {
+    opacity: 0.34;
+    transform: scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(1.18);
   }
 }
 
@@ -817,6 +1192,10 @@
 }
 
 @media (max-width: 1280px) {
+  .telemetryStrip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .statsGrid {
     grid-template-columns: repeat(6, minmax(0, 1fr));
   }
@@ -846,6 +1225,10 @@
 }
 
 @media (max-width: 820px) {
+  .telemetryStrip {
+    grid-template-columns: 1fr;
+  }
+
   .statsGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -879,6 +1262,10 @@
   .heroActionsRow {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .telemetryCard {
+    min-height: auto;
   }
 
   .statsGrid {
@@ -930,5 +1317,34 @@
   .statIcon {
     width: 2.9rem;
     height: 2.9rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .surfaceReveal {
+    opacity: 1;
+    transform: none;
+    animation: none;
+  }
+
+  .heroStatusPill::before,
+  .telemetryCard::before,
+  .telemetryProgressFill::after,
+  .statCard::after,
+  .flowContainer,
+  .flowContainer::after,
+  .flowSignalLink,
+  .flowCoreLink,
+  .flowPulseRing {
+    animation: none;
+  }
+
+  .telemetryCard,
+  .heroPrimaryAction,
+  .heroSecondaryAction,
+  .statCard,
+  .cardAction,
+  .decisionTableRow {
+    transition-duration: 0.01ms;
   }
 }

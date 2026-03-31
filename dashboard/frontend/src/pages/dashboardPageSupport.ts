@@ -79,6 +79,17 @@ export interface DashboardStatCard {
   emphasis?: 'default' | 'wide'
 }
 
+export interface DashboardTelemetryCard {
+  key: string
+  label: string
+  value: string
+  detail: string
+  progress: number
+  tone: 'lime' | 'cyan' | 'purple' | 'amber'
+  status: 'stable' | 'warming' | 'attention'
+  to: string
+}
+
 export interface ModelStatusSnapshot {
   value: string
   detail: string
@@ -347,6 +358,88 @@ export function buildDashboardStatCards(args: {
       to: '/status',
       tone: modelTone,
       emphasis: 'wide',
+    },
+  ]
+}
+
+function clampProgress(value: number): number {
+  return Math.max(0, Math.min(100, Math.round(value)))
+}
+
+export function buildDashboardTelemetryCards(args: {
+  loadedModels: number
+  knownModels: number
+  healthyServices: number
+  totalServices: number
+  decisionCount: number
+  signalStats: SignalStats
+  pluginCount: number
+  overall?: string
+}): DashboardTelemetryCard[] {
+  const signalFamilies = Object.keys(args.signalStats.byType).length
+  const readinessProgress = args.knownModels > 0
+    ? clampProgress((args.loadedModels / args.knownModels) * 100)
+    : 0
+  const serviceProgress = args.totalServices > 0
+    ? clampProgress((args.healthyServices / args.totalServices) * 100)
+    : 0
+  const decisionProgress = clampProgress(Math.min(100, args.decisionCount * 16 + args.pluginCount * 5))
+  const signalProgress = clampProgress(Math.min(100, signalFamilies * 14 + args.signalStats.total * 5))
+
+  return [
+    {
+      key: 'readiness',
+      label: 'Model Readiness',
+      value: args.knownModels > 0 ? `${args.loadedModels}/${args.knownModels}` : '0/0',
+      detail: args.knownModels > 0
+        ? `${args.loadedModels === args.knownModels ? 'All tracked models are primed' : `${args.knownModels - args.loadedModels} model(s) still warming`}`
+        : 'Waiting for runtime model inventory',
+      progress: readinessProgress,
+      tone: 'lime',
+      status: args.knownModels > 0 && args.loadedModels === args.knownModels
+        ? 'stable'
+        : args.loadedModels > 0
+          ? 'warming'
+          : 'attention',
+      to: '/status',
+    },
+    {
+      key: 'services',
+      label: 'Service Mesh',
+      value: `${args.healthyServices}/${args.totalServices}`,
+      detail: `${formatOverallLabel(args.overall)} runtime across control-plane services`,
+      progress: serviceProgress,
+      tone: 'cyan',
+      status: args.overall === 'healthy'
+        ? 'stable'
+        : args.overall === 'degraded'
+          ? 'warming'
+          : 'attention',
+      to: '/status',
+    },
+    {
+      key: 'decisions',
+      label: 'Decision Density',
+      value: `${args.decisionCount}`,
+      detail: args.pluginCount > 0
+        ? `${args.pluginCount} plugin hook(s) participating in live routing`
+        : 'Core guardrails, routes, and fallbacks only',
+      progress: decisionProgress,
+      tone: 'purple',
+      status: args.decisionCount >= 4 ? 'stable' : args.decisionCount > 0 ? 'warming' : 'attention',
+      to: '/config/decisions',
+    },
+    {
+      key: 'signals',
+      label: 'Signal Breadth',
+      value: `${args.signalStats.total}`,
+      detail: signalFamilies > 0
+        ? `${signalFamilies} detector ${signalFamilies === 1 ? 'family' : 'families'} active across the mesh`
+        : 'No routing signals are active yet',
+      progress: signalProgress,
+      tone: 'amber',
+      status: signalFamilies >= 4 ? 'stable' : signalFamilies > 0 ? 'warming' : 'attention',
+      to: '/config/signals',
     },
   ]
 }

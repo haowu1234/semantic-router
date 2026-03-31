@@ -20,6 +20,7 @@ import {
 import styles from './DashboardPage.module.css'
 import DashboardPageFlow from './dashboardPageFlow'
 import {
+  DashboardTelemetryStrip,
   DashboardDecisionsCard,
   DashboardHealthCard,
   DashboardOverviewHero,
@@ -31,6 +32,7 @@ import {
   buildDashboardHeroMeta,
   buildDashboardStatCards,
   buildDashboardStatusPills,
+  buildDashboardTelemetryCards,
   categorizeDecisions,
   countDecisions,
   countModels,
@@ -241,6 +243,28 @@ const DashboardPage: React.FC = () => {
       totalServices,
     ],
   )
+  const telemetryCards = useMemo(
+    () => buildDashboardTelemetryCards({
+      loadedModels,
+      knownModels,
+      healthyServices,
+      totalServices,
+      decisionCount,
+      signalStats,
+      pluginCount,
+      overall: status?.overall,
+    }),
+    [
+      decisionCount,
+      healthyServices,
+      knownModels,
+      loadedModels,
+      pluginCount,
+      signalStats,
+      status?.overall,
+      totalServices,
+    ],
+  )
 
   const previewModelLimit = 6
   const lastUpdatedLabel = useMemo(
@@ -262,18 +286,20 @@ const DashboardPage: React.FC = () => {
 
   return (
     <div className={styles.page} data-testid="dashboard-page">
-      <DashboardOverviewHero
-        meta={heroMeta}
-        statusPills={heroStatuses}
-        actions={heroActions}
-        lastUpdatedLabel={lastUpdatedLabel}
-        refreshing={refreshing}
-        onRefresh={() => {
-          pollTickRef.current = 0
-          void fetchDashboard('all', true)
-        }}
-        onNavigate={(to) => navigate(to)}
-      />
+      <div className={`${styles.surfaceReveal} ${styles.revealHero}`}>
+        <DashboardOverviewHero
+          meta={heroMeta}
+          statusPills={heroStatuses}
+          actions={heroActions}
+          lastUpdatedLabel={lastUpdatedLabel}
+          refreshing={refreshing}
+          onRefresh={() => {
+            pollTickRef.current = 0
+            void fetchDashboard('all', true)
+          }}
+          onNavigate={(to) => navigate(to)}
+        />
+      </div>
 
       {error ? (
         <div className={styles.errorBanner}>
@@ -289,9 +315,15 @@ const DashboardPage: React.FC = () => {
         </div>
       ) : null}
 
-      <DashboardStatsGrid stats={statCards} onNavigate={(to) => navigate(to)} />
+      <div className={`${styles.surfaceReveal} ${styles.revealTelemetry}`}>
+        <DashboardTelemetryStrip items={telemetryCards} onNavigate={(to) => navigate(to)} />
+      </div>
 
-      <div className={styles.mainGrid}>
+      <div className={`${styles.surfaceReveal} ${styles.revealStats}`}>
+        <DashboardStatsGrid stats={statCards} onNavigate={(to) => navigate(to)} />
+      </div>
+
+      <div className={`${styles.mainGrid} ${styles.surfaceReveal} ${styles.revealMain}`}>
         <div className={styles.card}>
           <div className={styles.cardHeader}>
             <div className={styles.cardHeaderInfo}>
@@ -322,7 +354,7 @@ const DashboardPage: React.FC = () => {
         />
       </div>
 
-      <section className={styles.deferredSection}>
+      <section className={`${styles.deferredSection} ${styles.surfaceReveal} ${styles.revealInventory}`}>
         <div className={styles.card}>
           <div className={styles.cardHeader}>
             <div className={styles.cardHeaderInfo}>
@@ -347,7 +379,7 @@ const DashboardPage: React.FC = () => {
 
       {bottomSectionCount > 0 ? (
         <section
-          className={`${styles.bottomGrid} ${bottomSectionCount === 1 ? styles.bottomGridSingle : ''} ${styles.deferredSection}`}
+          className={`${styles.bottomGrid} ${bottomSectionCount === 1 ? styles.bottomGridSingle : ''} ${styles.deferredSection} ${styles.surfaceReveal} ${styles.revealBottom}`}
         >
           <DashboardSignalBreakdownCard
             signalStats={signalStats}

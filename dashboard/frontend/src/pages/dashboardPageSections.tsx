@@ -5,6 +5,7 @@ import {
   formatOverallLabel,
   getDecisionCategory,
   SIGNAL_COLORS,
+  type DashboardTelemetryCard,
   type CategorizedDecisions,
   type DashboardActionLink,
   type DashboardHeroMeta,
@@ -32,6 +33,11 @@ interface DashboardStatsGridProps {
 interface DashboardHealthCardProps {
   status: SystemStatus | null
   onOpenStatus: () => void
+}
+
+interface DashboardTelemetryStripProps {
+  items: DashboardTelemetryCard[]
+  onNavigate: (to: string) => void
 }
 
 interface DashboardSignalBreakdownCardProps {
@@ -111,6 +117,41 @@ function getStatusToneClass(tone: DashboardSurfaceStatus['tone']): string {
       return styles.heroStatusDanger
     case 'neutral':
       return styles.heroStatusNeutral
+  }
+}
+
+function getTelemetryToneClass(tone: DashboardTelemetryCard['tone']): string {
+  switch (tone) {
+    case 'lime':
+      return styles.telemetryCardLime
+    case 'cyan':
+      return styles.telemetryCardCyan
+    case 'purple':
+      return styles.telemetryCardPurple
+    case 'amber':
+      return styles.telemetryCardAmber
+  }
+}
+
+function getTelemetryStatusClass(status: DashboardTelemetryCard['status']): string {
+  switch (status) {
+    case 'stable':
+      return styles.telemetryStatusStable
+    case 'warming':
+      return styles.telemetryStatusWarming
+    case 'attention':
+      return styles.telemetryStatusAttention
+  }
+}
+
+function getTelemetryStatusLabel(status: DashboardTelemetryCard['status']): string {
+  switch (status) {
+    case 'stable':
+      return 'Stable'
+    case 'warming':
+      return 'Warming'
+    case 'attention':
+      return 'Attention'
   }
 }
 
@@ -201,6 +242,36 @@ export function DashboardStatsGrid({ stats, onNavigate }: DashboardStatsGridProp
         </button>
       ))}
     </div>
+  )
+}
+
+export function DashboardTelemetryStrip({ items, onNavigate }: DashboardTelemetryStripProps) {
+  return (
+    <section className={styles.telemetryStrip} aria-label="Live telemetry">
+      {items.map((item) => (
+        <button
+          key={item.key}
+          type="button"
+          className={`${styles.telemetryCard} ${getTelemetryToneClass(item.tone)}`}
+          onClick={() => onNavigate(item.to)}
+        >
+          <div className={styles.telemetryTopline}>
+            <span className={styles.telemetryLabel}>{item.label}</span>
+            <span className={`${styles.telemetryStatus} ${getTelemetryStatusClass(item.status)}`}>
+              {getTelemetryStatusLabel(item.status)}
+            </span>
+          </div>
+          <div className={styles.telemetryValueRow}>
+            <strong className={styles.telemetryValue}>{item.value}</strong>
+            <span className={styles.telemetryPercent}>{item.progress}%</span>
+          </div>
+          <p className={styles.telemetryDetail}>{item.detail}</p>
+          <div className={styles.telemetryProgressTrack}>
+            <span className={styles.telemetryProgressFill} style={{ width: `${item.progress}%` }} />
+          </div>
+        </button>
+      ))}
+    </section>
   )
 }
 
