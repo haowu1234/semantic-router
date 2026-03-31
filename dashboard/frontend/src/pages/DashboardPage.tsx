@@ -22,6 +22,7 @@ import DashboardPageFlow from './dashboardPageFlow'
 import {
   DashboardOperatorDock,
   DashboardTelemetryStrip,
+  DashboardSectionIntro,
   DashboardDecisionsCard,
   DashboardHealthCard,
   DashboardOverviewHero,
@@ -316,46 +317,68 @@ const DashboardPage: React.FC = () => {
       ) : null}
 
       <div className={`${styles.surfaceReveal} ${styles.revealDock}`}>
-        <DashboardOperatorDock items={heroActions} onNavigate={(to) => navigate(to)} />
+        <section className={styles.sectionShell}>
+          <DashboardSectionIntro
+            eyebrow="Guide"
+            title="Move through the operator flow"
+            description="These shortcuts are task-first, so you can choose the next action quickly instead of decoding another set of lookalike cards."
+          />
+          <DashboardOperatorDock items={heroActions} onNavigate={(to) => navigate(to)} />
+        </section>
       </div>
 
       <div className={`${styles.surfaceReveal} ${styles.revealTelemetry}`}>
-        <DashboardTelemetryStrip items={telemetryCards} onNavigate={(to) => navigate(to)} />
+        <section className={styles.sectionShell}>
+          <DashboardSectionIntro
+            eyebrow="Monitor"
+            title="Read the system in one scan"
+            description="Start with freshness, service health, routing density, and quick inventory before drilling into deeper panels."
+          />
+          <div className={styles.sectionContentStack}>
+            <DashboardTelemetryStrip items={telemetryCards} onNavigate={(to) => navigate(to)} />
+            <DashboardStatsGrid stats={statCards} onNavigate={(to) => navigate(to)} />
+          </div>
+        </section>
       </div>
 
-      <div className={`${styles.surfaceReveal} ${styles.revealStats}`}>
-        <DashboardStatsGrid stats={statCards} onNavigate={(to) => navigate(to)} />
-      </div>
-
-      <div className={`${styles.mainGrid} ${styles.surfaceReveal} ${styles.revealMain}`}>
-        <div className={styles.card}>
-          <div className={styles.cardHeader}>
-            <div className={styles.cardHeaderInfo}>
-              <h2 className={styles.cardTitle}>Intelligence Layers</h2>
-              <span className={styles.cardSubtitle}>Routing preview before the full topology view</span>
+      <div className={`${styles.surfaceReveal} ${styles.revealMain}`}>
+        <section className={styles.sectionShell}>
+          <DashboardSectionIntro
+            eyebrow="Inspect"
+            title="Open the structure behind the numbers"
+            description="Use the live flow preview and runtime health panel when the top-level readings tell you something needs attention."
+          />
+          <div className={styles.mainGrid}>
+            <div className={styles.card}>
+              <div className={styles.cardHeader}>
+                <div className={styles.cardHeaderInfo}>
+                  <h2 className={styles.cardTitle}>Intelligence Layers</h2>
+                  <span className={styles.cardSubtitle}>Routing preview before the full topology view</span>
+                </div>
+                <button className={styles.cardAction} onClick={() => navigate('/topology')}>
+                  Open Topology &rsaquo;
+                </button>
+              </div>
+              <div className={styles.flowContainer}>
+                {config ? (
+                  <DashboardPageFlow
+                    signals={signalStats}
+                    decisions={decisionCount}
+                    models={modelCount}
+                    plugins={pluginCount}
+                  />
+                ) : (
+                  <div className={styles.emptyState}>No configuration loaded</div>
+                )}
+              </div>
             </div>
-            <button className={styles.cardAction} onClick={() => navigate('/topology')}>
-              Open Topology &rsaquo;
-            </button>
-          </div>
-          <div className={styles.flowContainer}>
-            {config ? (
-              <DashboardPageFlow
-                signals={signalStats}
-                decisions={decisionCount}
-                models={modelCount}
-                plugins={pluginCount}
-              />
-            ) : (
-              <div className={styles.emptyState}>No configuration loaded</div>
-            )}
-          </div>
-        </div>
 
-        <DashboardHealthCard
-          status={status}
-          onOpenStatus={() => navigate('/status')}
-        />
+            <DashboardHealthCard
+              status={status}
+              onOpenStatus={() => navigate('/status')}
+            />
+          </div>
+        </section>
       </div>
 
       <section className={`${styles.deferredSection} ${styles.surfaceReveal} ${styles.revealInventory}`}>

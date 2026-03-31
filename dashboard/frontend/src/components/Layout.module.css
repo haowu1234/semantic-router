@@ -69,8 +69,18 @@
   gap: 0.25rem;
 }
 
+.navSectionPrimary .navLink {
+  font-weight: 600;
+  color: #d6dce3;
+}
+
 .navSectionSecondary {
   padding-left: 0.125rem;
+}
+
+.navSectionSecondary .navLink {
+  color: #97a0ac;
+  font-size: 0.81rem;
 }
 
 .navLink {
@@ -107,7 +117,13 @@
 .navLinkActive {
   color: var(--color-text);
   background: rgba(118, 185, 0, 0.1);
+  box-shadow: inset 0 -1px 0 rgba(118, 185, 0, 0.24);
   text-shadow: none;
+}
+
+.navSectionSecondary .navLinkActive {
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.14);
 }
 
 .navLinkActive::after {

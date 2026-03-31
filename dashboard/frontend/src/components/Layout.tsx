@@ -228,7 +228,7 @@ const Layout: React.FC<LayoutProps> = ({
           </NavLink>
 
           <nav className={styles.nav} aria-label="Global navigation">
-            <div className={styles.navSection} role="group" aria-label="Primary navigation">
+            <div className={`${styles.navSection} ${styles.navSectionPrimary}`} role="group" aria-label="Primary navigation">
               {PRIMARY_NAV_LINKS.map(renderTopNavLink)}
             </div>
 

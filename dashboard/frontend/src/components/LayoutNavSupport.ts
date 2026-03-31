@@ -37,9 +37,9 @@ export interface LayoutNavLink {
 export const PRIMARY_NAV_LINKS: LayoutNavLink[] = [
   { label: 'Dashboard', to: '/dashboard' },
   { label: 'Playground', to: '/playground' },
-  { label: 'Brain', to: '/topology' },
-  { label: 'DSL', to: '/builder' },
-  { label: 'Insight', to: '/insights' },
+  { label: 'Topology', to: '/topology' },
+  { label: 'Builder', to: '/builder' },
+  { label: 'Insights', to: '/insights' },
 ]
 
 export const SECONDARY_NAV_LINKS: LayoutNavLink[] = []

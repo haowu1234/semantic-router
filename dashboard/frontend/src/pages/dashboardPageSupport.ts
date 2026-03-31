@@ -65,6 +65,7 @@ export interface DashboardSurfaceStatus {
 
 export interface DashboardActionLink {
   key: string
+  step: string
   label: string
   to: string
   eyebrow: string
@@ -212,13 +213,13 @@ export function buildDashboardHeroMeta(args: {
   knownModels: number
 }): DashboardHeroMeta[] {
   const runtimeCoverage = args.knownModels > 0
-    ? `${args.loadedModels}/${args.knownModels} models ready`
-    : `${args.modelCount} models tracked`
+    ? `${args.loadedModels}/${args.knownModels}`
+    : `${args.modelCount}`
 
   return [
-    { label: 'Runtime coverage', value: runtimeCoverage },
-    { label: 'Decision stack', value: `${args.decisionCount} live layers` },
-    { label: 'Signal mesh', value: `${args.signalCount} active signals` },
+    { label: 'Models ready', value: runtimeCoverage },
+    { label: 'Decision layers', value: `${args.decisionCount}` },
+    { label: 'Signals active', value: `${args.signalCount}` },
   ]
 }
 
@@ -282,34 +283,38 @@ export function buildDashboardActionLinks(showMLSetupQuickLink: boolean): Dashbo
   const actions: DashboardActionLink[] = [
     {
       key: 'status',
-      label: 'Status',
+      step: '01',
+      label: 'Check runtime',
       to: '/status',
-      eyebrow: 'Runtime',
-      description: 'Inspect service health, model readiness, and rollout posture.',
+      eyebrow: 'Status',
+      description: 'Confirm service health, model readiness, and rollout posture before changing anything.',
       tone: 'lime',
     },
     {
       key: 'topology',
-      label: 'Topology',
+      step: '02',
+      label: 'Trace routing',
       to: '/topology',
-      eyebrow: 'Map',
-      description: 'Trace how signals, decisions, and models connect end to end.',
+      eyebrow: 'Topology',
+      description: 'See how signals, decisions, and models connect before you tune the rule graph.',
       tone: 'cyan',
     },
     {
       key: 'builder',
-      label: 'Builder',
+      step: '03',
+      label: 'Edit rules',
       to: '/builder',
-      eyebrow: 'Rulegraph',
-      description: 'Tune routing logic and preview decision flow before deploy.',
+      eyebrow: 'Builder',
+      description: 'Adjust routing logic and preview structural changes before deployment.',
       tone: 'purple',
     },
     {
       key: 'playground',
-      label: 'Playground',
+      step: '04',
+      label: 'Run probes',
       to: '/playground',
-      eyebrow: 'Test',
-      description: 'Probe live behavior and verify that routes feel correct.',
+      eyebrow: 'Playground',
+      description: 'Test live behavior and verify that the router responds the way an operator expects.',
       tone: 'amber',
     },
   ]
@@ -317,10 +322,11 @@ export function buildDashboardActionLinks(showMLSetupQuickLink: boolean): Dashbo
   if (showMLSetupQuickLink) {
     actions.push({
       key: 'ml-setup',
-      label: 'ML Setup',
+      step: '05',
+      label: 'Provision models',
       to: '/ml-setup',
-      eyebrow: 'Provision',
-      description: 'Adjust model infrastructure and bring new capacity online.',
+      eyebrow: 'ML Setup',
+      description: 'Bring new model capacity online when readiness or coverage needs attention.',
       tone: 'neutral',
     })
   }
