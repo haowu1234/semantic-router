@@ -180,6 +180,54 @@ function getDockToneClass(tone: DashboardActionLink['tone']): string {
   }
 }
 
+function renderDockIcon(key: DashboardActionLink['key']): JSX.Element {
+  switch (key) {
+    case 'status':
+      return (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round">
+          <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+        </svg>
+      )
+    case 'topology':
+      return (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="6" cy="6" r="2" />
+          <circle cx="18" cy="6" r="2" />
+          <circle cx="12" cy="18" r="2" />
+          <path d="M8 6h8M7.7 7.2 10.3 16M16.3 7.2 13.7 16" />
+        </svg>
+      )
+    case 'builder':
+      return (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M4 6h16M4 12h10M4 18h7" />
+          <path d="m18 15 3 3-3 3" />
+        </svg>
+      )
+    case 'playground':
+      return (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M5 3v18" />
+          <path d="m19 8-6 4 6 4V8Z" />
+        </svg>
+      )
+    case 'ml-setup':
+      return (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="4" y="5" width="16" height="14" rx="3" />
+          <path d="M9 12h6M12 9v6" />
+        </svg>
+      )
+    default:
+      return (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M5 12h14" />
+          <path d="m13 6 6 6-6 6" />
+        </svg>
+      )
+  }
+}
+
 export function DashboardSectionIntro({
   eyebrow,
   title,
@@ -250,7 +298,7 @@ export function DashboardOverviewHero({
             </button>
           </div>
           <p className={styles.heroPanelNote}>
-            Session state only. Task navigation lives in the rail below.
+            Session state only. Surface navigation lives in the collection below.
           </p>
         </div>
       )}
@@ -260,7 +308,7 @@ export function DashboardOverviewHero({
 
 export function DashboardOperatorDock({ items, onNavigate }: DashboardOperatorDockProps) {
   return (
-    <div className={styles.operatorDock} aria-label="Operator task flow">
+    <div className={styles.operatorDock} aria-label="Operator navigation">
       {items.map((item) => (
         <button
           key={item.key}
@@ -269,7 +317,9 @@ export function DashboardOperatorDock({ items, onNavigate }: DashboardOperatorDo
           onClick={() => onNavigate(item.to)}
         >
           <div className={styles.operatorDockTopline}>
-            <span className={styles.operatorDockStepNumber}>{item.step}</span>
+            <span className={styles.operatorDockThumb}>
+              {renderDockIcon(item.key)}
+            </span>
             <span className={styles.operatorDockEyebrow}>{item.eyebrow}</span>
             <span className={styles.operatorDockArrow}>&rsaquo;</span>
           </div>

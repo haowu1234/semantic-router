@@ -65,7 +65,6 @@ export interface DashboardSurfaceStatus {
 
 export interface DashboardActionLink {
   key: string
-  step: string
   label: string
   to: string
   eyebrow: string
@@ -283,38 +282,34 @@ export function buildDashboardActionLinks(showMLSetupQuickLink: boolean): Dashbo
   const actions: DashboardActionLink[] = [
     {
       key: 'status',
-      step: '01',
-      label: 'Check runtime',
+      label: 'Status',
       to: '/status',
-      eyebrow: 'Status',
-      description: 'Confirm service health, model readiness, and rollout posture before changing anything.',
+      eyebrow: 'Runtime',
+      description: 'Service health, model readiness, and rollout state in one place.',
       tone: 'lime',
     },
     {
       key: 'topology',
-      step: '02',
-      label: 'Trace routing',
+      label: 'Topology',
       to: '/topology',
-      eyebrow: 'Topology',
-      description: 'See how signals, decisions, and models connect before you tune the rule graph.',
+      eyebrow: 'Structure',
+      description: 'Visual map of signals, decisions, and model relationships.',
       tone: 'cyan',
     },
     {
       key: 'builder',
-      step: '03',
-      label: 'Edit rules',
+      label: 'Builder',
       to: '/builder',
-      eyebrow: 'Builder',
-      description: 'Adjust routing logic and preview structural changes before deployment.',
+      eyebrow: 'Rules',
+      description: 'Visual editor for routing logic, decision layers, and deployable changes.',
       tone: 'purple',
     },
     {
       key: 'playground',
-      step: '04',
-      label: 'Run probes',
+      label: 'Playground',
       to: '/playground',
-      eyebrow: 'Playground',
-      description: 'Test live behavior and verify that the router responds the way an operator expects.',
+      eyebrow: 'Validation',
+      description: 'Probe live behavior with real prompts and inspect route outcomes.',
       tone: 'amber',
     },
   ]
@@ -322,11 +317,10 @@ export function buildDashboardActionLinks(showMLSetupQuickLink: boolean): Dashbo
   if (showMLSetupQuickLink) {
     actions.push({
       key: 'ml-setup',
-      step: '05',
-      label: 'Provision models',
+      label: 'ML Setup',
       to: '/ml-setup',
-      eyebrow: 'ML Setup',
-      description: 'Bring new model capacity online when readiness or coverage needs attention.',
+      eyebrow: 'Provision',
+      description: 'Model onboarding, infrastructure setup, and capacity expansion.',
       tone: 'neutral',
     })
   }
