@@ -18,11 +18,10 @@ import {
 interface DashboardOverviewHeroProps {
   meta: DashboardHeroMeta[]
   statusPills: DashboardSurfaceStatus[]
-  actions: DashboardActionLink[]
   lastUpdatedLabel: string | null
   refreshing: boolean
   onRefresh: () => void
-  onNavigate: (to: string) => void
+  onOpenStatus: () => void
 }
 
 interface DashboardStatsGridProps {
@@ -37,6 +36,11 @@ interface DashboardHealthCardProps {
 
 interface DashboardTelemetryStripProps {
   items: DashboardTelemetryCard[]
+  onNavigate: (to: string) => void
+}
+
+interface DashboardOperatorDockProps {
+  items: DashboardActionLink[]
   onNavigate: (to: string) => void
 }
 
@@ -155,14 +159,76 @@ function getTelemetryStatusLabel(status: DashboardTelemetryCard['status']): stri
   }
 }
 
+function getDockToneClass(tone: DashboardActionLink['tone']): string {
+  switch (tone) {
+    case 'lime':
+      return styles.operatorDockCardLime
+    case 'cyan':
+      return styles.operatorDockCardCyan
+    case 'purple':
+      return styles.operatorDockCardPurple
+    case 'amber':
+      return styles.operatorDockCardAmber
+    case 'neutral':
+      return styles.operatorDockCardNeutral
+  }
+}
+
+function renderDockIcon(key: DashboardActionLink['key']): JSX.Element {
+  switch (key) {
+    case 'status':
+      return (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+          <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+        </svg>
+      )
+    case 'topology':
+      return (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="6" cy="6" r="2" />
+          <circle cx="18" cy="6" r="2" />
+          <circle cx="12" cy="18" r="2" />
+          <path d="M7.7 7.2 10.3 16M16.3 7.2 13.7 16M8 6h8" />
+        </svg>
+      )
+    case 'builder':
+      return (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M4 6h16M4 12h10M4 18h7" />
+          <path d="m18 15 3 3-3 3" />
+        </svg>
+      )
+    case 'playground':
+      return (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M5 3v18" />
+          <path d="m19 8-6 4 6 4V8Z" />
+        </svg>
+      )
+    case 'ml-setup':
+      return (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="4" y="5" width="16" height="14" rx="3" />
+          <path d="M9 12h6M12 9v6" />
+        </svg>
+      )
+    default:
+      return (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M5 12h14" />
+          <path d="m13 6 6 6-6 6" />
+        </svg>
+      )
+  }
+}
+
 export function DashboardOverviewHero({
   meta,
   statusPills,
-  actions,
   lastUpdatedLabel,
   refreshing,
   onRefresh,
-  onNavigate,
+  onOpenStatus,
 }: DashboardOverviewHeroProps) {
   return (
     <DashboardSurfaceHero
@@ -201,20 +267,45 @@ export function DashboardOverviewHero({
               </svg>
               {refreshing ? 'Refreshing...' : 'Refresh'}
             </button>
-            {actions.map((action) => (
-              <button
-                key={action.key}
-                type="button"
-                className={styles.heroSecondaryAction}
-                onClick={() => onNavigate(action.to)}
-              >
-                {action.label}
-              </button>
-            ))}
+            <button
+              type="button"
+              className={styles.heroSecondaryAction}
+              onClick={onOpenStatus}
+            >
+              Inspect Status
+            </button>
           </div>
+          <p className={styles.heroPanelNote}>
+            Workspace pulse only. Operational navigation now lives in the dock below.
+          </p>
         </div>
       )}
     />
+  )
+}
+
+export function DashboardOperatorDock({ items, onNavigate }: DashboardOperatorDockProps) {
+  return (
+    <section className={styles.operatorDock} aria-label="Operator dock">
+      {items.map((item) => (
+        <button
+          key={item.key}
+          type="button"
+          className={`${styles.operatorDockCard} ${getDockToneClass(item.tone)}`}
+          onClick={() => onNavigate(item.to)}
+        >
+          <div className={styles.operatorDockTopline}>
+            <span className={styles.operatorDockIcon}>
+              {renderDockIcon(item.key)}
+            </span>
+            <span className={styles.operatorDockEyebrow}>{item.eyebrow}</span>
+            <span className={styles.operatorDockArrow}>&rsaquo;</span>
+          </div>
+          <strong className={styles.operatorDockTitle}>{item.label}</strong>
+          <p className={styles.operatorDockDescription}>{item.description}</p>
+        </button>
+      ))}
+    </section>
   )
 }
 

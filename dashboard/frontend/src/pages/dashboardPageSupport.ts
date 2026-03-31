@@ -67,6 +67,9 @@ export interface DashboardActionLink {
   key: string
   label: string
   to: string
+  eyebrow: string
+  description: string
+  tone: 'lime' | 'cyan' | 'purple' | 'amber' | 'neutral'
 }
 
 export interface DashboardStatCard {
@@ -277,14 +280,49 @@ export function buildDashboardStatusPills(args: {
 
 export function buildDashboardActionLinks(showMLSetupQuickLink: boolean): DashboardActionLink[] {
   const actions: DashboardActionLink[] = [
-    { key: 'status', label: 'Status', to: '/status' },
-    { key: 'playground', label: 'Playground', to: '/playground' },
-    { key: 'topology', label: 'Topology', to: '/topology' },
-    { key: 'builder', label: 'Builder', to: '/builder' },
+    {
+      key: 'status',
+      label: 'Status',
+      to: '/status',
+      eyebrow: 'Runtime',
+      description: 'Inspect service health, model readiness, and rollout posture.',
+      tone: 'lime',
+    },
+    {
+      key: 'topology',
+      label: 'Topology',
+      to: '/topology',
+      eyebrow: 'Map',
+      description: 'Trace how signals, decisions, and models connect end to end.',
+      tone: 'cyan',
+    },
+    {
+      key: 'builder',
+      label: 'Builder',
+      to: '/builder',
+      eyebrow: 'Rulegraph',
+      description: 'Tune routing logic and preview decision flow before deploy.',
+      tone: 'purple',
+    },
+    {
+      key: 'playground',
+      label: 'Playground',
+      to: '/playground',
+      eyebrow: 'Test',
+      description: 'Probe live behavior and verify that routes feel correct.',
+      tone: 'amber',
+    },
   ]
 
   if (showMLSetupQuickLink) {
-    actions.push({ key: 'ml-setup', label: 'ML Setup', to: '/ml-setup' })
+    actions.push({
+      key: 'ml-setup',
+      label: 'ML Setup',
+      to: '/ml-setup',
+      eyebrow: 'Provision',
+      description: 'Adjust model infrastructure and bring new capacity online.',
+      tone: 'neutral',
+    })
   }
 
   return actions

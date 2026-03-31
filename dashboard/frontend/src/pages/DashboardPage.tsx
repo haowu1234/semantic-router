@@ -20,6 +20,7 @@ import {
 import styles from './DashboardPage.module.css'
 import DashboardPageFlow from './dashboardPageFlow'
 import {
+  DashboardOperatorDock,
   DashboardTelemetryStrip,
   DashboardDecisionsCard,
   DashboardHealthCard,
@@ -290,14 +291,13 @@ const DashboardPage: React.FC = () => {
         <DashboardOverviewHero
           meta={heroMeta}
           statusPills={heroStatuses}
-          actions={heroActions}
           lastUpdatedLabel={lastUpdatedLabel}
           refreshing={refreshing}
           onRefresh={() => {
             pollTickRef.current = 0
             void fetchDashboard('all', true)
           }}
-          onNavigate={(to) => navigate(to)}
+          onOpenStatus={() => navigate('/status')}
         />
       </div>
 
@@ -314,6 +314,10 @@ const DashboardPage: React.FC = () => {
           </button>
         </div>
       ) : null}
+
+      <div className={`${styles.surfaceReveal} ${styles.revealDock}`}>
+        <DashboardOperatorDock items={heroActions} onNavigate={(to) => navigate(to)} />
+      </div>
 
       <div className={`${styles.surfaceReveal} ${styles.revealTelemetry}`}>
         <DashboardTelemetryStrip items={telemetryCards} onNavigate={(to) => navigate(to)} />
