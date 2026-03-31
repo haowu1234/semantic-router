@@ -19,11 +19,12 @@ func StaticFileServer(staticDir string) http.Handler {
 		// Never serve index.html for API or embedded proxy routes
 		// These should be handled by their respective handlers
 		p := r.URL.Path
-		// Never serve static files for proxy routes
+		// Never serve static files for proxy routes.
+		// Client-only dashboard routes such as /login and /dashboard should
+		// still fall through to index.html when no proxy handler owns them.
 		if strings.HasPrefix(p, "/api/") || strings.HasPrefix(p, "/embedded/") ||
 			strings.HasPrefix(p, "/metrics/") || strings.HasPrefix(p, "/public/") ||
 			strings.HasPrefix(p, "/avatar/") || strings.HasPrefix(p, "/static/") ||
-			p == "/login" || p == "/logout" ||
 			strings.HasPrefix(p, "/r/") {
 			// These paths should have been handled by other handlers
 			// If we reach here, it means the proxy failed or route not found
