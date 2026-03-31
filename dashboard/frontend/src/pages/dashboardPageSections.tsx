@@ -250,7 +250,7 @@ export function DashboardOverviewHero({
             </button>
           </div>
           <p className={styles.heroPanelNote}>
-            Session state only. Task navigation lives in the guided flow below.
+            Session state only. Task navigation lives in the rail below.
           </p>
         </div>
       )}
@@ -268,15 +268,13 @@ export function DashboardOperatorDock({ items, onNavigate }: DashboardOperatorDo
           className={`${styles.operatorDockStep} ${getDockToneClass(item.tone)}`}
           onClick={() => onNavigate(item.to)}
         >
-          <span className={styles.operatorDockStepNumber}>{item.step}</span>
-          <div className={styles.operatorDockStepBody}>
-            <div className={styles.operatorDockTopline}>
-              <span className={styles.operatorDockEyebrow}>{item.eyebrow}</span>
-              <span className={styles.operatorDockArrow}>&rsaquo;</span>
-            </div>
-            <strong className={styles.operatorDockTitle}>{item.label}</strong>
-            <p className={styles.operatorDockDescription}>{item.description}</p>
+          <div className={styles.operatorDockTopline}>
+            <span className={styles.operatorDockStepNumber}>{item.step}</span>
+            <span className={styles.operatorDockEyebrow}>{item.eyebrow}</span>
+            <span className={styles.operatorDockArrow}>&rsaquo;</span>
           </div>
+          <strong className={styles.operatorDockTitle}>{item.label}</strong>
+          <p className={styles.operatorDockDescription}>{item.description}</p>
         </button>
       ))}
     </div>

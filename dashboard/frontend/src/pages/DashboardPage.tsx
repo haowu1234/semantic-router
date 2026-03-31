@@ -320,8 +320,8 @@ const DashboardPage: React.FC = () => {
         <section className={styles.sectionShell}>
           <DashboardSectionIntro
             eyebrow="Guide"
-            title="Move through the operator flow"
-            description="These shortcuts are task-first, so you can choose the next action quickly instead of decoding another set of lookalike cards."
+            title="Choose the next action"
+            description="A lighter task rail for checking runtime, tracing routing, editing logic, and probing live behavior."
           />
           <DashboardOperatorDock items={heroActions} onNavigate={(to) => navigate(to)} />
         </section>
