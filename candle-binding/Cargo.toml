@@ -121,6 +121,11 @@ path = "examples/embedding_benchmark.rs"
 name = "test_mmbert_lora"
 path = "examples/test_mmbert_lora.rs"
 
+# Benchmark: KV cache snapshot/restore vs clear+prefill (real Qwen3Guard model)
+[[example]]
+name = "bench_real_model"
+path = "examples/bench_real_model.rs"
+
 # Example testing real mmBERT model loading and inference
 [[example]]
 name = "test_mmbert_real"
