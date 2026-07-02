@@ -4,7 +4,7 @@ use candle_nn::VarBuilder;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-pub(super) fn load_guard_var_builder<'a>(
+pub fn load_guard_var_builder<'a>(
     base_dir: &Path,
     dtype: DType,
     device: &'a Device,

@@ -9,13 +9,11 @@
 //!   cargo run --release --example bench_real_model
 
 use candle_core::{DType, Device, Tensor};
-use candle_nn::var_builder::VarBuilder;
 use candle_semantic_router::model_architectures::generative::qwen3_with_lora::{
     Config as Qwen3Config, ModelForCausalLM as Qwen3Model,
 };
 use candle_semantic_router::model_architectures::generative::qwen3_guard::qwen3_guard_loading::load_guard_var_builder;
 use std::path::Path;
-use std::sync::Arc;
 use std::time::Instant;
 use tokenizers::Tokenizer;
 
