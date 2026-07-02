@@ -30,7 +30,7 @@ use std::sync::Arc;
 use tokenizers::Tokenizer;
 
 mod qwen3_guard_generation;
-mod qwen3_guard_loading;
+pub mod qwen3_guard_loading;
 mod qwen3_guard_sampling;
 
 use qwen3_guard_loading::load_guard_var_builder;
