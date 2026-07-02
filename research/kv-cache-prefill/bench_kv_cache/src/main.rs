@@ -25,7 +25,7 @@ impl CachedLayer {
         let k_proj = candle_nn::linear(HIDDEN_SIZE, HIDDEN_SIZE, vb.pp("k_proj"))?;
         let v_proj = candle_nn::linear(HIDDEN_SIZE, HIDDEN_SIZE, vb.pp("v_proj"))?;
         let o_proj = candle_nn::linear(HIDDEN_SIZE, HIDDEN_SIZE, vb.pp("o_proj"))?;
-        let kv_cache = candle_nn::kv_cache::KvCache::new(HIDDEN_SIZE / NUM_HEADS, MAX_SEQ);
+        let kv_cache = candle_nn::kv_cache::KvCache::new(1, MAX_SEQ); // dim=1 (seq_len axis)
         Ok(Self { q_proj, k_proj, v_proj, o_proj, kv_cache })
     }
 
@@ -50,7 +50,7 @@ impl CachedLayer {
     }
 
     fn clear_cache(&mut self) {
-        self.kv_cache = candle_nn::kv_cache::KvCache::new(HIDDEN_SIZE / NUM_HEADS, MAX_SEQ);
+        self.kv_cache = candle_nn::kv_cache::KvCache::new(1, MAX_SEQ);
     }
 }
 
