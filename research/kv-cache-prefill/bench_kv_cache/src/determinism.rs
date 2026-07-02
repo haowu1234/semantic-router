@@ -54,21 +54,26 @@ impl CachedLayer {
     }
 
     fn get_kv_bytes(&self) -> Vec<u8> {
-        // Extract raw KV data for byte comparison
         let mut bytes = Vec::new();
-        if let Some(k_data) = self.kv_cache.k_cache().current_data().ok().flatten() {
-            let k_vec = k_data.flatten_to_all_dims().and_then(|t| t.to_vec2::<f32>());
-            if let Ok(k_vec) = k_vec {
-                for v in k_vec.iter().flat_map(|row| row.iter()) {
-                    bytes.extend_from_slice(&v.to_le_bytes());
+        if let Ok(k_data) = self.kv_cache.k_cache().current_data() {
+            if let Some(k_data) = k_data {
+                if let Ok(k_data) = k_data.flatten_all() {
+                    if let Ok(k_vec) = k_data.to_vec1::<f32>() {
+                        for v in &k_vec {
+                            bytes.extend_from_slice(&v.to_le_bytes());
+                        }
+                    }
                 }
             }
         }
-        if let Some(v_data) = self.kv_cache.v_cache().current_data().ok().flatten() {
-            let v_vec = v_data.flatten_to_all_dims().and_then(|t| t.to_vec2::<f32>());
-            if let Ok(v_vec) = v_vec {
-                for v in v_vec.iter().flat_map(|row| row.iter()) {
-                    bytes.extend_from_slice(&v.to_le_bytes());
+        if let Ok(v_data) = self.kv_cache.v_cache().current_data() {
+            if let Some(v_data) = v_data {
+                if let Ok(v_data) = v_data.flatten_all() {
+                    if let Ok(v_vec) = v_data.to_vec1::<f32>() {
+                        for v in &v_vec {
+                            bytes.extend_from_slice(&v.to_le_bytes());
+                        }
+                    }
                 }
             }
         }
