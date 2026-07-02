@@ -1,0 +1,70 @@
+--- a/src/model_architectures/generative/qwen3_guard/qwen3_guard_generation.rs
++++ b/src/model_architectures/generative/qwen3_guard/qwen3_guard_generation.rs
+@@ -1,19 +1,70 @@
++// ====================================================================
++// INSTRUMENTATION PATCH — KV Cache Prefill Verification
++// ====================================================================
++
+ use super::qwen3_guard_sampling::{apply_repeat_penalty, sample_argmax, sample_topp};
+ use super::Qwen3GuardModel;
+ use crate::core::{ConfigErrorType, UnifiedError, UnifiedResult};
+ use candle_core::{DType, Tensor};
++use std::sync::atomic::{AtomicU64, Ordering};
++use std::time::Instant;
+
++static PREFIX_CALL_COUNT: AtomicU64 = AtomicU64::new(0);
++static PREFIX_TOTAL_US: AtomicU64 = AtomicU64::new(0);
+
+ impl Qwen3GuardModel {
+     pub(super) fn generate_with_prefix_cache(
+         &mut self,
+         text: &str,
+         mode: &str,
+     ) -> UnifiedResult<String> {
+         let (prefix_tokens, prefix_len) = self.cached_prefix_snapshot(mode)?;
+
++        let t_prefill_start = Instant::now();
+         self.model.clear_kv_cache();
+         self.model
+             .process_prefix(&prefix_tokens)
+             .map_err(|e| UnifiedError::Processing {
+                 operation: "process prefix cache".to_string(),
+                 source: e.to_string(),
+                 input_context: None,
+             })?;
++        let t_prefill = t_prefill_start.elapsed();
++        let call_num = PREFIX_CALL_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
++        let prefill_ms = t_prefill.as_secs_f64() * 1000.0;
++        PREFIX_TOTAL_US.fetch_add(t_prefill.as_micros() as u64, Ordering::Relaxed);
++        eprintln!(
++            "[KV_PREFILL_INSTR] Request #{}: process_prefix={:.1}ms",
++            call_num, prefill_ms
++        );
+ 
+         let suffix = cached_guard_suffix(text, mode);
+         // ... existing code continues ...
+
+--- a/src/model_architectures/generative/qwen3_guard.rs
++++ b/src/model_architectures/generative/qwen3_guard.rs
+@@ -193,11 +193,21 @@
+         if instance.config.prefix_cache.enabled {
+             if instance.config.prefix_cache.verbose {
+                 println!("🚀 Initializing prefix cache for Qwen3Guard...");
+             }
+             instance.initialize_prefix_caches()?;
++
++            eprintln!("[KV_PREFILL_INSTR] init: prefix_cache stores tokens only (NO KV state).");
++            eprintln!(
++                "[KV_PREFILL_INSTR] init: kv_cache_snapshot() exists but is NOT called here."
++            );
++            eprintln!(
++                "[KV_PREFILL_INSTR] init: qwen3_multi_lora_classifier.rs:1088 DOES use kv_cache_snapshot + restore for the SAME optimization pattern."
++            );
++            eprintln!(
++                "[KV_PREFILL_INSTR] init: If we called process_prefix + kv_cache_snapshot HERE ONCE, we'd skip ~800ms on every subsequent guard call."
++            );
++
+             if instance.config.prefix_cache.verbose {
+                 println!("Prefix cache initialized successfully");
+             }
+         }
