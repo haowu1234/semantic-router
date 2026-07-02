@@ -5,7 +5,7 @@ edition = "2021"
 
 [[bin]]
 name = "bench"
-path = "main.rs"
+path = "src/main.rs"
 
 [dependencies]
 candle-core = "0.9"
