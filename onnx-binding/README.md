@@ -137,16 +137,22 @@ into startup.
 
 On ROCm 7.2 / MIGraphX 2.15 / `onnxruntime_migraphx` 1.23.2, sequence SDPA can
 be MIGraphX-owned after rewriting the exported `com.microsoft::SkipLayerNormalization`
-node with an empty beta input. Intent and jailbreak require this rewritten
-artifact for the validated MIGraphX path; feedback SDPA passed without the
-rewrite in validation, while factcheck had one low-confidence NISQ200 label
-flip and should remain off the MIGraphX default path:
+node with an empty beta input. On ORT 1.25 with MIGraphX 2.16 source builds,
+intent and jailbreak also need the remaining contrib Gelu, Split-18
+`num_outputs`, unused opset-import, and softmax NaN-guard patterns rewritten
+before ORT MIGraphX EP claims the graph. Use the full artifact-preparation
+command for intent and jailbreak `model_sdpa_fp16.onnx` candidates:
 
 ```bash
 python onnx-binding/scripts/rewrite_migraphx_safe_onnx.py \
   --input model_sdpa_fp16.onnx \
   --output model_sdpa_migraphx.onnx \
   --rewrite-skip-layer-normalization \
+  --rewrite-com-ms-gelu \
+  --rewrite-split-num-outputs \
+  --rewrite-softmax-nan-guard \
+  --strip-unused-opset-imports \
+  --target-default-opset 17 \
   --fail-if-unchanged
 ```
 
@@ -154,7 +160,10 @@ Before promoting an optimized ONNX artifact, run
 `scripts/eval_router_signal_artifacts.py` against the old artifact, new
 artifact, and selected provider path. The harness includes task-native smoke
 datasets such as `factcheck-nisq`, `jailbreak-mixed`, and AI4Privacy-compatible
-PII rows so quality regressions are caught before provider defaults change.
+PII rows so quality regressions are caught before provider defaults change. Run
+sequence SDPA eval with `--batch-size 1`; these classifier artifacts are
+validated for the router's single-request path, and batch execution can trigger
+ORT shape-reuse errors in the exported attention graph.
 
 ```bash
 # Build with AMD dynamic ORT loading
