@@ -62,7 +62,8 @@ need the exported `com.microsoft::SkipLayerNormalization` node rewritten; under
 ORT 1.25 with MIGraphX 2.16 source builds they also need contrib Gelu,
 Split-18 `num_outputs`, unused opset imports, and softmax NaN guards rewritten.
 Use the full artifact preparation command for intent and jailbreak sequence
-classifiers:
+classifiers when producing one artifact that works across the released 2.15
+runtime and the 2.16 source-build validation runtime:
 
 ```bash
 python onnx-binding/scripts/rewrite_migraphx_safe_onnx.py \
@@ -84,6 +85,14 @@ and under ORT 1.25 with a MIGraphX 2.16 source build. Feedback SDPA did not
 need the rewrite in the validation run. Factcheck SDPA ran under MIGraphX, but
 one low-confidence NISQ200 boundary sample flipped labels on the 2.15 matrix, so
 factcheck is not promoted to MIGraphX by default.
+
+For MIGraphX 2.15 specifically, the smaller SkipLayerNormalization-only rewrite
+is sufficient and was faster in the original 2.15 matrix. The full cross-version
+rewrite is still 2.15-compatible and keeps logits close to the raw SDPA CPU
+baseline, but the extra standard-op lowering can reduce 2.15 warm throughput,
+especially for intent. Prefer the full rewrite for a single portable artifact;
+use a 2.15-only minimal rewrite only if maintaining runtime-specific artifacts
+is acceptable.
 
 PII token classifiers use a separate token-safe artifact order:
 
@@ -367,6 +376,31 @@ The same run measured final rewrite CPU baselines at roughly
 final artifacts are materially faster after cold compile. Cold compile remains
 the production caveat and should be handled with bucketed startup warmup or a
 future cache policy.
+
+Additional released-target validation with the same full rewrite artifact on
+ORT 1.23.2 / MIGraphX 2.15 showed:
+
+- Public raw SDPA artifacts still fail on the MIGraphX path at first inference
+  with `PARSE_SKIPLAYERNORMALIZATION: Invalid Beta shape`.
+- Full `model_sdpa_migraphx.onnx` artifacts are MIGraphX-owned in ORT profiling
+  (`MIGraphXExecutionProvider:87`) and emit finite outputs.
+- Full rewrite CPU outputs match raw SDPA CPU outputs exactly on synthetic legal
+  inputs at seq64/128/512. MIGraphX drift versus raw CPU stayed below
+  `0.018388` for intent and below `0.007585` for jailbreak in that smoke.
+- No-profile warm latency for the full rewrite was:
+
+| Signal / artifact | Seq | First run | Warm P50/P95/P99 |
+| --- | ---: | ---: | ---: |
+| intent full rewrite | 64 | `26.734 s` | `8.315/12.209/12.762 ms` |
+| intent full rewrite | 128 | `25.730 s` | `7.470/10.466/10.909 ms` |
+| intent full rewrite | 512 | `33.841 s` | `10.505/12.735/12.831 ms` |
+| jailbreak full rewrite | 64 | `21.531 s` | `3.648/4.530/4.609 ms` |
+| jailbreak full rewrite | 128 | `22.556 s` | `3.207/5.049/5.200 ms` |
+| jailbreak full rewrite | 512 | `28.838 s` | `5.650/7.543/7.760 ms` |
+
+This makes the full rewrite a correctness-compatible released-target path for
+2.15, but not necessarily the fastest 2.15-only artifact. Treat 2.15 minimal
+rewrite versus full cross-version rewrite as an artifact packaging decision.
 
 ## Known Limits
 
