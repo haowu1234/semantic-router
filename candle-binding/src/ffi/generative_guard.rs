@@ -5,10 +5,97 @@ use candle_core::Device;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::ptr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 /// Global Qwen3Guard instance (for safety/jailbreak detection)
 static GLOBAL_QWEN3_GUARD: OnceLock<Mutex<Qwen3GuardModel>> = OnceLock::new();
+
+static QWEN3_GUARD_TIMING: Qwen3GuardTimingAccumulator = Qwen3GuardTimingAccumulator::new();
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Qwen3GuardTimingStats {
+    pub calls: u64,
+    pub errors: u64,
+    pub lock_wait_ns_total: u64,
+    pub lock_wait_ns_max: u64,
+    pub generation_ns_total: u64,
+    pub generation_ns_max: u64,
+}
+
+struct Qwen3GuardTimingAccumulator {
+    calls: AtomicU64,
+    errors: AtomicU64,
+    lock_wait_ns_total: AtomicU64,
+    lock_wait_ns_max: AtomicU64,
+    generation_ns_total: AtomicU64,
+    generation_ns_max: AtomicU64,
+}
+
+impl Qwen3GuardTimingAccumulator {
+    const fn new() -> Self {
+        Self {
+            calls: AtomicU64::new(0),
+            errors: AtomicU64::new(0),
+            lock_wait_ns_total: AtomicU64::new(0),
+            lock_wait_ns_max: AtomicU64::new(0),
+            generation_ns_total: AtomicU64::new(0),
+            generation_ns_max: AtomicU64::new(0),
+        }
+    }
+
+    fn reset(&self) {
+        self.calls.store(0, Ordering::Relaxed);
+        self.errors.store(0, Ordering::Relaxed);
+        self.lock_wait_ns_total.store(0, Ordering::Relaxed);
+        self.lock_wait_ns_max.store(0, Ordering::Relaxed);
+        self.generation_ns_total.store(0, Ordering::Relaxed);
+        self.generation_ns_max.store(0, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> Qwen3GuardTimingStats {
+        Qwen3GuardTimingStats {
+            calls: self.calls.load(Ordering::Relaxed),
+            errors: self.errors.load(Ordering::Relaxed),
+            lock_wait_ns_total: self.lock_wait_ns_total.load(Ordering::Relaxed),
+            lock_wait_ns_max: self.lock_wait_ns_max.load(Ordering::Relaxed),
+            generation_ns_total: self.generation_ns_total.load(Ordering::Relaxed),
+            generation_ns_max: self.generation_ns_max.load(Ordering::Relaxed),
+        }
+    }
+
+    fn record(&self, lock_wait: Duration, generation: Duration, error: bool) {
+        let lock_wait_ns = duration_as_u64_ns(lock_wait);
+        let generation_ns = duration_as_u64_ns(generation);
+
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        if error {
+            self.errors.fetch_add(1, Ordering::Relaxed);
+        }
+        self.lock_wait_ns_total
+            .fetch_add(lock_wait_ns, Ordering::Relaxed);
+        self.generation_ns_total
+            .fetch_add(generation_ns, Ordering::Relaxed);
+        store_max(&self.lock_wait_ns_max, lock_wait_ns);
+        store_max(&self.generation_ns_max, generation_ns);
+    }
+}
+
+fn duration_as_u64_ns(duration: Duration) -> u64 {
+    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
+}
+
+fn store_max(slot: &AtomicU64, value: u64) {
+    let mut current = slot.load(Ordering::Relaxed);
+    while value > current {
+        match slot.compare_exchange_weak(current, value, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(observed) => current = observed,
+        }
+    }
+}
 
 /// Guard generation result returned to Go (raw text only)
 #[repr(C)]
@@ -178,43 +265,55 @@ pub unsafe extern "C" fn classify_with_qwen3_guard(
         }
     };
 
+    let lock_start = Instant::now();
     match guard_mutex.lock() {
-        Ok(mut guard) => match guard.generate_guard(text_str, mode_str) {
-            Ok(guard_result) => {
-                let raw_output_c = match CString::new(guard_result.raw_output.as_str()) {
-                    Ok(s) => s.into_raw(),
-                    Err(e) => {
-                        eprintln!("Error: failed to create raw_output C string: {}", e);
-                        unsafe {
-                            (*result) = GuardResult::default();
-                            (*result).error_message =
-                                create_error_message(&format!("Failed to create C string: {}", e));
+        Ok(mut guard) => {
+            let lock_wait = lock_start.elapsed();
+            let generation_start = Instant::now();
+            let generation_result = guard.generate_guard(text_str, mode_str);
+            let generation_elapsed = generation_start.elapsed();
+            QWEN3_GUARD_TIMING.record(lock_wait, generation_elapsed, generation_result.is_err());
+
+            match generation_result {
+                Ok(guard_result) => {
+                    let raw_output_c = match CString::new(guard_result.raw_output.as_str()) {
+                        Ok(s) => s.into_raw(),
+                        Err(e) => {
+                            eprintln!("Error: failed to create raw_output C string: {}", e);
+                            unsafe {
+                                (*result) = GuardResult::default();
+                                (*result).error_message = create_error_message(&format!(
+                                    "Failed to create C string: {}",
+                                    e
+                                ));
+                            }
+                            return -1;
                         }
-                        return -1;
-                    }
-                };
-
-                unsafe {
-                    (*result) = GuardResult {
-                        raw_output: raw_output_c,
-                        error: false,
-                        error_message: ptr::null_mut(),
                     };
-                }
 
-                0
-            }
-            Err(e) => {
-                eprintln!("Error: guard classification failed: {}", e);
-                unsafe {
-                    (*result) = GuardResult::default();
-                    (*result).error_message =
-                        create_error_message(&format!("Classification failed: {}", e));
+                    unsafe {
+                        (*result) = GuardResult {
+                            raw_output: raw_output_c,
+                            error: false,
+                            error_message: ptr::null_mut(),
+                        };
+                    }
+
+                    0
                 }
-                -1
+                Err(e) => {
+                    eprintln!("Error: guard classification failed: {}", e);
+                    unsafe {
+                        (*result) = GuardResult::default();
+                        (*result).error_message =
+                            create_error_message(&format!("Classification failed: {}", e));
+                    }
+                    -1
+                }
             }
-        },
+        }
         Err(e) => {
+            QWEN3_GUARD_TIMING.record(lock_start.elapsed(), Duration::ZERO, true);
             eprintln!("Error: failed to acquire lock: {}", e);
             unsafe {
                 (*result) = GuardResult::default();
@@ -224,6 +323,23 @@ pub unsafe extern "C" fn classify_with_qwen3_guard(
             -1
         }
     }
+}
+
+#[no_mangle]
+pub extern "C" fn reset_qwen3_guard_timing_stats() {
+    QWEN3_GUARD_TIMING.reset();
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn get_qwen3_guard_timing_stats(stats: *mut Qwen3GuardTimingStats) -> i32 {
+    if stats.is_null() {
+        return -1;
+    }
+
+    unsafe {
+        *stats = QWEN3_GUARD_TIMING.snapshot();
+    }
+    0
 }
 
 /// Check if Qwen3Guard is initialized

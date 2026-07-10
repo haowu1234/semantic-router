@@ -205,9 +205,20 @@ typedef struct {
     char* error_message;
 } GuardResult;
 
+typedef struct {
+    unsigned long long calls;
+    unsigned long long errors;
+    unsigned long long lock_wait_ns_total;
+    unsigned long long lock_wait_ns_max;
+    unsigned long long generation_ns_total;
+    unsigned long long generation_ns_max;
+} Qwen3GuardTimingStats;
+
 extern int init_qwen3_guard(const char* model_path);
 extern int classify_with_qwen3_guard(const char* text, const char* mode, GuardResult* result);
 extern void free_guard_result(GuardResult* result);
+extern void reset_qwen3_guard_timing_stats();
+extern int get_qwen3_guard_timing_stats(Qwen3GuardTimingStats* stats);
 extern int is_qwen3_guard_initialized();
 extern int is_qwen3_multi_lora_initialized();
 
@@ -3719,6 +3730,25 @@ type SafetyClassificationResult struct {
 	RawOutput   string   // Raw model output
 }
 
+// Qwen3GuardTimingStats contains FFI-side timing counters for Qwen3Guard calls.
+//
+// The counters split time spent waiting for the global guard mutex from time
+// spent inside model generation. They are intended for benchmarks and
+// diagnostics; reset them before a measured interval with
+// ResetQwen3GuardTimingStats.
+type Qwen3GuardTimingStats struct {
+	Calls             uint64
+	Errors            uint64
+	LockWaitTotal     time.Duration
+	LockWaitMax       time.Duration
+	GenerationTotal   time.Duration
+	GenerationMax     time.Duration
+	LockWaitTotalNS   uint64
+	LockWaitMaxNS     uint64
+	GenerationTotalNS uint64
+	GenerationMaxNS   uint64
+}
+
 // InitQwen3Guard initializes the Qwen3Guard model for safety classification
 //
 // Parameters:
@@ -3887,6 +3917,37 @@ func GetGuardRawOutput(text string, mode string) (string, error) {
 // IsQwen3GuardInitialized checks if the Qwen3Guard model is initialized
 func IsQwen3GuardInitialized() bool {
 	return C.is_qwen3_guard_initialized() == 1
+}
+
+// ResetQwen3GuardTimingStats clears FFI-side Qwen3Guard timing counters.
+func ResetQwen3GuardTimingStats() {
+	C.reset_qwen3_guard_timing_stats()
+}
+
+// GetQwen3GuardTimingStats returns FFI-side Qwen3Guard timing counters.
+func GetQwen3GuardTimingStats() (Qwen3GuardTimingStats, error) {
+	var cStats C.Qwen3GuardTimingStats
+	if C.get_qwen3_guard_timing_stats(&cStats) != 0 {
+		return Qwen3GuardTimingStats{}, fmt.Errorf("failed to get Qwen3Guard timing stats")
+	}
+
+	lockWaitTotalNS := uint64(cStats.lock_wait_ns_total)
+	lockWaitMaxNS := uint64(cStats.lock_wait_ns_max)
+	generationTotalNS := uint64(cStats.generation_ns_total)
+	generationMaxNS := uint64(cStats.generation_ns_max)
+
+	return Qwen3GuardTimingStats{
+		Calls:             uint64(cStats.calls),
+		Errors:            uint64(cStats.errors),
+		LockWaitTotal:     time.Duration(lockWaitTotalNS),
+		LockWaitMax:       time.Duration(lockWaitMaxNS),
+		GenerationTotal:   time.Duration(generationTotalNS),
+		GenerationMax:     time.Duration(generationMaxNS),
+		LockWaitTotalNS:   lockWaitTotalNS,
+		LockWaitMaxNS:     lockWaitMaxNS,
+		GenerationTotalNS: generationTotalNS,
+		GenerationMaxNS:   generationMaxNS,
+	}, nil
 }
 
 // IsQwen3MultiLoRAInitialized checks if the Qwen3 Multi-LoRA classifier is initialized

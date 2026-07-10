@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Mock implementation variables
@@ -674,9 +675,31 @@ func GetGuardRawOutput(text string, mode string) (string, error) {
 	return "Safety: Safe", nil
 }
 
+// Qwen3GuardTimingStats contains mock timing counters for Qwen3Guard calls.
+type Qwen3GuardTimingStats struct {
+	Calls             uint64
+	Errors            uint64
+	LockWaitTotal     time.Duration
+	LockWaitMax       time.Duration
+	GenerationTotal   time.Duration
+	GenerationMax     time.Duration
+	LockWaitTotalNS   uint64
+	LockWaitMaxNS     uint64
+	GenerationTotalNS uint64
+	GenerationMaxNS   uint64
+}
+
 // IsQwen3GuardInitialized checks initialization
 func IsQwen3GuardInitialized() bool {
 	return true
+}
+
+// ResetQwen3GuardTimingStats clears mock Qwen3Guard timing counters.
+func ResetQwen3GuardTimingStats() {}
+
+// GetQwen3GuardTimingStats returns mock Qwen3Guard timing counters.
+func GetQwen3GuardTimingStats() (Qwen3GuardTimingStats, error) {
+	return Qwen3GuardTimingStats{}, nil
 }
 
 // IsQwen3MultiLoRAInitialized checks initialization
