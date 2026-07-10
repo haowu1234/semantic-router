@@ -15,9 +15,15 @@ use half::f16;
 use ndarray::Array2;
 use ort::session::{Session, SessionOutputs};
 use ort::value::Tensor;
+#[cfg(any(feature = "migraphx", feature = "rocm"))]
+use parking_lot::Mutex;
 use std::collections::HashMap;
+#[cfg(any(feature = "migraphx", feature = "rocm"))]
+use std::ffi::OsString;
 use std::path::Path;
 use std::sync::Arc;
+#[cfg(any(feature = "migraphx", feature = "rocm"))]
+use std::sync::OnceLock;
 use tokenizers::{Tokenizer, TruncationDirection, TruncationParams, TruncationStrategy};
 
 /// Maximum sequence length for classification inference.
@@ -29,6 +35,26 @@ use tokenizers::{Tokenizer, TruncationDirection, TruncationParams, TruncationStr
 /// jailbreak, PII) only need the first few hundred tokens to produce a reliable
 /// signal, so we cap at 512 — matching the `max_length` field in tokenizer_config.json.
 const MAX_CLASSIFICATION_SEQ_LEN: usize = 512;
+#[cfg(any(feature = "migraphx", feature = "rocm"))]
+const MIGRAPHX_MLIR_SPECIFIC_OPS_ENV: &str = "MIGRAPHX_MLIR_USE_SPECIFIC_OPS";
+#[cfg(any(feature = "migraphx", feature = "rocm"))]
+static MIGRAPHX_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+#[cfg(any(feature = "migraphx", feature = "rocm"))]
+struct EnvVarRestore {
+    key: &'static str,
+    previous: Option<OsString>,
+}
+
+#[cfg(any(feature = "migraphx", feature = "rocm"))]
+impl Drop for EnvVarRestore {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(value) => std::env::set_var(self.key, value),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
 
 // ============================================================================
 // Classification Types
@@ -569,23 +595,11 @@ impl MmBertSequenceClassifier {
     }
 
     fn migraphx_token_artifacts_enabled() -> bool {
-        Self::token_artifacts_migraphx_enabled(
-            Self::experimental_migraphx_token_artifacts_enabled(),
-            std::env::var("MIGRAPHX_MLIR_USE_SPECIFIC_OPS")
-                .ok()
-                .as_deref(),
-            std::env::var("MIGRAPHX_DISABLE_MLIR").ok().as_deref(),
-        )
+        Self::token_artifacts_migraphx_enabled(Self::experimental_migraphx_token_artifacts_enabled())
     }
 
-    fn token_artifacts_migraphx_enabled(
-        experimental_enabled: bool,
-        mlir_specific_ops: Option<&str>,
-        disable_mlir: Option<&str>,
-    ) -> bool {
+    fn token_artifacts_migraphx_enabled(experimental_enabled: bool) -> bool {
         experimental_enabled
-            && (Self::migraphx_attention_mlir_disabled(mlir_specific_ops)
-                || Self::migraphx_mlir_disabled(disable_mlir))
     }
 
     fn migraphx_attention_mlir_disabled(value: Option<&str>) -> bool {
@@ -599,10 +613,37 @@ impl MmBertSequenceClassifier {
             .unwrap_or(false)
     }
 
-    fn migraphx_mlir_disabled(value: Option<&str>) -> bool {
-        value
-            .map(|value| matches!(value, "1" | "true" | "TRUE" | "yes" | "YES"))
-            .unwrap_or(false)
+    fn migraphx_attention_workaround_value(value: Option<&str>) -> String {
+        let Some(value) = value else {
+            return "~attention".to_string();
+        };
+        if value.trim().is_empty() {
+            "~attention".to_string()
+        } else if Self::migraphx_attention_mlir_disabled(Some(value)) {
+            value.to_string()
+        } else {
+            format!("{value},~attention")
+        }
+    }
+
+    #[cfg(any(feature = "migraphx", feature = "rocm"))]
+    fn migraphx_env_lock() -> &'static Mutex<()> {
+        MIGRAPHX_ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[cfg(any(feature = "migraphx", feature = "rocm"))]
+    fn with_migraphx_token_attention_workaround<T>(operation: impl FnOnce() -> T) -> T {
+        let _guard = Self::migraphx_env_lock().lock();
+        let previous = std::env::var_os(MIGRAPHX_MLIR_SPECIFIC_OPS_ENV);
+        let next = Self::migraphx_attention_workaround_value(
+            previous.as_deref().and_then(|value| value.to_str()),
+        );
+        std::env::set_var(MIGRAPHX_MLIR_SPECIFIC_OPS_ENV, next);
+        let _restore = EnvVarRestore {
+            key: MIGRAPHX_MLIR_SPECIFIC_OPS_ENV,
+            previous,
+        };
+        operation()
     }
 
     fn sequence_sdpa_migraphx_first_enabled(value: Option<&str>) -> bool {
@@ -721,11 +762,24 @@ impl MmBertSequenceClassifier {
                         onnx_path.as_ref(),
                     );
                     let preference = Self::amd_provider_preference_for_artifact(onnx_path.as_ref());
-                    match crate::core::ort_migraphx::create_amd_session_with_preference(
+                    let create_amd_session = || {
+                        crate::core::ort_migraphx::create_amd_session_with_preference(
+                            onnx_path.as_ref(),
+                            ck_fa_lib.as_deref(),
+                            preference,
+                        )
+                    };
+                    let amd_session_result = if Self::is_token_optimized_onnx_artifact(
                         onnx_path.as_ref(),
-                        ck_fa_lib.as_deref(),
-                        preference,
                     ) {
+                        println!(
+                            "INFO: Applying MIGraphX token-classifier attention workaround during session creation"
+                        );
+                        Self::with_migraphx_token_attention_workaround(create_amd_session)
+                    } else {
+                        create_amd_session()
+                    };
+                    match amd_session_result {
                         Ok(amd_session) => return Ok(amd_session.session),
                         Err(e) => println!("WARNING: AMD execution providers failed: {e}"),
                     }
@@ -1782,39 +1836,57 @@ mod tests {
     }
 
     #[test]
-    fn test_token_artifacts_require_attention_mlir_workaround_for_migraphx() {
-        assert!(!MmBertSequenceClassifier::token_artifacts_migraphx_enabled(
-            true, None, None
-        ));
-        assert!(!MmBertSequenceClassifier::token_artifacts_migraphx_enabled(
-            true,
-            Some("attention,pointwise"),
-            None
-        ));
+    fn test_token_artifacts_require_experimental_opt_in_for_migraphx() {
         assert!(MmBertSequenceClassifier::token_artifacts_migraphx_enabled(
-            true,
-            Some("dot, ~attention"),
-            None
+            true
         ));
-        assert!(MmBertSequenceClassifier::token_artifacts_migraphx_enabled(
-            true,
-            None,
-            Some("1")
+        assert!(!MmBertSequenceClassifier::token_artifacts_migraphx_enabled(
+            false
         ));
     }
 
     #[test]
-    fn test_token_artifacts_still_require_experimental_opt_in() {
-        assert!(!MmBertSequenceClassifier::token_artifacts_migraphx_enabled(
-            false,
-            Some("~attention"),
-            None
-        ));
-        assert!(!MmBertSequenceClassifier::token_artifacts_migraphx_enabled(
-            false,
-            None,
-            Some("1")
-        ));
+    fn test_migraphx_token_attention_workaround_value() {
+        assert_eq!(
+            MmBertSequenceClassifier::migraphx_attention_workaround_value(None),
+            "~attention"
+        );
+        assert_eq!(
+            MmBertSequenceClassifier::migraphx_attention_workaround_value(Some("")),
+            "~attention"
+        );
+        assert_eq!(
+            MmBertSequenceClassifier::migraphx_attention_workaround_value(Some("dot, ~attention")),
+            "dot, ~attention"
+        );
+        assert_eq!(
+            MmBertSequenceClassifier::migraphx_attention_workaround_value(Some(
+                "attention,pointwise"
+            )),
+            "attention,pointwise,~attention"
+        );
+    }
+
+    #[cfg(any(feature = "migraphx", feature = "rocm"))]
+    #[test]
+    fn test_migraphx_token_attention_workaround_restores_env() {
+        let original = std::env::var_os(MIGRAPHX_MLIR_SPECIFIC_OPS_ENV);
+        std::env::set_var(MIGRAPHX_MLIR_SPECIFIC_OPS_ENV, "dot");
+
+        let observed = MmBertSequenceClassifier::with_migraphx_token_attention_workaround(|| {
+            std::env::var(MIGRAPHX_MLIR_SPECIFIC_OPS_ENV).unwrap()
+        });
+
+        assert_eq!(observed, "dot,~attention");
+        assert_eq!(
+            std::env::var(MIGRAPHX_MLIR_SPECIFIC_OPS_ENV).unwrap(),
+            "dot"
+        );
+
+        match original {
+            Some(value) => std::env::set_var(MIGRAPHX_MLIR_SPECIFIC_OPS_ENV, value),
+            None => std::env::remove_var(MIGRAPHX_MLIR_SPECIFIC_OPS_ENV),
+        }
     }
 
     #[test]

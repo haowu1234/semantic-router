@@ -99,7 +99,7 @@ PII token classifiers use a separate token-safe artifact order:
 ```text
 AMD Auto/ROCm default with CK-FA available: model_fa_fp16.onnx -> model_fa.onnx -> model.onnx -> token_classifier.onnx -> classifier.onnx -> model_optimized.onnx -> model_token_sdpa.onnx -> token_classifier_sdpa.onnx -> model_token_sdpa_fp16.onnx -> token_classifier_sdpa_fp16.onnx -> model_token_eager.onnx -> token_classifier_eager.onnx -> model_token_eager_fp16.onnx -> token_classifier_eager_fp16.onnx
 AMD Auto/ROCm default without CK-FA: model.onnx -> token_classifier.onnx -> classifier.onnx -> model_optimized.onnx -> model_token_sdpa.onnx -> token_classifier_sdpa.onnx -> model_token_sdpa_fp16.onnx -> token_classifier_sdpa_fp16.onnx -> model_token_eager.onnx -> token_classifier_eager.onnx -> model_token_eager_fp16.onnx -> token_classifier_eager_fp16.onnx
-AMD Auto/ROCm with VSR_ENABLE_EXPERIMENTAL_MIGRAPHX_TOKEN_ARTIFACTS=1 and MIGRAPHX_MLIR_USE_SPECIFIC_OPS=~attention: model_token_sdpa.onnx -> token_classifier_sdpa.onnx -> model_token_sdpa_fp16.onnx -> token_classifier_sdpa_fp16.onnx -> model_token_eager.onnx -> token_classifier_eager.onnx -> model_token_eager_fp16.onnx -> token_classifier_eager_fp16.onnx -> model.onnx -> token_classifier.onnx -> classifier.onnx -> model_optimized.onnx
+AMD Auto/ROCm with VSR_ENABLE_EXPERIMENTAL_MIGRAPHX_TOKEN_ARTIFACTS=1: model_token_sdpa.onnx -> token_classifier_sdpa.onnx -> model_token_sdpa_fp16.onnx -> token_classifier_sdpa_fp16.onnx -> model_token_eager.onnx -> token_classifier_eager.onnx -> model_token_eager_fp16.onnx -> token_classifier_eager_fp16.onnx -> model.onnx -> token_classifier.onnx -> classifier.onnx -> model_optimized.onnx
 CPU/CUDA/OpenVINO: model.onnx -> token_classifier.onnx -> classifier.onnx -> model_optimized.onnx -> model_token_sdpa.onnx -> token_classifier_sdpa.onnx -> model_token_sdpa_fp16.onnx -> token_classifier_sdpa_fp16.onnx -> model_token_eager.onnx -> token_classifier_eager.onnx -> model_token_eager_fp16.onnx -> token_classifier_eager_fp16.onnx
 ```
 
@@ -113,11 +113,12 @@ as public PII `model.onnx` remain CPU-owned on AMD paths unless a token-specific
 optimized artifact passes output-shape and quality gates. Remote AI4Privacy
 validation found `model.onnx` under MIGraphX can diverge from CPU token
 entities, so it is not used as the default AMD fallback. Token eager and SDPA
-artifacts are recognized for fixed-padding execution, but MIGraphX ownership is guarded by
-`VSR_ENABLE_EXPERIMENTAL_MIGRAPHX_TOKEN_ARTIFACTS` plus either
-`MIGRAPHX_MLIR_USE_SPECIFIC_OPS=~attention` or `MIGRAPHX_DISABLE_MLIR=1` until
-entity-level validation reaches parity. The narrower `~attention` setting is
-preferred over disabling all MLIR. Token FP16 artifacts remain supported for
+artifacts are recognized for fixed-padding execution, but MIGraphX ownership is
+guarded by `VSR_ENABLE_EXPERIMENTAL_MIGRAPHX_TOKEN_ARTIFACTS`. When that opt-in
+is set, the Rust classifier applies the narrower
+`MIGRAPHX_MLIR_USE_SPECIFIC_OPS=~attention` workaround only while creating the
+token-classifier MIGraphX session and restores the previous process environment
+afterward. Token FP16 artifacts remain supported for
 experiments, but PII BIO boundaries are sensitive to FP16 logit drift; the
 default token export emits `model_token_sdpa.onnx` in FP32, and
 `--token-optimized-attn eager` can generate `model_token_eager.onnx` for
@@ -203,8 +204,8 @@ hashes, GPU architecture, ROCm, ORT, and MIGraphX versions.
 
 Do not set `MIGRAPHX_MLIR_USE_SPECIFIC_OPS=~attention` globally in the AMD
 runtime image yet. That setting is currently a token-classifier workaround, not
-a validated global runtime default for every router-owned ONNX artifact. Operators
-who explicitly validate PII token optimized artifacts can set it together with
+a validated global runtime default for every router-owned ONNX artifact. The
+Rust token-classifier path scopes the workaround to session creation when
 `VSR_ENABLE_EXPERIMENTAL_MIGRAPHX_TOKEN_ARTIFACTS=1`; otherwise token optimized
 artifacts remain CPU-owned on AMD.
 
@@ -446,11 +447,14 @@ rewrite versus full cross-version rewrite as an artifact packaging decision.
   `MIGRAPHX_MLIR_USE_SPECIFIC_OPS=~attention` avoids that fused attention path:
   `model_token_sdpa.onnx` matched old CPU ONNX entities for 500/500 AI4Privacy
   rows, `model_token_eager.onnx` matched for 20/20 rows, and native
-  `migraphx-driver verify` passed for `model_token_eager.onnx`. The Rust
-  classifier keeps token optimized artifacts CPU-owned on AMD unless both the
-  experimental token-artifact opt-in and the attention workaround are present.
-  Keep token optimized artifacts experimental until this global workaround is
-  accepted as runtime policy or replaced by a graph rewrite/MIGraphX fix.
+  `migraphx-driver verify` passed for `model_token_eager.onnx`. Disabling MLIR
+  entirely with `MIGRAPHX_DISABLE_MLIR=1` also matched old CPU ONNX for 100/100
+  AI4Privacy rows, but the narrower `~attention` workaround is preferred. ONNX
+  graph-break attempts using identity `CastLike`, explicit Softmax, and dynamic
+  identity `Reshape` around attention did not fix default MIGraphX. The Rust
+  classifier therefore keeps token optimized artifacts experimental, but scopes
+  the `~attention` workaround automatically during token MIGraphX session
+  creation when the experimental opt-in is present.
 - PII token SDPA performance with the `~attention` workaround is promising but
   still has cold-compile and runtime-policy limits. A fixed-shape batch=1/seq=512
   shared-session microbench measured MIGraphX warm P50/P95/P99 at
