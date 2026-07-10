@@ -13,6 +13,12 @@ use std::time::{Duration, Instant};
 static GLOBAL_QWEN3_GUARD: OnceLock<Mutex<Qwen3GuardModel>> = OnceLock::new();
 
 static QWEN3_GUARD_TIMING: Qwen3GuardTimingAccumulator = Qwen3GuardTimingAccumulator::new();
+static QWEN3_GUARD_DEVICE_KIND: AtomicU64 = AtomicU64::new(QWEN3_GUARD_DEVICE_UNINITIALIZED);
+
+const QWEN3_GUARD_DEVICE_UNINITIALIZED: u64 = 0;
+const QWEN3_GUARD_DEVICE_CPU: u64 = 1;
+const QWEN3_GUARD_DEVICE_CUDA: u64 = 2;
+const QWEN3_GUARD_DEVICE_METAL: u64 = 3;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -94,6 +100,14 @@ fn store_max(slot: &AtomicU64, value: u64) {
             Ok(_) => break,
             Err(observed) => current = observed,
         }
+    }
+}
+
+fn qwen3_guard_device_kind(device: &Device) -> u64 {
+    match device {
+        Device::Cpu => QWEN3_GUARD_DEVICE_CPU,
+        Device::Cuda(_) => QWEN3_GUARD_DEVICE_CUDA,
+        Device::Metal(_) => QWEN3_GUARD_DEVICE_METAL,
     }
 }
 
@@ -188,6 +202,7 @@ pub unsafe extern "C" fn init_qwen3_guard(model_path: *const c_char) -> i32 {
     match Qwen3GuardModel::new(model_path_str, &device, None) {
         Ok(guard) => match GLOBAL_QWEN3_GUARD.set(Mutex::new(guard)) {
             Ok(_) => {
+                QWEN3_GUARD_DEVICE_KIND.store(qwen3_guard_device_kind(&device), Ordering::Relaxed);
                 println!("Qwen3Guard initialized: {}", model_path_str);
                 0
             }
@@ -340,6 +355,11 @@ pub unsafe extern "C" fn get_qwen3_guard_timing_stats(stats: *mut Qwen3GuardTimi
         *stats = QWEN3_GUARD_TIMING.snapshot();
     }
     0
+}
+
+#[no_mangle]
+pub extern "C" fn get_qwen3_guard_device_kind() -> u64 {
+    QWEN3_GUARD_DEVICE_KIND.load(Ordering::Relaxed)
 }
 
 /// Check if Qwen3Guard is initialized

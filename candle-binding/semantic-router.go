@@ -219,6 +219,7 @@ extern int classify_with_qwen3_guard(const char* text, const char* mode, GuardRe
 extern void free_guard_result(GuardResult* result);
 extern void reset_qwen3_guard_timing_stats();
 extern int get_qwen3_guard_timing_stats(Qwen3GuardTimingStats* stats);
+extern unsigned long long get_qwen3_guard_device_kind();
 extern int is_qwen3_guard_initialized();
 extern int is_qwen3_multi_lora_initialized();
 
@@ -3749,6 +3750,14 @@ type Qwen3GuardTimingStats struct {
 	GenerationMaxNS   uint64
 }
 
+// Qwen3Guard device kind values reported by the native runtime.
+const (
+	Qwen3GuardDeviceUninitialized uint64 = iota
+	Qwen3GuardDeviceCPU
+	Qwen3GuardDeviceCUDA
+	Qwen3GuardDeviceMetal
+)
+
 // InitQwen3Guard initializes the Qwen3Guard model for safety classification
 //
 // Parameters:
@@ -3948,6 +3957,27 @@ func GetQwen3GuardTimingStats() (Qwen3GuardTimingStats, error) {
 		GenerationTotalNS: generationTotalNS,
 		GenerationMaxNS:   generationMaxNS,
 	}, nil
+}
+
+// GetQwen3GuardDeviceKind returns the native runtime device selected for Qwen3Guard.
+func GetQwen3GuardDeviceKind() uint64 {
+	return uint64(C.get_qwen3_guard_device_kind())
+}
+
+// Qwen3GuardDeviceKindString formats a native Qwen3Guard device kind.
+func Qwen3GuardDeviceKindString(kind uint64) string {
+	switch kind {
+	case Qwen3GuardDeviceCPU:
+		return "cpu"
+	case Qwen3GuardDeviceCUDA:
+		return "cuda"
+	case Qwen3GuardDeviceMetal:
+		return "metal"
+	case Qwen3GuardDeviceUninitialized:
+		return "uninitialized"
+	default:
+		return "unknown"
+	}
 }
 
 // IsQwen3MultiLoRAInitialized checks if the Qwen3 Multi-LoRA classifier is initialized

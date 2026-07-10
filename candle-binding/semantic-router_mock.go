@@ -689,6 +689,14 @@ type Qwen3GuardTimingStats struct {
 	GenerationMaxNS   uint64
 }
 
+// Qwen3Guard device kind values reported by the mock runtime.
+const (
+	Qwen3GuardDeviceUninitialized uint64 = iota
+	Qwen3GuardDeviceCPU
+	Qwen3GuardDeviceCUDA
+	Qwen3GuardDeviceMetal
+)
+
 // IsQwen3GuardInitialized checks initialization
 func IsQwen3GuardInitialized() bool {
 	return true
@@ -700,6 +708,27 @@ func ResetQwen3GuardTimingStats() {}
 // GetQwen3GuardTimingStats returns mock Qwen3Guard timing counters.
 func GetQwen3GuardTimingStats() (Qwen3GuardTimingStats, error) {
 	return Qwen3GuardTimingStats{}, nil
+}
+
+// GetQwen3GuardDeviceKind returns the mock Qwen3Guard runtime device.
+func GetQwen3GuardDeviceKind() uint64 {
+	return Qwen3GuardDeviceCPU
+}
+
+// Qwen3GuardDeviceKindString formats a mock Qwen3Guard device kind.
+func Qwen3GuardDeviceKindString(kind uint64) string {
+	switch kind {
+	case Qwen3GuardDeviceCPU:
+		return "cpu"
+	case Qwen3GuardDeviceCUDA:
+		return "cuda"
+	case Qwen3GuardDeviceMetal:
+		return "metal"
+	case Qwen3GuardDeviceUninitialized:
+		return "uninitialized"
+	default:
+		return "unknown"
+	}
 }
 
 // IsQwen3MultiLoRAInitialized checks initialization

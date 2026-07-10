@@ -43,8 +43,9 @@ func BenchmarkQwen3GuardConcurrency(b *testing.B) {
 		deviceLabel = "auto"
 	}
 	b.Logf(
-		"Qwen3Guard benchmark environment: device_label=%s gomaxprocs=%d concurrency=%v",
+		"Qwen3Guard benchmark environment: device_label=%s runtime_device=%s gomaxprocs=%d concurrency=%v",
 		deviceLabel,
+		Qwen3GuardDeviceKindString(GetQwen3GuardDeviceKind()),
 		runtime.GOMAXPROCS(0),
 		qwen3GuardBenchConcurrencies(),
 	)
@@ -158,6 +159,7 @@ func reportQwen3GuardBenchmarkStats(
 	b.ReportMetric(float64(stats.GenerationTotalNS)/callsFloat/1e6, "avg_generation_ms/op")
 	b.ReportMetric(float64(stats.GenerationMaxNS)/1e6, "max_generation_ms")
 	b.ReportMetric(1, "current_pool_workers")
+	b.ReportMetric(float64(GetQwen3GuardDeviceKind()), "runtime_device_kind")
 
 	for _, poolSize := range []int{1, 2, 4, 8} {
 		parallelism := poolSize
