@@ -348,6 +348,26 @@ artifacts at batch=1/seq=512:
 These numbers were collected on a shared validation host, so use them as
 provider-policy evidence rather than absolute capacity planning numbers.
 
+Additional ORT 1.25 / MIGraphX 2.16 source-build validation for the final
+intent and jailbreak rewrite showed that raw SDPA still falls back to CPU-owned
+nodes, while final `model_sdpa_migraphx.onnx` is MIGraphX-owned and restores
+low single-digit millisecond warm latency:
+
+| Signal / artifact | Seq | Provider ownership | Cold first run | Warm P50/P95/P99 | CPU-owned raw SDPA P50 |
+| --- | ---: | --- | ---: | ---: | ---: |
+| intent final rewrite | 64 | `MIGraphXExecutionProvider:22` | `22.067 s` | `1.780/1.905/1.968 ms` | `36.610 ms` |
+| intent final rewrite | 128 | `MIGraphXExecutionProvider:22` | `20.914 s` | `1.768/1.854/2.036 ms` | `51.147 ms` |
+| intent final rewrite | 512 | `MIGraphXExecutionProvider:22` | `28.617 s` | `2.677/2.694/2.700 ms` | `171.521 ms` |
+| jailbreak final rewrite | 64 | `MIGraphXExecutionProvider:22` | `18.863 s` | `1.834/1.912/1.915 ms` | `36.198 ms` |
+| jailbreak final rewrite | 128 | `MIGraphXExecutionProvider:22` | `19.208 s` | `1.793/1.859/1.867 ms` | `52.924 ms` |
+| jailbreak final rewrite | 512 | `MIGraphXExecutionProvider:22` | `26.388 s` | `2.682/2.716/2.733 ms` | `173.431 ms` |
+
+The same run measured final rewrite CPU baselines at roughly
+`35-47 ms` for seq64/128 and `104-106 ms` for seq512, so the MIGraphX-owned
+final artifacts are materially faster after cold compile. Cold compile remains
+the production caveat and should be handled with bucketed startup warmup or a
+future cache policy.
+
 ## Known Limits
 
 - ORT provider lists are not provider ownership proof. An ORT session can report
