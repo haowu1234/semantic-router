@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,6 +36,14 @@ var (
 	qwen3GuardBenchInitErr  error
 )
 
+// BenchmarkQwen3GuardConcurrency measures the current global Qwen3Guard FFI
+// mutex under concurrent callers.
+//
+// Recommended full run:
+//
+//	QWEN3_GUARD_MODEL_PATH=/path/to/Qwen3Guard-Gen-0.6B \
+//	QWEN3_GUARD_BENCH_CONCURRENCY=1,2,4,8 \
+//	go test -run '^$' -bench BenchmarkQwen3GuardConcurrency -benchtime=30s -count=1
 func BenchmarkQwen3GuardConcurrency(b *testing.B) {
 	initQwen3GuardForBenchmark(b)
 
@@ -90,6 +99,7 @@ func runQwen3GuardConcurrencyBenchmark(b *testing.B, concurrency int) {
 	b.ReportAllocs()
 
 	ResetQwen3GuardTimingStats()
+	latencies := make([]time.Duration, b.N)
 	b.ResetTimer()
 
 	start := time.Now()
@@ -109,7 +119,10 @@ func runQwen3GuardConcurrencyBenchmark(b *testing.B, concurrency int) {
 				}
 
 				text := qwen3GuardBenchTexts[(requestID+workerID)%len(qwen3GuardBenchTexts)]
-				if _, err := ClassifyPromptSafety(text); err != nil {
+				requestStart := time.Now()
+				_, err := ClassifyPromptSafety(text)
+				latencies[requestID] = time.Since(requestStart)
+				if err != nil {
 					failures.Add(1)
 				}
 			}
@@ -128,7 +141,7 @@ func runQwen3GuardConcurrencyBenchmark(b *testing.B, concurrency int) {
 	if err != nil {
 		b.Fatalf("failed to get Qwen3Guard timing stats: %v", err)
 	}
-	reportQwen3GuardBenchmarkStats(b, concurrency, elapsed, stats)
+	reportQwen3GuardBenchmarkStats(b, concurrency, elapsed, stats, latencies)
 }
 
 func reportQwen3GuardBenchmarkStats(
@@ -136,6 +149,7 @@ func reportQwen3GuardBenchmarkStats(
 	concurrency int,
 	elapsed time.Duration,
 	stats Qwen3GuardTimingStats,
+	latencies []time.Duration,
 ) {
 	b.Helper()
 
@@ -160,6 +174,7 @@ func reportQwen3GuardBenchmarkStats(
 	b.ReportMetric(float64(stats.GenerationMaxNS)/1e6, "max_generation_ms")
 	b.ReportMetric(1, "current_pool_workers")
 	b.ReportMetric(float64(GetQwen3GuardDeviceKind()), "runtime_device_kind")
+	reportQwen3GuardLatencyPercentiles(b, latencies)
 
 	for _, poolSize := range []int{1, 2, 4, 8} {
 		parallelism := poolSize
@@ -170,14 +185,52 @@ func reportQwen3GuardBenchmarkStats(
 			continue
 		}
 
-		idealSeconds := (float64(stats.GenerationTotalNS) / 1e9) / float64(parallelism)
-		if idealSeconds > 0 {
+		estimatedSeconds := (float64(stats.GenerationTotalNS) / 1e9) / float64(parallelism)
+		if estimatedSeconds > 0 {
 			b.ReportMetric(
-				callsFloat/idealSeconds,
-				fmt.Sprintf("ideal_pool_%d_requests/s", poolSize),
+				callsFloat/estimatedSeconds,
+				fmt.Sprintf("estimated_pool_%d_requests/s", poolSize),
 			)
 		}
 	}
+}
+
+func reportQwen3GuardLatencyPercentiles(b *testing.B, latencies []time.Duration) {
+	b.Helper()
+	if len(latencies) == 0 {
+		return
+	}
+
+	sorted := append([]time.Duration(nil), latencies...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i] < sorted[j]
+	})
+
+	b.ReportMetric(durationMS(percentileDuration(sorted, 0.50)), "p50_wall_ms")
+	b.ReportMetric(durationMS(percentileDuration(sorted, 0.95)), "p95_wall_ms")
+	b.ReportMetric(durationMS(percentileDuration(sorted, 0.99)), "p99_wall_ms")
+}
+
+func percentileDuration(sorted []time.Duration, percentile float64) time.Duration {
+	if len(sorted) == 0 {
+		return 0
+	}
+	if len(sorted) == 1 {
+		return sorted[0]
+	}
+
+	index := int(percentile*float64(len(sorted)-1) + 0.5)
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(sorted) {
+		index = len(sorted) - 1
+	}
+	return sorted[index]
+}
+
+func durationMS(duration time.Duration) float64 {
+	return float64(duration.Nanoseconds()) / 1e6
 }
 
 func qwen3GuardBenchConcurrencies() []int {
