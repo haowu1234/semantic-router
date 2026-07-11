@@ -91,6 +91,12 @@ typedef struct {
     char* error_message;
 } PIIResultFFI;
 
+typedef struct {
+    char* raw_output;
+    bool error;
+    char* error_message;
+} GuardResultFFI;
+
 // ============================================================================
 // Embedding Functions
 // ============================================================================
@@ -122,6 +128,15 @@ extern void free_classification_result(ClassificationResultFFI* result);
 extern void free_pii_result(PIIResultFFI* result);
 
 // ============================================================================
+// Qwen3Guard ONNX Functions
+// ============================================================================
+
+extern bool init_qwen3_guard_onnx(const char* model_path, bool use_gpu, const char* provider_hint);
+extern int classify_with_qwen3_guard_onnx(const char* text, const char* mode, GuardResultFFI* result);
+extern void free_qwen3_guard_onnx_result(GuardResultFFI* result);
+extern bool is_qwen3_guard_onnx_initialized();
+
+// ============================================================================
 // Multi-Modal Embedding Types & Functions
 // ============================================================================
 
@@ -151,6 +166,7 @@ import (
 	_ "image/png"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -194,6 +210,13 @@ type ClassResult struct {
 	Class      int
 	Confidence float32
 	Categories []string // Optional: categories for jailbreak detection
+}
+
+// SafetyClassificationResult represents Qwen3Guard safety classification output.
+type SafetyClassificationResult struct {
+	SafetyLabel string
+	Categories  []string
+	RawOutput   string
 }
 
 // ClassResultWithProbs contains classification result with probabilities
@@ -614,6 +637,91 @@ func ClassifyMmBert32KPII(text string) ([]TokenEntity, error) {
 	}
 
 	return entities, nil
+}
+
+// InitQwen3GuardOnnx initializes a Qwen3Guard ONNX decoder model.
+//
+// providerHint may be empty for automatic provider selection, or one of:
+// "rocm", "migraphx", "cuda", or "openvino".
+func InitQwen3GuardOnnx(modelPath string, useCPU bool, providerHint string) error {
+	cPath := C.CString(modelPath)
+	defer C.free(unsafe.Pointer(cPath))
+	cProvider := C.CString(providerHint)
+	defer C.free(unsafe.Pointer(cProvider))
+
+	if !C.init_qwen3_guard_onnx(cPath, C.bool(!useCPU), cProvider) {
+		return fmt.Errorf("failed to initialize Qwen3Guard ONNX from %s", modelPath)
+	}
+	return nil
+}
+
+// IsQwen3GuardOnnxInitialized reports whether the ONNX guard model is loaded.
+func IsQwen3GuardOnnxInitialized() bool {
+	return bool(C.is_qwen3_guard_onnx_initialized())
+}
+
+// ClassifyPromptSafetyOnnx classifies user input using Qwen3Guard ONNX.
+func ClassifyPromptSafetyOnnx(text string) (*SafetyClassificationResult, error) {
+	return classifyQwen3GuardOnnx(text, "input")
+}
+
+// ClassifyResponseSafetyOnnx classifies model output using Qwen3Guard ONNX.
+func ClassifyResponseSafetyOnnx(text string) (*SafetyClassificationResult, error) {
+	return classifyQwen3GuardOnnx(text, "output")
+}
+
+// GetGuardRawOutputOnnx returns raw Qwen3Guard ONNX generated text.
+func GetGuardRawOutputOnnx(text string, mode string) (string, error) {
+	result, err := classifyQwen3GuardOnnx(text, mode)
+	if err != nil {
+		return "", err
+	}
+	return result.RawOutput, nil
+}
+
+func classifyQwen3GuardOnnx(text string, mode string) (*SafetyClassificationResult, error) {
+	cText := C.CString(text)
+	defer C.free(unsafe.Pointer(cText))
+	cMode := C.CString(mode)
+	defer C.free(unsafe.Pointer(cMode))
+
+	var result C.GuardResultFFI
+	status := C.classify_with_qwen3_guard_onnx(cText, cMode, &result)
+	defer C.free_qwen3_guard_onnx_result(&result)
+
+	if status != 0 || result.error {
+		errMsg := "Qwen3Guard ONNX classification failed"
+		if result.error_message != nil {
+			errMsg = C.GoString(result.error_message)
+		}
+		return nil, fmt.Errorf("%s", errMsg)
+	}
+
+	rawOutput := C.GoString(result.raw_output)
+	safetyLabel, categories := extractQwen3GuardLabelAndCategories(rawOutput)
+	return &SafetyClassificationResult{
+		SafetyLabel: safetyLabel,
+		Categories:  categories,
+		RawOutput:   rawOutput,
+	}, nil
+}
+
+func extractQwen3GuardLabelAndCategories(content string) (string, []string) {
+	safePattern := regexp.MustCompile(`Safety: (Safe|Unsafe|Controversial)`)
+	categoryPattern := regexp.MustCompile(`(Violent|Non-violent Illegal Acts|Sexual Content or Sexual Acts|PII|Suicide & Self-Harm|Unethical Acts|Politically Sensitive Topics|Copyright Violation|Jailbreak|None)`)
+
+	var safetyLabel string
+	if matches := safePattern.FindStringSubmatch(content); len(matches) > 1 {
+		safetyLabel = matches[1]
+	}
+
+	var categories []string
+	for _, match := range categoryPattern.FindAllStringSubmatch(content, -1) {
+		if len(match) > 1 {
+			categories = append(categories, match[1])
+		}
+	}
+	return safetyLabel, categories
 }
 
 func classifyWithClassifier(name, text string) (ClassResult, error) {

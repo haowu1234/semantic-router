@@ -2,3 +2,4 @@
 
 pub mod classification;
 pub mod embedding;
+pub mod generative;

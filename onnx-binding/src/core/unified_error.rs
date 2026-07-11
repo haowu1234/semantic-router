@@ -113,6 +113,14 @@ pub mod errors {
         }
     }
 
+    pub fn validation_error(field: &str, expected: &str, actual: &str) -> UnifiedError {
+        UnifiedError::Validation {
+            field: field.to_string(),
+            expected: expected.to_string(),
+            actual: actual.to_string(),
+        }
+    }
+
     pub fn invalid_json(path: &str, source: &str) -> UnifiedError {
         UnifiedError::InvalidJson {
             path: path.to_string(),

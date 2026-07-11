@@ -32,3 +32,6 @@ pub use model_architectures::classification::{
     ClassificationResult, ClassifierExecutionProvider, DetectedEntity, MmBertClassifierConfig,
     MmBertSequenceClassifier, MmBertTokenClassifier, TokenClassificationResult,
 };
+
+// Generative guard types
+pub use model_architectures::generative::{Qwen3GuardOnnxConfig, Qwen3GuardOnnxModel};
