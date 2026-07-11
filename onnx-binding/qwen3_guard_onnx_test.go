@@ -7,6 +7,7 @@ package onnx_binding
 
 import (
 	"os"
+	"reflect"
 	"testing"
 )
 
@@ -33,4 +34,24 @@ func TestQwen3GuardOnnxSmoke(t *testing.T) {
 		t.Fatal("expected non-empty raw output")
 	}
 	t.Logf("safety=%q categories=%v raw=%q", result.SafetyLabel, result.Categories, result.RawOutput)
+}
+
+func TestExtractQwen3GuardLabelAndCategories(t *testing.T) {
+	label, categories := extractQwen3GuardLabelAndCategories(
+		"Safety: Unsafe\nCategories: Violent, PII\n",
+	)
+	if label != "Unsafe" {
+		t.Fatalf("label = %q, want Unsafe", label)
+	}
+	if !reflect.DeepEqual(categories, []string{"Violent", "PII"}) {
+		t.Fatalf("categories = %#v, want Violent and PII", categories)
+	}
+
+	label, categories = extractQwen3GuardLabelAndCategories("Safety: Safe\nCategories: None")
+	if label != "Safe" {
+		t.Fatalf("label = %q, want Safe", label)
+	}
+	if !reflect.DeepEqual(categories, []string{"None"}) {
+		t.Fatalf("categories = %#v, want None", categories)
+	}
 }

@@ -177,6 +177,11 @@ import (
 	"unsafe"
 )
 
+var (
+	qwen3GuardSafetyPattern   = regexp.MustCompile(`Safety: (Safe|Unsafe|Controversial)`)
+	qwen3GuardCategoryPattern = regexp.MustCompile(`(Violent|Non-violent Illegal Acts|Sexual Content or Sexual Acts|PII|Suicide & Self-Harm|Unethical Acts|Politically Sensitive Topics|Copyright Violation|Jailbreak|None)`)
+)
+
 // ============================================================================
 // Go Types (matching candle_binding)
 // ============================================================================
@@ -717,16 +722,13 @@ func classifyQwen3GuardOnnx(text string, mode string) (*SafetyClassificationResu
 }
 
 func extractQwen3GuardLabelAndCategories(content string) (string, []string) {
-	safePattern := regexp.MustCompile(`Safety: (Safe|Unsafe|Controversial)`)
-	categoryPattern := regexp.MustCompile(`(Violent|Non-violent Illegal Acts|Sexual Content or Sexual Acts|PII|Suicide & Self-Harm|Unethical Acts|Politically Sensitive Topics|Copyright Violation|Jailbreak|None)`)
-
 	var safetyLabel string
-	if matches := safePattern.FindStringSubmatch(content); len(matches) > 1 {
+	if matches := qwen3GuardSafetyPattern.FindStringSubmatch(content); len(matches) > 1 {
 		safetyLabel = matches[1]
 	}
 
 	var categories []string
-	for _, match := range categoryPattern.FindAllStringSubmatch(content, -1) {
+	for _, match := range qwen3GuardCategoryPattern.FindAllStringSubmatch(content, -1) {
 		if len(match) > 1 {
 			categories = append(categories, match[1])
 		}
