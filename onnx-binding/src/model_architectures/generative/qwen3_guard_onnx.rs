@@ -56,6 +56,42 @@ pub struct Qwen3GuardOnnxProfile {
     pub stopped_by_complete_assessment: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct Qwen3GuardOnnxBatchProfile {
+    pub output: String,
+    pub batch_size: usize,
+    pub prompt_tokens: usize,
+    pub generated_tokens_per_request: usize,
+    pub tokenize_ns: u64,
+    pub prefill_ns: u64,
+    pub decode_ns: u64,
+    pub decode_steps: usize,
+    pub total_ns: u64,
+    pub stopped_by_complete_assessment: usize,
+}
+
+pub struct Qwen3GuardOnnxBatchPrefixCache {
+    mode: String,
+    batch_size: usize,
+    prefix_tokens: Vec<u32>,
+    past: Vec<DynValue>,
+    prepare_ns: u64,
+}
+
+impl Qwen3GuardOnnxBatchPrefixCache {
+    pub fn batch_size(&self) -> usize {
+        self.batch_size
+    }
+
+    pub fn prefix_tokens(&self) -> usize {
+        self.prefix_tokens.len()
+    }
+
+    pub fn prepare_ns(&self) -> u64 {
+        self.prepare_ns
+    }
+}
+
 pub struct Qwen3GuardOnnxPrefixCache {
     mode: String,
     prefix_tokens: Vec<u32>,
@@ -200,6 +236,29 @@ impl Qwen3GuardOnnxModel {
         self.generate_profile(&prompt)
     }
 
+    pub fn generate_guard_batch_profile(
+        &mut self,
+        text: &str,
+        mode: &str,
+        batch_size: usize,
+    ) -> UnifiedResult<Qwen3GuardOnnxBatchProfile> {
+        if batch_size == 0 {
+            return Err(errors::config_error(
+                "batch_size",
+                "Qwen3Guard batch microbench requires batch_size > 0",
+            ));
+        }
+        if self.past_ios.is_empty() {
+            return Err(errors::config_error(
+                "batch_microbench",
+                "Qwen3Guard batch microbench requires a decoder model with past_key_values inputs",
+            ));
+        }
+
+        let prompt = format_guard_prompt(text, mode);
+        self.generate_batch_with_past_profile(&prompt, batch_size)
+    }
+
     pub fn prepare_guard_prefix_cache(
         &mut self,
         mode: &str,
@@ -230,6 +289,55 @@ impl Qwen3GuardOnnxModel {
             self.forward_with_past(&prefix_tokens, 0, prefix_tokens.len(), empty_past)?;
         Ok(Qwen3GuardOnnxPrefixCache {
             mode: mode.to_string(),
+            prefix_tokens,
+            past,
+            prepare_ns: duration_ns(start.elapsed()),
+        })
+    }
+
+    pub fn prepare_guard_batch_prefix_cache(
+        &mut self,
+        mode: &str,
+        batch_size: usize,
+    ) -> UnifiedResult<Qwen3GuardOnnxBatchPrefixCache> {
+        if batch_size == 0 {
+            return Err(errors::config_error(
+                "batch_size",
+                "Qwen3Guard batch prefix cache requires batch_size > 0",
+            ));
+        }
+        if self.past_ios.is_empty() {
+            return Err(errors::config_error(
+                "batch_prefix_cache",
+                "batch prefix cache requires a decoder model with past_key_values inputs",
+            ));
+        }
+
+        let (prefix, _tail) = format_guard_prompt_parts("", mode);
+        let encoding = self
+            .tokenizer
+            .encode(prefix.as_str(), true)
+            .map_err(|e| errors::tokenization_error(&e.to_string()))?;
+        let prefix_tokens = encoding.get_ids().to_vec();
+        if prefix_tokens.is_empty() {
+            return Err(errors::inference_error(
+                "prepare_batch_prefix_cache",
+                "empty prefix token sequence",
+            ));
+        }
+
+        let start = Instant::now();
+        let empty_past = self.create_empty_past_batch(batch_size)?;
+        let (_logits, past) = self.forward_with_past_batch(
+            &prefix_tokens,
+            batch_size,
+            0,
+            prefix_tokens.len(),
+            empty_past,
+        )?;
+        Ok(Qwen3GuardOnnxBatchPrefixCache {
+            mode: mode.to_string(),
+            batch_size,
             prefix_tokens,
             past,
             prepare_ns: duration_ns(start.elapsed()),
@@ -300,6 +408,92 @@ impl Qwen3GuardOnnxModel {
             cache.prefix_tokens.len(),
             &cache.past,
             tokenize_ns,
+            total_start,
+        )
+    }
+
+    pub fn generate_guard_batch_profile_with_prefix_cache(
+        &mut self,
+        text: &str,
+        mode: &str,
+        cache: &Qwen3GuardOnnxBatchPrefixCache,
+    ) -> UnifiedResult<Qwen3GuardOnnxBatchProfile> {
+        if mode != cache.mode {
+            return Err(errors::config_error(
+                "batch_prefix_cache",
+                &format!(
+                    "batch prefix cache mode '{}' cannot be used for mode '{}'",
+                    cache.mode, mode
+                ),
+            ));
+        }
+
+        let total_start = Instant::now();
+        let tokenize_start = Instant::now();
+        let (prefix, tail) = format_guard_prompt_parts(text, mode);
+        let full_prompt = format!("{prefix}{tail}");
+        let full_tokens = self
+            .tokenizer
+            .encode(full_prompt.as_str(), true)
+            .map_err(|e| errors::tokenization_error(&e.to_string()))?
+            .get_ids()
+            .to_vec();
+        let prefix_tokens = self
+            .tokenizer
+            .encode(prefix.as_str(), true)
+            .map_err(|e| errors::tokenization_error(&e.to_string()))?
+            .get_ids()
+            .to_vec();
+        let tail_tokens = self
+            .tokenizer
+            .encode(tail.as_str(), true)
+            .map_err(|e| errors::tokenization_error(&e.to_string()))?
+            .get_ids()
+            .to_vec();
+        let tokenize_ns = duration_ns(tokenize_start.elapsed());
+
+        if prefix_tokens != cache.prefix_tokens {
+            return Err(errors::validation_error(
+                "batch_prefix_cache_tokens",
+                "request prefix tokens match cached prefix tokens",
+                "token mismatch",
+            ));
+        }
+
+        let mut joined_tokens = prefix_tokens;
+        joined_tokens.extend_from_slice(&tail_tokens);
+        if joined_tokens != full_tokens {
+            return Err(errors::validation_error(
+                "batch_prefix_cache_tokenization",
+                "tokenize(prefix) + tokenize(tail) equals tokenize(full_prompt)",
+                "token boundary mismatch",
+            ));
+        }
+        if tail_tokens.is_empty() {
+            return Err(errors::inference_error(
+                "generate_batch_prefix_cache",
+                "empty tail token sequence",
+            ));
+        }
+
+        let prefill_start = Instant::now();
+        let (logits, past) = self.forward_with_past_batch_refs(
+            &tail_tokens,
+            cache.batch_size,
+            cache.prefix_tokens.len(),
+            cache.prefix_tokens.len() + tail_tokens.len(),
+            &cache.past,
+        )?;
+        let prefill_ns = duration_ns(prefill_start.elapsed());
+        self.finish_batch_generation(
+            &tail_tokens,
+            full_tokens.len(),
+            cache.batch_size,
+            logits,
+            past,
+            cache.prefix_tokens.len() + tail_tokens.len(),
+            tokenize_ns,
+            prefill_ns,
             total_start,
         )
     }
@@ -535,6 +729,257 @@ impl Qwen3GuardOnnxModel {
         })
     }
 
+    fn generate_batch_with_past_profile(
+        &mut self,
+        prompt: &str,
+        batch_size: usize,
+    ) -> UnifiedResult<Qwen3GuardOnnxBatchProfile> {
+        let total_start = Instant::now();
+        let tokenize_start = Instant::now();
+        let encoding = self
+            .tokenizer
+            .encode(prompt, true)
+            .map_err(|e| errors::tokenization_error(&e.to_string()))?;
+        let tokenize_ns = duration_ns(tokenize_start.elapsed());
+        let prompt_tokens: Vec<u32> = encoding.get_ids().to_vec();
+        if prompt_tokens.is_empty() {
+            return Err(errors::inference_error(
+                "generate_batch",
+                "empty prompt token sequence",
+            ));
+        }
+        let prompt_token_count = prompt_tokens.len();
+
+        let mut past = self.create_empty_past_batch(batch_size)?;
+        let prefill_start = Instant::now();
+        let (logits, next_past) =
+            self.forward_with_past_batch(&prompt_tokens, batch_size, 0, prompt_tokens.len(), past)?;
+        let prefill_ns = duration_ns(prefill_start.elapsed());
+        past = next_past;
+
+        let mut past_len = prompt_tokens.len();
+        let mut histories = vec![prompt_tokens.clone(); batch_size];
+        let mut generated_texts = vec![String::new(); batch_size];
+        let mut done = vec![false; batch_size];
+        let mut stopped_by_complete_assessment = vec![false; batch_size];
+        let mut generated_tokens_per_request = 0;
+        let mut decode_ns = 0;
+        let mut decode_steps = 0;
+
+        let mut next_tokens = logits
+            .into_iter()
+            .enumerate()
+            .map(|(idx, logits)| {
+                let logits = apply_repeat_penalty(
+                    logits,
+                    &histories[idx][histories[idx]
+                        .len()
+                        .saturating_sub(self.config.repeat_last_n)..],
+                    self.config.repeat_penalty,
+                );
+                argmax(&logits) as u32
+            })
+            .collect::<Vec<_>>();
+
+        loop {
+            let mut active_generated = false;
+            for idx in 0..batch_size {
+                if done[idx] {
+                    continue;
+                }
+
+                let next_token = next_tokens[idx];
+                if next_token == self.eos_token_id || Some(next_token) == self.im_end_token_id {
+                    done[idx] = true;
+                    continue;
+                }
+
+                histories[idx].push(next_token);
+                active_generated = true;
+                if let Ok(piece) = self.tokenizer.decode(&[next_token], true) {
+                    generated_texts[idx].push_str(&piece);
+                }
+                if guard_assessment_complete(&generated_texts[idx])
+                    || histories[idx].len() - prompt_token_count >= self.config.max_tokens
+                {
+                    stopped_by_complete_assessment[idx] =
+                        guard_assessment_complete(&generated_texts[idx]);
+                    done[idx] = true;
+                }
+            }
+
+            if active_generated {
+                generated_tokens_per_request += 1;
+            }
+            if done.iter().all(|is_done| *is_done)
+                || generated_tokens_per_request >= self.config.max_tokens
+            {
+                break;
+            }
+
+            let decode_start = Instant::now();
+            let (logits, next_past) = self.forward_with_past_batch(
+                &next_tokens,
+                batch_size,
+                past_len,
+                past_len + 1,
+                past,
+            )?;
+            decode_ns += duration_ns(decode_start.elapsed());
+            decode_steps += 1;
+            past = next_past;
+            past_len += 1;
+
+            for (idx, logits) in logits.into_iter().enumerate() {
+                if done[idx] {
+                    continue;
+                }
+                let logits = apply_repeat_penalty(
+                    logits,
+                    &histories[idx][histories[idx]
+                        .len()
+                        .saturating_sub(self.config.repeat_last_n)..],
+                    self.config.repeat_penalty,
+                );
+                next_tokens[idx] = argmax(&logits) as u32;
+            }
+        }
+
+        Ok(Qwen3GuardOnnxBatchProfile {
+            output: generated_texts.into_iter().next().unwrap_or_default(),
+            batch_size,
+            prompt_tokens: prompt_token_count,
+            generated_tokens_per_request,
+            tokenize_ns,
+            prefill_ns,
+            decode_ns,
+            decode_steps,
+            total_ns: duration_ns(total_start.elapsed()),
+            stopped_by_complete_assessment: stopped_by_complete_assessment
+                .into_iter()
+                .filter(|stopped| *stopped)
+                .count(),
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn finish_batch_generation(
+        &mut self,
+        seed_tokens: &[u32],
+        prompt_token_count: usize,
+        batch_size: usize,
+        logits: Vec<Vec<f32>>,
+        mut past: Vec<DynValue>,
+        mut past_len: usize,
+        tokenize_ns: u64,
+        prefill_ns: u64,
+        total_start: Instant,
+    ) -> UnifiedResult<Qwen3GuardOnnxBatchProfile> {
+        let mut histories = vec![seed_tokens.to_vec(); batch_size];
+        let mut generated_texts = vec![String::new(); batch_size];
+        let mut done = vec![false; batch_size];
+        let mut stopped_by_complete_assessment = vec![false; batch_size];
+        let mut generated_tokens_per_request = 0;
+        let mut decode_ns = 0;
+        let mut decode_steps = 0;
+
+        let mut next_tokens = logits
+            .into_iter()
+            .enumerate()
+            .map(|(idx, logits)| {
+                let logits = apply_repeat_penalty(
+                    logits,
+                    &histories[idx][histories[idx]
+                        .len()
+                        .saturating_sub(self.config.repeat_last_n)..],
+                    self.config.repeat_penalty,
+                );
+                argmax(&logits) as u32
+            })
+            .collect::<Vec<_>>();
+
+        loop {
+            let mut active_generated = false;
+            for idx in 0..batch_size {
+                if done[idx] {
+                    continue;
+                }
+
+                let next_token = next_tokens[idx];
+                if next_token == self.eos_token_id || Some(next_token) == self.im_end_token_id {
+                    done[idx] = true;
+                    continue;
+                }
+
+                histories[idx].push(next_token);
+                active_generated = true;
+                if let Ok(piece) = self.tokenizer.decode(&[next_token], true) {
+                    generated_texts[idx].push_str(&piece);
+                }
+                if guard_assessment_complete(&generated_texts[idx])
+                    || histories[idx].len().saturating_sub(seed_tokens.len())
+                        >= self.config.max_tokens
+                {
+                    stopped_by_complete_assessment[idx] =
+                        guard_assessment_complete(&generated_texts[idx]);
+                    done[idx] = true;
+                }
+            }
+
+            if active_generated {
+                generated_tokens_per_request += 1;
+            }
+            if done.iter().all(|is_done| *is_done)
+                || generated_tokens_per_request >= self.config.max_tokens
+            {
+                break;
+            }
+
+            let decode_start = Instant::now();
+            let (logits, next_past) = self.forward_with_past_batch(
+                &next_tokens,
+                batch_size,
+                past_len,
+                past_len + 1,
+                past,
+            )?;
+            decode_ns += duration_ns(decode_start.elapsed());
+            decode_steps += 1;
+            past = next_past;
+            past_len += 1;
+
+            for (idx, logits) in logits.into_iter().enumerate() {
+                if done[idx] {
+                    continue;
+                }
+                let logits = apply_repeat_penalty(
+                    logits,
+                    &histories[idx][histories[idx]
+                        .len()
+                        .saturating_sub(self.config.repeat_last_n)..],
+                    self.config.repeat_penalty,
+                );
+                next_tokens[idx] = argmax(&logits) as u32;
+            }
+        }
+
+        Ok(Qwen3GuardOnnxBatchProfile {
+            output: generated_texts.into_iter().next().unwrap_or_default(),
+            batch_size,
+            prompt_tokens: prompt_token_count,
+            generated_tokens_per_request,
+            tokenize_ns,
+            prefill_ns,
+            decode_ns,
+            decode_steps,
+            total_ns: duration_ns(total_start.elapsed()),
+            stopped_by_complete_assessment: stopped_by_complete_assessment
+                .into_iter()
+                .filter(|stopped| *stopped)
+                .count(),
+        })
+    }
+
     fn forward_full_context(&mut self, tokens: &[u32]) -> UnifiedResult<Vec<f32>> {
         if tokens.is_empty() {
             return Err(errors::inference_error("forward", "empty token sequence"));
@@ -725,6 +1170,215 @@ impl Qwen3GuardOnnxModel {
             .iter()
             .map(|io| create_empty_past_value(io, self.session.allocator()))
             .collect::<UnifiedResult<Vec<_>>>()
+    }
+
+    fn create_empty_past_batch(&self, batch_size: usize) -> UnifiedResult<Vec<DynValue>> {
+        self.past_ios
+            .iter()
+            .map(|io| create_empty_past_value_batch(io, self.session.allocator(), batch_size))
+            .collect::<UnifiedResult<Vec<_>>>()
+    }
+
+    fn forward_with_past_batch(
+        &mut self,
+        tokens: &[u32],
+        batch_size: usize,
+        position_start: usize,
+        attention_len: usize,
+        past: Vec<DynValue>,
+    ) -> UnifiedResult<(Vec<Vec<f32>>, Vec<DynValue>)> {
+        if tokens.is_empty() {
+            return Err(errors::inference_error(
+                "forward_batch",
+                "empty token sequence",
+            ));
+        }
+        if batch_size == 0 {
+            return Err(errors::inference_error("forward_batch", "empty batch"));
+        }
+        if past.len() != self.past_ios.len() {
+            return Err(errors::inference_error(
+                "forward_batch",
+                &format!(
+                    "KV cache count mismatch: expected {}, got {}",
+                    self.past_ios.len(),
+                    past.len()
+                ),
+            ));
+        }
+        let is_decode_batch = tokens.len() == batch_size && attention_len == position_start + 1;
+        if is_decode_batch && tokens.is_empty() {
+            return Err(errors::inference_error(
+                "forward_batch",
+                "decode batch must contain one token per batch item",
+            ));
+        }
+
+        let seq_len = if is_decode_batch { 1 } else { tokens.len() };
+        let input_ids: Vec<i64> = if is_decode_batch {
+            tokens.iter().map(|&token| token as i64).collect()
+        } else {
+            let mut values = Vec::with_capacity(batch_size * tokens.len());
+            for _ in 0..batch_size {
+                values.extend(tokens.iter().map(|&token| token as i64));
+            }
+            values
+        };
+        let input_ids_tensor =
+            Tensor::from_array(([batch_size, seq_len], input_ids)).map_err(|e: ort::Error| {
+                errors::inference_error("create_batch_input_ids", &e.to_string())
+            })?;
+
+        let mut inputs: Vec<(Cow<'static, str>, SessionInputValue<'_>)> =
+            Vec::with_capacity(3 + self.past_ios.len());
+        inputs.push((
+            Cow::Borrowed("input_ids"),
+            SessionInputValue::from(input_ids_tensor),
+        ));
+
+        if self.accepts_attention_mask {
+            let attention_mask = vec![1i64; batch_size * attention_len];
+            let attention_mask_tensor =
+                Tensor::from_array(([batch_size, attention_len], attention_mask)).map_err(
+                    |e: ort::Error| {
+                        errors::inference_error("create_batch_attention_mask", &e.to_string())
+                    },
+                )?;
+            inputs.push((
+                Cow::Borrowed("attention_mask"),
+                SessionInputValue::from(attention_mask_tensor),
+            ));
+        }
+
+        if self.accepts_position_ids {
+            let mut position_ids = Vec::with_capacity(batch_size * seq_len);
+            for _ in 0..batch_size {
+                position_ids
+                    .extend((position_start..position_start + seq_len).map(|pos| pos as i64));
+            }
+            let position_ids_tensor = Tensor::from_array(([batch_size, seq_len], position_ids))
+                .map_err(|e: ort::Error| {
+                    errors::inference_error("create_batch_position_ids", &e.to_string())
+                })?;
+            inputs.push((
+                Cow::Borrowed("position_ids"),
+                SessionInputValue::from(position_ids_tensor),
+            ));
+        }
+
+        for (io, value) in self.past_ios.iter().zip(past.into_iter()) {
+            inputs.push((
+                Cow::Owned(io.input_name.clone()),
+                SessionInputValue::from(value),
+            ));
+        }
+
+        let past_ios = self.past_ios.clone();
+        let mut outputs = self
+            .session
+            .run(inputs)
+            .map_err(|e: ort::Error| errors::inference_error("session_run", &e.to_string()))?;
+        let logits = extract_last_token_logits_batch(&outputs, batch_size)?;
+        let next_past = collect_present_past(&past_ios, &mut outputs)?;
+        Ok((logits, next_past))
+    }
+
+    fn forward_with_past_batch_refs(
+        &mut self,
+        tokens: &[u32],
+        batch_size: usize,
+        position_start: usize,
+        attention_len: usize,
+        past: &[DynValue],
+    ) -> UnifiedResult<(Vec<Vec<f32>>, Vec<DynValue>)> {
+        if tokens.is_empty() {
+            return Err(errors::inference_error(
+                "forward_batch",
+                "empty token sequence",
+            ));
+        }
+        if batch_size == 0 {
+            return Err(errors::inference_error("forward_batch", "empty batch"));
+        }
+        if past.len() != self.past_ios.len() {
+            return Err(errors::inference_error(
+                "forward_batch",
+                &format!(
+                    "KV cache count mismatch: expected {}, got {}",
+                    self.past_ios.len(),
+                    past.len()
+                ),
+            ));
+        }
+
+        let is_decode_batch = tokens.len() == batch_size && attention_len == position_start + 1;
+        let seq_len = if is_decode_batch { 1 } else { tokens.len() };
+        let input_ids: Vec<i64> = if is_decode_batch {
+            tokens.iter().map(|&token| token as i64).collect()
+        } else {
+            let mut values = Vec::with_capacity(batch_size * tokens.len());
+            for _ in 0..batch_size {
+                values.extend(tokens.iter().map(|&token| token as i64));
+            }
+            values
+        };
+        let input_ids_tensor =
+            Tensor::from_array(([batch_size, seq_len], input_ids)).map_err(|e: ort::Error| {
+                errors::inference_error("create_batch_input_ids", &e.to_string())
+            })?;
+
+        let mut inputs: Vec<(Cow<'static, str>, SessionInputValue<'_>)> =
+            Vec::with_capacity(3 + self.past_ios.len());
+        inputs.push((
+            Cow::Borrowed("input_ids"),
+            SessionInputValue::from(input_ids_tensor),
+        ));
+
+        if self.accepts_attention_mask {
+            let attention_mask = vec![1i64; batch_size * attention_len];
+            let attention_mask_tensor =
+                Tensor::from_array(([batch_size, attention_len], attention_mask)).map_err(
+                    |e: ort::Error| {
+                        errors::inference_error("create_batch_attention_mask", &e.to_string())
+                    },
+                )?;
+            inputs.push((
+                Cow::Borrowed("attention_mask"),
+                SessionInputValue::from(attention_mask_tensor),
+            ));
+        }
+
+        if self.accepts_position_ids {
+            let mut position_ids = Vec::with_capacity(batch_size * seq_len);
+            for _ in 0..batch_size {
+                position_ids
+                    .extend((position_start..position_start + seq_len).map(|pos| pos as i64));
+            }
+            let position_ids_tensor = Tensor::from_array(([batch_size, seq_len], position_ids))
+                .map_err(|e: ort::Error| {
+                    errors::inference_error("create_batch_position_ids", &e.to_string())
+                })?;
+            inputs.push((
+                Cow::Borrowed("position_ids"),
+                SessionInputValue::from(position_ids_tensor),
+            ));
+        }
+
+        for (io, value) in self.past_ios.iter().zip(past.iter()) {
+            inputs.push((
+                Cow::Owned(io.input_name.clone()),
+                SessionInputValue::from(value),
+            ));
+        }
+
+        let past_ios = self.past_ios.clone();
+        let mut outputs = self
+            .session
+            .run(inputs)
+            .map_err(|e: ort::Error| errors::inference_error("session_run", &e.to_string()))?;
+        let logits = extract_last_token_logits_batch(&outputs, batch_size)?;
+        let next_past = collect_present_past(&past_ios, &mut outputs)?;
+        Ok((logits, next_past))
     }
 
     fn generate_with_borrowed_prefix_past(
@@ -1242,6 +1896,32 @@ fn create_empty_past_value(io: &PastKeyValueIo, allocator: &Allocator) -> Unifie
     }
 }
 
+fn create_empty_past_value_batch(
+    io: &PastKeyValueIo,
+    allocator: &Allocator,
+    batch_size: usize,
+) -> UnifiedResult<DynValue> {
+    let shape = [batch_size, io.kv_heads, 0usize, io.head_dim];
+    match io.dtype {
+        TensorElementType::Float16 => {
+            let tensor = Tensor::<f16>::new(allocator, shape).map_err(|e: ort::Error| {
+                errors::inference_error("create_empty_past_batch_f16", &e.to_string())
+            })?;
+            Ok(DynValue::from(tensor))
+        }
+        TensorElementType::Float32 => {
+            let tensor = Tensor::<f32>::new(allocator, shape).map_err(|e: ort::Error| {
+                errors::inference_error("create_empty_past_batch_f32", &e.to_string())
+            })?;
+            Ok(DynValue::from(tensor))
+        }
+        other => Err(errors::config_error(
+            "past_key_values",
+            &format!("unsupported KV cache dtype {other}"),
+        )),
+    }
+}
+
 fn read_eos_token_id(model_dir: &Path) -> Option<u32> {
     let config_path = [
         model_dir.join("config.json"),
@@ -1308,11 +1988,64 @@ fn extract_last_token_logits(outputs: &SessionOutputs<'_>) -> UnifiedResult<Vec<
     ))
 }
 
+fn extract_last_token_logits_batch(
+    outputs: &SessionOutputs<'_>,
+    batch_size: usize,
+) -> UnifiedResult<Vec<Vec<f32>>> {
+    if let Some(output) = outputs.get("logits") {
+        if let Ok(logits) = logits_batch_from_value_f32(output, batch_size) {
+            return Ok(logits);
+        }
+        if let Ok(logits) = logits_batch_from_value_f16(output, batch_size) {
+            return Ok(logits);
+        }
+    }
+
+    for (_name, output) in outputs {
+        if let Ok(logits) = logits_batch_from_value_f32(&output, batch_size) {
+            return Ok(logits);
+        }
+        if let Ok(logits) = logits_batch_from_value_f16(&output, batch_size) {
+            return Ok(logits);
+        }
+    }
+
+    Err(errors::inference_error(
+        "extract_batch_logits",
+        "no f32/f16 logits tensor found in ONNX outputs",
+    ))
+}
+
 fn logits_from_value_f32(output: &ort::value::DynValue) -> UnifiedResult<Vec<f32>> {
     let (shape, data) = output
         .try_extract_tensor::<f32>()
         .map_err(|e: ort::Error| errors::inference_error("extract_logits_f32", &e.to_string()))?;
     last_token_logits_from_slice(shape.as_ref(), data)
+}
+
+fn logits_batch_from_value_f32(
+    output: &ort::value::DynValue,
+    batch_size: usize,
+) -> UnifiedResult<Vec<Vec<f32>>> {
+    let (shape, data) = output
+        .try_extract_tensor::<f32>()
+        .map_err(|e: ort::Error| {
+            errors::inference_error("extract_batch_logits_f32", &e.to_string())
+        })?;
+    last_token_logits_batch_from_slice(shape.as_ref(), data, batch_size)
+}
+
+fn logits_batch_from_value_f16(
+    output: &ort::value::DynValue,
+    batch_size: usize,
+) -> UnifiedResult<Vec<Vec<f32>>> {
+    let (shape, data) = output
+        .try_extract_tensor::<f16>()
+        .map_err(|e: ort::Error| {
+            errors::inference_error("extract_batch_logits_f16", &e.to_string())
+        })?;
+    let converted: Vec<f32> = data.iter().map(|v| v.to_f32()).collect();
+    last_token_logits_batch_from_slice(shape.as_ref(), &converted, batch_size)
 }
 
 fn logits_from_value_f16(output: &ort::value::DynValue) -> UnifiedResult<Vec<f32>> {
@@ -1341,6 +2074,50 @@ fn last_token_logits_from_slice(shape: &[i64], data: &[f32]) -> UnifiedResult<Ve
         _ => Err(errors::inference_error(
             "extract_logits",
             &format!("unsupported logits shape {:?}", shape),
+        )),
+    }
+}
+
+fn last_token_logits_batch_from_slice(
+    shape: &[i64],
+    data: &[f32],
+    batch_size: usize,
+) -> UnifiedResult<Vec<Vec<f32>>> {
+    match shape {
+        [batch, vocab] if *batch as usize == batch_size => {
+            let vocab = *vocab as usize;
+            if vocab == 0 || data.len() < batch_size * vocab {
+                return Err(errors::inference_error(
+                    "extract_batch_logits",
+                    &format!("invalid logits shape {:?}", shape),
+                ));
+            }
+            Ok((0..batch_size)
+                .map(|batch_idx| {
+                    let start = batch_idx * vocab;
+                    data[start..start + vocab].to_vec()
+                })
+                .collect())
+        }
+        [batch, seq_len, vocab] if *batch as usize == batch_size => {
+            let seq_len = *seq_len as usize;
+            let vocab = *vocab as usize;
+            if seq_len == 0 || vocab == 0 || data.len() < batch_size * seq_len * vocab {
+                return Err(errors::inference_error(
+                    "extract_batch_logits",
+                    &format!("invalid logits shape {:?}", shape),
+                ));
+            }
+            Ok((0..batch_size)
+                .map(|batch_idx| {
+                    let start = (batch_idx * seq_len + (seq_len - 1)) * vocab;
+                    data[start..start + vocab].to_vec()
+                })
+                .collect())
+        }
+        _ => Err(errors::inference_error(
+            "extract_batch_logits",
+            &format!("unsupported batch logits shape {:?}", shape),
         )),
     }
 }
@@ -1507,6 +2284,25 @@ mod tests {
         ));
         assert!(!guard_assessment_complete("Safety: Unsafe\nCategories:"));
         assert!(!guard_assessment_complete("Safety: Safe"));
+    }
+
+    #[test]
+    fn last_token_logits_batch_supports_rank_2_logits() {
+        let data = [0.1, 0.2, 0.3, 1.1, 1.2, 1.3];
+        let logits = last_token_logits_batch_from_slice(&[2, 3], &data, 2).unwrap();
+
+        assert_eq!(logits, vec![vec![0.1, 0.2, 0.3], vec![1.1, 1.2, 1.3]]);
+    }
+
+    #[test]
+    fn last_token_logits_batch_supports_rank_3_logits() {
+        let data = [
+            0.1, 0.2, 0.3, 0.4, 0.5, 0.6, // batch 0, seq 0..1
+            1.1, 1.2, 1.3, 1.4, 1.5, 1.6, // batch 1, seq 0..1
+        ];
+        let logits = last_token_logits_batch_from_slice(&[2, 2, 3], &data, 2).unwrap();
+
+        assert_eq!(logits, vec![vec![0.4, 0.5, 0.6], vec![1.4, 1.5, 1.6]]);
     }
 
     #[test]

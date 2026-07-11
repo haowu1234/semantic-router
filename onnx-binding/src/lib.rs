@@ -35,5 +35,6 @@ pub use model_architectures::classification::{
 
 // Generative guard types
 pub use model_architectures::generative::{
-    Qwen3GuardOnnxConfig, Qwen3GuardOnnxModel, Qwen3GuardOnnxPrefixCache, Qwen3GuardOnnxProfile,
+    Qwen3GuardOnnxBatchPrefixCache, Qwen3GuardOnnxBatchProfile, Qwen3GuardOnnxConfig,
+    Qwen3GuardOnnxModel, Qwen3GuardOnnxPrefixCache, Qwen3GuardOnnxProfile,
 };
