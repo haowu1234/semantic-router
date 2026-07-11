@@ -1,16 +1,23 @@
 //! FFI bindings for Qwen3Guard safety classification.
 
-use crate::model_architectures::generative::Qwen3GuardModel;
+use crate::core::{UnifiedError, UnifiedResult};
+use crate::model_architectures::generative::{GuardGenerationResult, Qwen3GuardModel};
 use candle_core::Device;
+use std::env;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{
+    mpsc::{channel, Receiver, Sender},
+    Mutex, OnceLock,
+};
+use std::thread;
 use std::time::{Duration, Instant};
 
 /// Global Qwen3Guard instance (for safety/jailbreak detection)
 static GLOBAL_QWEN3_GUARD: OnceLock<Mutex<Qwen3GuardModel>> = OnceLock::new();
+static GLOBAL_QWEN3_GUARD_SCHEDULER: OnceLock<Qwen3GuardDecodeScheduler> = OnceLock::new();
 
 static QWEN3_GUARD_TIMING: Qwen3GuardTimingAccumulator = Qwen3GuardTimingAccumulator::new();
 static QWEN3_GUARD_DEVICE_KIND: AtomicU64 = AtomicU64::new(QWEN3_GUARD_DEVICE_UNINITIALIZED);
@@ -19,6 +26,85 @@ const QWEN3_GUARD_DEVICE_UNINITIALIZED: u64 = 0;
 const QWEN3_GUARD_DEVICE_CPU: u64 = 1;
 const QWEN3_GUARD_DEVICE_CUDA: u64 = 2;
 const QWEN3_GUARD_DEVICE_METAL: u64 = 3;
+
+struct Qwen3GuardDecodeScheduler {
+    request_tx: Sender<GuardSchedulerRequest>,
+}
+
+struct GuardSchedulerRequest {
+    text: String,
+    mode: String,
+    response_tx: Sender<UnifiedResult<GuardGenerationResult>>,
+}
+
+#[derive(Clone)]
+struct Qwen3GuardSchedulerConfig {
+    max_batch_size: usize,
+    batch_timeout: Duration,
+    verbose: bool,
+}
+
+impl Qwen3GuardDecodeScheduler {
+    fn new(model: Qwen3GuardModel, config: Qwen3GuardSchedulerConfig) -> Self {
+        let (request_tx, request_rx) = channel();
+        thread::spawn(move || {
+            qwen3_guard_scheduler_loop(model, request_rx, config);
+        });
+        Self { request_tx }
+    }
+
+    fn classify(&self, text: String, mode: String) -> UnifiedResult<GuardGenerationResult> {
+        let (response_tx, response_rx) = channel();
+        self.request_tx
+            .send(GuardSchedulerRequest {
+                text,
+                mode,
+                response_tx,
+            })
+            .map_err(|_| processing_error("submit guard request", "scheduler stopped"))?;
+        response_rx
+            .recv()
+            .map_err(|_| processing_error("receive guard result", "scheduler dropped response"))?
+    }
+}
+
+fn qwen3_guard_scheduler_loop(
+    mut model: Qwen3GuardModel,
+    request_rx: Receiver<GuardSchedulerRequest>,
+    config: Qwen3GuardSchedulerConfig,
+) {
+    while let Ok(first) = request_rx.recv() {
+        let mut batch = vec![first];
+        let deadline = Instant::now() + config.batch_timeout;
+
+        while batch.len() < config.max_batch_size {
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                break;
+            };
+            match request_rx.recv_timeout(remaining) {
+                Ok(request) => batch.push(request),
+                Err(_) => break,
+            }
+        }
+
+        if config.verbose {
+            println!(
+                "Qwen3Guard decode scheduler processing batch={}",
+                batch.len()
+            );
+        }
+
+        let inputs: Vec<(String, String)> = batch
+            .iter()
+            .map(|request| (request.text.clone(), request.mode.clone()))
+            .collect();
+        let results = model.generate_guard_micro_batch(&inputs);
+
+        for (request, result) in batch.into_iter().zip(results.into_iter()) {
+            let _ = request.response_tx.send(result);
+        }
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -111,6 +197,41 @@ fn qwen3_guard_device_kind(device: &Device) -> u64 {
     }
 }
 
+fn processing_error(operation: &str, source: impl ToString) -> UnifiedError {
+    UnifiedError::Processing {
+        operation: operation.to_string(),
+        source: source.to_string(),
+        input_context: None,
+    }
+}
+
+fn qwen3_guard_scheduler_enabled() -> bool {
+    env::var("QWEN3_GUARD_DECODE_SCHEDULER")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false)
+}
+
+fn qwen3_guard_scheduler_config() -> Qwen3GuardSchedulerConfig {
+    let max_batch_size = env::var("QWEN3_GUARD_DECODE_BATCH_SIZE")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|&value| value > 0)
+        .unwrap_or(4);
+    let batch_timeout_ms = env::var("QWEN3_GUARD_DECODE_BATCH_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(5);
+    let verbose = env::var("QWEN3_GUARD_DECODE_SCHEDULER_VERBOSE")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false);
+
+    Qwen3GuardSchedulerConfig {
+        max_batch_size,
+        batch_timeout: Duration::from_millis(batch_timeout_ms),
+        verbose,
+    }
+}
+
 /// Guard generation result returned to Go (raw text only)
 #[repr(C)]
 pub struct GuardResult {
@@ -138,6 +259,46 @@ fn create_error_message(msg: &str) -> *mut c_char {
     match CString::new(msg) {
         Ok(s) => s.into_raw(),
         Err(_) => ptr::null_mut(),
+    }
+}
+
+unsafe fn write_guard_generation_result(
+    result: *mut GuardResult,
+    generation_result: UnifiedResult<GuardGenerationResult>,
+) -> i32 {
+    match generation_result {
+        Ok(guard_result) => {
+            let raw_output_c = match CString::new(guard_result.raw_output.as_str()) {
+                Ok(s) => s.into_raw(),
+                Err(e) => {
+                    eprintln!("Error: failed to create raw_output C string: {}", e);
+                    unsafe {
+                        (*result) = GuardResult::default();
+                        (*result).error_message =
+                            create_error_message(&format!("Failed to create C string: {}", e));
+                    }
+                    return -1;
+                }
+            };
+
+            unsafe {
+                (*result) = GuardResult {
+                    raw_output: raw_output_c,
+                    error: false,
+                    error_message: ptr::null_mut(),
+                };
+            }
+            0
+        }
+        Err(e) => {
+            eprintln!("Error: guard classification failed: {}", e);
+            unsafe {
+                (*result) = GuardResult::default();
+                (*result).error_message =
+                    create_error_message(&format!("Classification failed: {}", e));
+            }
+            -1
+        }
     }
 }
 
@@ -194,23 +355,51 @@ pub unsafe extern "C" fn init_qwen3_guard(model_path: *const c_char) -> i32 {
 
     let device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
 
-    if GLOBAL_QWEN3_GUARD.get().is_some() {
+    if GLOBAL_QWEN3_GUARD.get().is_some() || GLOBAL_QWEN3_GUARD_SCHEDULER.get().is_some() {
         println!("Qwen3Guard already initialized, reusing existing instance");
         return 0;
     }
 
     match Qwen3GuardModel::new(model_path_str, &device, None) {
-        Ok(guard) => match GLOBAL_QWEN3_GUARD.set(Mutex::new(guard)) {
-            Ok(_) => {
-                QWEN3_GUARD_DEVICE_KIND.store(qwen3_guard_device_kind(&device), Ordering::Relaxed);
-                println!("Qwen3Guard initialized: {}", model_path_str);
-                0
+        Ok(guard) => {
+            QWEN3_GUARD_DEVICE_KIND.store(qwen3_guard_device_kind(&device), Ordering::Relaxed);
+
+            if qwen3_guard_scheduler_enabled() {
+                let config = qwen3_guard_scheduler_config();
+                if config.verbose {
+                    println!(
+                        "Qwen3Guard decode scheduler enabled: max_batch_size={}, timeout={:?}",
+                        config.max_batch_size, config.batch_timeout
+                    );
+                }
+                match GLOBAL_QWEN3_GUARD_SCHEDULER
+                    .set(Qwen3GuardDecodeScheduler::new(guard, config))
+                {
+                    Ok(_) => {
+                        println!(
+                            "Qwen3Guard initialized with decode scheduler: {}",
+                            model_path_str
+                        );
+                        0
+                    }
+                    Err(_) => {
+                        println!("Qwen3Guard already initialized (race condition), reusing");
+                        0
+                    }
+                }
+            } else {
+                match GLOBAL_QWEN3_GUARD.set(Mutex::new(guard)) {
+                    Ok(_) => {
+                        println!("Qwen3Guard initialized: {}", model_path_str);
+                        0
+                    }
+                    Err(_) => {
+                        println!("Qwen3Guard already initialized (race condition), reusing");
+                        0
+                    }
+                }
             }
-            Err(_) => {
-                println!("Qwen3Guard already initialized (race condition), reusing");
-                0
-            }
-        },
+        }
         Err(e) => {
             eprintln!("Error: failed to load Qwen3Guard: {}", e);
             -1
@@ -268,6 +457,18 @@ pub unsafe extern "C" fn classify_with_qwen3_guard(
         }
     };
 
+    if let Some(scheduler) = GLOBAL_QWEN3_GUARD_SCHEDULER.get() {
+        let generation_start = Instant::now();
+        let generation_result = scheduler.classify(text_str.to_string(), mode_str.to_string());
+        let generation_elapsed = generation_start.elapsed();
+        QWEN3_GUARD_TIMING.record(
+            Duration::ZERO,
+            generation_elapsed,
+            generation_result.is_err(),
+        );
+        return unsafe { write_guard_generation_result(result, generation_result) };
+    }
+
     let guard_mutex = match GLOBAL_QWEN3_GUARD.get() {
         Some(g) => g,
         None => {
@@ -289,43 +490,7 @@ pub unsafe extern "C" fn classify_with_qwen3_guard(
             let generation_elapsed = generation_start.elapsed();
             QWEN3_GUARD_TIMING.record(lock_wait, generation_elapsed, generation_result.is_err());
 
-            match generation_result {
-                Ok(guard_result) => {
-                    let raw_output_c = match CString::new(guard_result.raw_output.as_str()) {
-                        Ok(s) => s.into_raw(),
-                        Err(e) => {
-                            eprintln!("Error: failed to create raw_output C string: {}", e);
-                            unsafe {
-                                (*result) = GuardResult::default();
-                                (*result).error_message = create_error_message(&format!(
-                                    "Failed to create C string: {}",
-                                    e
-                                ));
-                            }
-                            return -1;
-                        }
-                    };
-
-                    unsafe {
-                        (*result) = GuardResult {
-                            raw_output: raw_output_c,
-                            error: false,
-                            error_message: ptr::null_mut(),
-                        };
-                    }
-
-                    0
-                }
-                Err(e) => {
-                    eprintln!("Error: guard classification failed: {}", e);
-                    unsafe {
-                        (*result) = GuardResult::default();
-                        (*result).error_message =
-                            create_error_message(&format!("Classification failed: {}", e));
-                    }
-                    -1
-                }
-            }
+            unsafe { write_guard_generation_result(result, generation_result) }
         }
         Err(e) => {
             QWEN3_GUARD_TIMING.record(lock_start.elapsed(), Duration::ZERO, true);
@@ -369,7 +534,7 @@ pub extern "C" fn get_qwen3_guard_device_kind() -> u64 {
 /// - 0 if not initialized
 #[no_mangle]
 pub extern "C" fn is_qwen3_guard_initialized() -> i32 {
-    if GLOBAL_QWEN3_GUARD.get().is_some() {
+    if GLOBAL_QWEN3_GUARD.get().is_some() || GLOBAL_QWEN3_GUARD_SCHEDULER.get().is_some() {
         1
     } else {
         0
