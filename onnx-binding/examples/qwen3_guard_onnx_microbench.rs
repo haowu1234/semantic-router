@@ -38,42 +38,37 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let warmup = model.generate_guard_profile(&text, &mode)?;
     println!("Warmup output: {:?}", warmup.output);
-    println!();
 
-    let mut profiles = Vec::with_capacity(runs);
+    let mut baseline_profiles = Vec::with_capacity(runs);
     for _ in 0..runs {
-        profiles.push(model.generate_guard_profile(&text, &mode)?);
+        baseline_profiles.push(model.generate_guard_profile(&text, &mode)?);
     }
+    print_profiles("baseline_full_prompt", &baseline_profiles);
 
-    println!("| metric | avg | min | max |");
-    println!("| --- | ---: | ---: | ---: |");
-    print_duration_row("tokenize_ms", profiles.iter().map(|p| p.tokenize_ns));
-    print_duration_row("prefill_ms", profiles.iter().map(|p| p.prefill_ns));
-    print_duration_row("decode_ms", profiles.iter().map(|p| p.decode_ns));
-    print_duration_row("total_ms", profiles.iter().map(|p| p.total_ns));
-    print_usize_row("prompt_tokens", profiles.iter().map(|p| p.prompt_tokens));
-    print_usize_row(
-        "generated_tokens",
-        profiles.iter().map(|p| p.generated_tokens),
-    );
-    print_usize_row("decode_steps", profiles.iter().map(|p| p.decode_steps));
-    println!(
-        "| decode_tokens_per_s | {:.2} | | |",
-        avg_decode_tokens_per_second(&profiles)
-    );
     println!();
-    println!(
-        "early_stop_runs: {}/{}",
-        profiles
-            .iter()
-            .filter(|p| p.stopped_by_complete_assessment)
-            .count(),
-        profiles.len()
-    );
-    println!(
-        "last_output: {:?}",
-        profiles.last().map(|p| p.output.as_str()).unwrap_or("")
-    );
+    println!("## prefix_cache_probe");
+    match model.prepare_guard_prefix_cache(&mode) {
+        Ok(cache) => {
+            println!();
+            println!("- prefix_tokens: `{}`", cache.prefix_tokens());
+            println!(
+                "- one_time_prepare_ms: `{:.3}`",
+                cache.prepare_ns() as f64 / 1_000_000.0
+            );
+            let warmup = model.generate_guard_profile_with_prefix_cache(&text, &mode, &cache)?;
+            println!("- warmup_output: {:?}", warmup.output);
+            let mut cached_profiles = Vec::with_capacity(runs);
+            for _ in 0..runs {
+                cached_profiles
+                    .push(model.generate_guard_profile_with_prefix_cache(&text, &mode, &cache)?);
+            }
+            print_profiles("prefix_cache_tail", &cached_profiles);
+        }
+        Err(error) => {
+            println!();
+            println!("- unavailable: `{}`", error);
+        }
+    }
 
     Ok(())
 }
@@ -106,6 +101,41 @@ fn env_usize(name: &str) -> Option<usize> {
 fn print_duration_row(name: &str, values: impl Iterator<Item = u64>) {
     let values: Vec<f64> = values.map(|ns| ns as f64 / 1_000_000.0).collect();
     print_f64_row(name, &values);
+}
+
+fn print_profiles(name: &str, profiles: &[Qwen3GuardOnnxProfile]) {
+    println!();
+    println!("## {name}");
+    println!();
+    println!("| metric | avg | min | max |");
+    println!("| --- | ---: | ---: | ---: |");
+    print_duration_row("tokenize_ms", profiles.iter().map(|p| p.tokenize_ns));
+    print_duration_row("prefill_ms", profiles.iter().map(|p| p.prefill_ns));
+    print_duration_row("decode_ms", profiles.iter().map(|p| p.decode_ns));
+    print_duration_row("total_ms", profiles.iter().map(|p| p.total_ns));
+    print_usize_row("prompt_tokens", profiles.iter().map(|p| p.prompt_tokens));
+    print_usize_row(
+        "generated_tokens",
+        profiles.iter().map(|p| p.generated_tokens),
+    );
+    print_usize_row("decode_steps", profiles.iter().map(|p| p.decode_steps));
+    println!(
+        "| generated_tokens_per_s | {:.2} | | |",
+        avg_decode_tokens_per_second(profiles)
+    );
+    println!();
+    println!(
+        "early_stop_runs: {}/{}",
+        profiles
+            .iter()
+            .filter(|p| p.stopped_by_complete_assessment)
+            .count(),
+        profiles.len()
+    );
+    println!(
+        "last_output: {:?}",
+        profiles.last().map(|p| p.output.as_str()).unwrap_or("")
+    );
 }
 
 fn print_usize_row(name: &str, values: impl Iterator<Item = usize>) {

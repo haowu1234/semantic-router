@@ -54,6 +54,23 @@ pub struct Qwen3GuardOnnxProfile {
     pub stopped_by_complete_assessment: bool,
 }
 
+pub struct Qwen3GuardOnnxPrefixCache {
+    mode: String,
+    prefix_tokens: Vec<u32>,
+    past: Vec<DynValue>,
+    prepare_ns: u64,
+}
+
+impl Qwen3GuardOnnxPrefixCache {
+    pub fn prefix_tokens(&self) -> usize {
+        self.prefix_tokens.len()
+    }
+
+    pub fn prepare_ns(&self) -> u64 {
+        self.prepare_ns
+    }
+}
+
 pub struct Qwen3GuardOnnxModel {
     session: Session,
     tokenizer: Arc<Tokenizer>,
@@ -158,6 +175,110 @@ impl Qwen3GuardOnnxModel {
     ) -> UnifiedResult<Qwen3GuardOnnxProfile> {
         let prompt = format_guard_prompt(text, mode);
         self.generate_profile(&prompt)
+    }
+
+    pub fn prepare_guard_prefix_cache(
+        &mut self,
+        mode: &str,
+    ) -> UnifiedResult<Qwen3GuardOnnxPrefixCache> {
+        if self.past_ios.is_empty() {
+            return Err(errors::config_error(
+                "prefix_cache",
+                "prefix cache requires a decoder model with past_key_values inputs",
+            ));
+        }
+
+        let (prefix, _tail) = format_guard_prompt_parts("", mode);
+        let encoding = self
+            .tokenizer
+            .encode(prefix.as_str(), true)
+            .map_err(|e| errors::tokenization_error(&e.to_string()))?;
+        let prefix_tokens = encoding.get_ids().to_vec();
+        if prefix_tokens.is_empty() {
+            return Err(errors::inference_error(
+                "prepare_prefix_cache",
+                "empty prefix token sequence",
+            ));
+        }
+
+        let start = Instant::now();
+        let empty_past = self.create_empty_past()?;
+        let (_logits, past) =
+            self.forward_with_past(&prefix_tokens, 0, prefix_tokens.len(), empty_past)?;
+        Ok(Qwen3GuardOnnxPrefixCache {
+            mode: mode.to_string(),
+            prefix_tokens,
+            past,
+            prepare_ns: duration_ns(start.elapsed()),
+        })
+    }
+
+    pub fn generate_guard_profile_with_prefix_cache(
+        &mut self,
+        text: &str,
+        mode: &str,
+        cache: &Qwen3GuardOnnxPrefixCache,
+    ) -> UnifiedResult<Qwen3GuardOnnxProfile> {
+        if mode != cache.mode {
+            return Err(errors::config_error(
+                "prefix_cache",
+                &format!(
+                    "prefix cache mode '{}' cannot be used for mode '{}'",
+                    cache.mode, mode
+                ),
+            ));
+        }
+
+        let total_start = Instant::now();
+        let tokenize_start = Instant::now();
+        let (prefix, tail) = format_guard_prompt_parts(text, mode);
+        let full_prompt = format!("{prefix}{tail}");
+        let full_tokens = self
+            .tokenizer
+            .encode(full_prompt.as_str(), true)
+            .map_err(|e| errors::tokenization_error(&e.to_string()))?
+            .get_ids()
+            .to_vec();
+        let prefix_tokens = self
+            .tokenizer
+            .encode(prefix.as_str(), true)
+            .map_err(|e| errors::tokenization_error(&e.to_string()))?
+            .get_ids()
+            .to_vec();
+        let tail_tokens = self
+            .tokenizer
+            .encode(tail.as_str(), true)
+            .map_err(|e| errors::tokenization_error(&e.to_string()))?
+            .get_ids()
+            .to_vec();
+        let tokenize_ns = duration_ns(tokenize_start.elapsed());
+
+        if prefix_tokens != cache.prefix_tokens {
+            return Err(errors::validation_error(
+                "prefix_cache_tokens",
+                "request prefix tokens match cached prefix tokens",
+                "token mismatch",
+            ));
+        }
+
+        let mut joined_tokens = prefix_tokens;
+        joined_tokens.extend_from_slice(&tail_tokens);
+        if joined_tokens != full_tokens {
+            return Err(errors::validation_error(
+                "prefix_cache_tokenization",
+                "tokenize(prefix) + tokenize(tail) equals tokenize(full_prompt)",
+                "token boundary mismatch",
+            ));
+        }
+
+        self.generate_with_borrowed_prefix_past(
+            &tail_tokens,
+            full_tokens.len(),
+            cache.prefix_tokens.len(),
+            &cache.past,
+            tokenize_ns,
+            total_start,
+        )
     }
 
     pub fn model_info(&self) -> String {
@@ -425,11 +546,172 @@ impl Qwen3GuardOnnxModel {
         Ok((logits, next_past))
     }
 
+    fn forward_with_past_refs(
+        &mut self,
+        tokens: &[u32],
+        position_start: usize,
+        attention_len: usize,
+        past: &[DynValue],
+    ) -> UnifiedResult<(Vec<f32>, Vec<DynValue>)> {
+        if tokens.is_empty() {
+            return Err(errors::inference_error("forward", "empty token sequence"));
+        }
+        if past.len() != self.past_ios.len() {
+            return Err(errors::inference_error(
+                "forward",
+                &format!(
+                    "KV cache count mismatch: expected {}, got {}",
+                    self.past_ios.len(),
+                    past.len()
+                ),
+            ));
+        }
+
+        let input_ids: Vec<i64> = tokens.iter().map(|&t| t as i64).collect();
+        let input_ids_tensor = Tensor::from_array(([1usize, tokens.len()], input_ids))
+            .map_err(|e: ort::Error| errors::inference_error("create_input_ids", &e.to_string()))?;
+
+        let mut inputs: Vec<(Cow<'static, str>, SessionInputValue<'_>)> =
+            Vec::with_capacity(3 + self.past_ios.len());
+        inputs.push((
+            Cow::Borrowed("input_ids"),
+            SessionInputValue::from(input_ids_tensor),
+        ));
+
+        if self.accepts_attention_mask {
+            let attention_mask = vec![1i64; attention_len];
+            let attention_mask_tensor =
+                Tensor::from_array(([1usize, attention_len], attention_mask)).map_err(
+                    |e: ort::Error| {
+                        errors::inference_error("create_attention_mask", &e.to_string())
+                    },
+                )?;
+            inputs.push((
+                Cow::Borrowed("attention_mask"),
+                SessionInputValue::from(attention_mask_tensor),
+            ));
+        }
+
+        if self.accepts_position_ids {
+            let position_ids: Vec<i64> = (position_start..position_start + tokens.len())
+                .map(|pos| pos as i64)
+                .collect();
+            let position_ids_tensor = Tensor::from_array(([1usize, tokens.len()], position_ids))
+                .map_err(|e: ort::Error| {
+                    errors::inference_error("create_position_ids", &e.to_string())
+                })?;
+            inputs.push((
+                Cow::Borrowed("position_ids"),
+                SessionInputValue::from(position_ids_tensor),
+            ));
+        }
+
+        for (io, value) in self.past_ios.iter().zip(past.iter()) {
+            inputs.push((
+                Cow::Owned(io.input_name.clone()),
+                SessionInputValue::from(value),
+            ));
+        }
+
+        let past_ios = self.past_ios.clone();
+        let mut outputs = self
+            .session
+            .run(inputs)
+            .map_err(|e: ort::Error| errors::inference_error("session_run", &e.to_string()))?;
+        let logits = extract_last_token_logits(&outputs)?;
+        let next_past = collect_present_past(&past_ios, &mut outputs)?;
+        Ok((logits, next_past))
+    }
+
     fn create_empty_past(&self) -> UnifiedResult<Vec<DynValue>> {
         self.past_ios
             .iter()
             .map(|io| create_empty_past_value(io, self.session.allocator()))
             .collect::<UnifiedResult<Vec<_>>>()
+    }
+
+    fn generate_with_borrowed_prefix_past(
+        &mut self,
+        tail_tokens: &[u32],
+        prompt_tokens: usize,
+        prefix_len: usize,
+        prefix_past: &[DynValue],
+        tokenize_ns: u64,
+        total_start: Instant,
+    ) -> UnifiedResult<Qwen3GuardOnnxProfile> {
+        if tail_tokens.is_empty() {
+            return Err(errors::inference_error(
+                "generate_prefix_cache",
+                "empty tail token sequence",
+            ));
+        }
+
+        let tail_start = Instant::now();
+        let (logits, mut past) = self.forward_with_past_refs(
+            tail_tokens,
+            prefix_len,
+            prefix_len + tail_tokens.len(),
+            prefix_past,
+        )?;
+        let prefill_ns = duration_ns(tail_start.elapsed());
+        let mut past_len = prefix_len + tail_tokens.len();
+        let mut tokens: Vec<u32> = tail_tokens.to_vec();
+        let mut generated_text = String::new();
+        let mut decode_ns = 0;
+        let mut decode_steps = 0;
+        let mut generated_tokens = 0;
+        let mut stopped_by_complete_assessment = false;
+
+        let logits = apply_repeat_penalty(
+            logits,
+            &tokens[tokens.len().saturating_sub(self.config.repeat_last_n)..],
+            self.config.repeat_penalty,
+        );
+        let mut next_token = argmax(&logits) as u32;
+
+        loop {
+            if next_token == self.eos_token_id || Some(next_token) == self.im_end_token_id {
+                break;
+            }
+
+            tokens.push(next_token);
+            generated_tokens += 1;
+            if let Ok(piece) = self.tokenizer.decode(&[next_token], true) {
+                generated_text.push_str(&piece);
+            }
+            if guard_assessment_complete(&generated_text)
+                || generated_tokens >= self.config.max_tokens
+            {
+                stopped_by_complete_assessment = guard_assessment_complete(&generated_text);
+                break;
+            }
+
+            let decode_start = Instant::now();
+            let (logits, next_past) =
+                self.forward_with_past(&[next_token], past_len, past_len + 1, past)?;
+            decode_ns += duration_ns(decode_start.elapsed());
+            decode_steps += 1;
+            past = next_past;
+            past_len += 1;
+            let logits = apply_repeat_penalty(
+                logits,
+                &tokens[tokens.len().saturating_sub(self.config.repeat_last_n)..],
+                self.config.repeat_penalty,
+            );
+            next_token = argmax(&logits) as u32;
+        }
+
+        Ok(Qwen3GuardOnnxProfile {
+            output: generated_text,
+            prompt_tokens,
+            generated_tokens,
+            tokenize_ns,
+            prefill_ns,
+            decode_ns,
+            decode_steps,
+            total_ns: duration_ns(total_start.elapsed()),
+            stopped_by_complete_assessment,
+        })
     }
 }
 
@@ -1011,14 +1293,14 @@ fn guard_assessment_complete(text: &str) -> bool {
     categories.contains('\n') && !trimmed.is_empty()
 }
 
-fn format_guard_prompt(text: &str, mode: &str) -> String {
+fn format_guard_prompt_parts(text: &str, mode: &str) -> (String, String) {
     let user_label = if mode == "output" {
         "ASSISTANT"
     } else {
         "USER"
     };
 
-    format!(
+    let prefix = format!(
         "<|im_start|>user\n# Task:\n\
         1) Evaluate whether THE LAST {}'s query belongs to safe or unsafe content based on our safety policy.\n\
         2) Identify the category of unsafe content found.\n\n\
@@ -1038,8 +1320,11 @@ fn format_guard_prompt(text: &str, mode: &str) -> String {
         Copyright Violation.\n\
         Jailbreak.\n\
         <END UNSAFE CONTENT CATEGORIES>\n\n\
-        <BEGIN CONVERSATION>\n\n\
-        {}: {}\n\n\
+        <BEGIN CONVERSATION>\n\n",
+        user_label, user_label, user_label, user_label
+    );
+    let tail = format!(
+        "        {}: {}\n\n\
         <END CONVERSATION>\n\n\
         Provide your safety assessment for ONLY THE LAST **{}'s query** in the above conversation:\n \
         - The first line must be one of: 'Safety: Safe', 'Safety: Unsafe', 'Safety: Controversial'.\n \
@@ -1047,8 +1332,14 @@ fn format_guard_prompt(text: &str, mode: &str) -> String {
         <|im_start|>assistant\n\
         <think>\n\n\
         </think>\n\n",
-        user_label, user_label, user_label, user_label, user_label, text, user_label
-    )
+        user_label, text, user_label
+    );
+    (prefix, tail)
+}
+
+fn format_guard_prompt(text: &str, mode: &str) -> String {
+    let (prefix, tail) = format_guard_prompt_parts(text, mode);
+    format!("{prefix}{tail}")
 }
 
 fn env_usize(name: &str) -> Option<usize> {
