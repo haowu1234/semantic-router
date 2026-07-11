@@ -27,6 +27,7 @@ pub struct Qwen3GuardOnnxConfig {
     pub max_tokens: usize,
     pub repeat_penalty: f32,
     pub repeat_last_n: usize,
+    pub prefix_cache_enabled: bool,
 }
 
 impl Default for Qwen3GuardOnnxConfig {
@@ -37,6 +38,7 @@ impl Default for Qwen3GuardOnnxConfig {
                 .unwrap_or(DEFAULT_REPEAT_PENALTY),
             repeat_last_n: env_usize("QWEN3_GUARD_ONNX_REPEAT_LAST_N")
                 .unwrap_or(DEFAULT_REPEAT_LAST_N),
+            prefix_cache_enabled: env_bool("QWEN3_GUARD_ONNX_PREFIX_CACHE").unwrap_or(true),
         }
     }
 }
@@ -81,6 +83,8 @@ pub struct Qwen3GuardOnnxModel {
     eos_token_id: u32,
     im_end_token_id: Option<u32>,
     model_path: String,
+    prefix_cache_input: Option<Qwen3GuardOnnxPrefixCache>,
+    prefix_cache_output: Option<Qwen3GuardOnnxPrefixCache>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -151,7 +155,7 @@ impl Qwen3GuardOnnxModel {
         })?;
         let im_end_token_id = tokenizer.token_to_id("<|im_end|>");
 
-        Ok(Self {
+        let mut model = Self {
             session,
             tokenizer: Arc::new(tokenizer),
             config: config.unwrap_or_default(),
@@ -161,11 +165,30 @@ impl Qwen3GuardOnnxModel {
             eos_token_id,
             im_end_token_id,
             model_path: model_path_str,
-        })
+            prefix_cache_input: None,
+            prefix_cache_output: None,
+        };
+
+        if model.config.prefix_cache_enabled {
+            if let Err(e) = model.initialize_guard_prefix_caches() {
+                println!(
+                    "WARNING: Qwen3Guard ONNX prefix cache initialization failed; using full prompt path: {}",
+                    e
+                );
+            }
+        } else {
+            println!(
+                "INFO: Qwen3Guard ONNX prefix cache disabled by QWEN3_GUARD_ONNX_PREFIX_CACHE"
+            );
+        }
+
+        Ok(model)
     }
 
     pub fn generate_guard(&mut self, text: &str, mode: &str) -> UnifiedResult<String> {
-        Ok(self.generate_guard_profile(text, mode)?.output)
+        Ok(self
+            .generate_guard_profile_cached_or_full(text, mode)?
+            .output)
     }
 
     pub fn generate_guard_profile(
@@ -283,9 +306,83 @@ impl Qwen3GuardOnnxModel {
 
     pub fn model_info(&self) -> String {
         format!(
-            "Qwen3GuardOnnxModel(path={}, max_tokens={})",
-            self.model_path, self.config.max_tokens
+            "Qwen3GuardOnnxModel(path={}, max_tokens={}, prefix_cache={})",
+            self.model_path,
+            self.config.max_tokens,
+            self.prefix_cache_status()
         )
+    }
+
+    fn initialize_guard_prefix_caches(&mut self) -> UnifiedResult<()> {
+        if self.past_ios.is_empty() {
+            println!(
+                "INFO: Qwen3Guard ONNX prefix cache unavailable: model does not expose past_key_values inputs"
+            );
+            return Ok(());
+        }
+
+        let input_cache = self.prepare_guard_prefix_cache("input")?;
+        let output_cache = self.prepare_guard_prefix_cache("output")?;
+        println!(
+            "INFO: Qwen3Guard ONNX prefix cache initialized: input={} tokens ({:.2}ms), output={} tokens ({:.2}ms)",
+            input_cache.prefix_tokens(),
+            input_cache.prepare_ns() as f64 / 1e6,
+            output_cache.prefix_tokens(),
+            output_cache.prepare_ns() as f64 / 1e6
+        );
+        self.prefix_cache_input = Some(input_cache);
+        self.prefix_cache_output = Some(output_cache);
+        Ok(())
+    }
+
+    fn generate_guard_profile_cached_or_full(
+        &mut self,
+        text: &str,
+        mode: &str,
+    ) -> UnifiedResult<Qwen3GuardOnnxProfile> {
+        let Some(cache) = self.take_guard_prefix_cache(mode) else {
+            return self.generate_guard_profile(text, mode);
+        };
+
+        let result = self.generate_guard_profile_with_prefix_cache(text, mode, &cache);
+        self.restore_guard_prefix_cache(cache);
+        match result {
+            Ok(profile) => Ok(profile),
+            Err(e) => {
+                println!(
+                    "WARNING: Qwen3Guard ONNX prefix cache fast path failed; using full prompt path: {}",
+                    e
+                );
+                self.generate_guard_profile(text, mode)
+            }
+        }
+    }
+
+    fn take_guard_prefix_cache(&mut self, mode: &str) -> Option<Qwen3GuardOnnxPrefixCache> {
+        match mode {
+            "input" => self.prefix_cache_input.take(),
+            "output" => self.prefix_cache_output.take(),
+            _ => None,
+        }
+    }
+
+    fn restore_guard_prefix_cache(&mut self, cache: Qwen3GuardOnnxPrefixCache) {
+        let mode = cache.mode.clone();
+        match mode.as_str() {
+            "input" => self.prefix_cache_input = Some(cache),
+            "output" => self.prefix_cache_output = Some(cache),
+            _ => {}
+        }
+    }
+
+    fn prefix_cache_status(&self) -> &'static str {
+        if !self.config.prefix_cache_enabled {
+            "disabled"
+        } else if self.prefix_cache_input.is_some() && self.prefix_cache_output.is_some() {
+            "ready"
+        } else {
+            "unavailable"
+        }
     }
 
     fn generate_profile(&mut self, prompt: &str) -> UnifiedResult<Qwen3GuardOnnxProfile> {
@@ -1354,6 +1451,15 @@ fn env_f32(name: &str) -> Option<f32> {
         .ok()
         .and_then(|v| v.parse::<f32>().ok())
         .filter(|v| v.is_finite() && *v > 0.0)
+}
+
+fn env_bool(name: &str) -> Option<bool> {
+    let raw = std::env::var(name).ok()?;
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
 }
 
 fn duration_ns(duration: Duration) -> u64 {
