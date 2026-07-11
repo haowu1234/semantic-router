@@ -2,6 +2,8 @@ package classification
 
 import (
 	"fmt"
+	"os"
+	"strings"
 
 	candle_binding "github.com/vllm-project/semantic-router/candle-binding"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/config"
@@ -101,6 +103,34 @@ func createMmBERT32KJailbreakInitializer() JailbreakInitializer {
 	return &MmBERT32KJailbreakInitializerImpl{}
 }
 
+// Qwen3GuardInitializerImpl uses a generative Qwen3Guard model for local safety classification.
+type Qwen3GuardInitializerImpl struct{}
+
+func (c *Qwen3GuardInitializerImpl) Init(modelID string, useCPU bool, numClasses ...int) error {
+	_ = numClasses
+
+	if useCPU {
+		_ = os.Setenv("QWEN3_GUARD_ONNX_USE_CPU", "1")
+	}
+
+	logging.ComponentDebugEvent("classifier", "jailbreak_detector_backend_loading", map[string]interface{}{
+		"backend":   "qwen3_guard",
+		"model_ref": modelID,
+	})
+	if err := candle_binding.InitQwen3Guard(modelID); err != nil {
+		return fmt.Errorf("failed to initialize Qwen3Guard jailbreak detector: %w", err)
+	}
+	logging.ComponentEvent("classifier", "jailbreak_detector_initialized", map[string]interface{}{
+		"backend":   "qwen3_guard",
+		"model_ref": modelID,
+	})
+	return nil
+}
+
+func createQwen3GuardInitializer() JailbreakInitializer {
+	return &Qwen3GuardInitializerImpl{}
+}
+
 type JailbreakInference interface {
 	Classify(text string) (candle_binding.ClassResult, error)
 }
@@ -132,6 +162,153 @@ func (c *MmBERT32KJailbreakInferenceImpl) Classify(text string) (candle_binding.
 // createMmBERT32KJailbreakInference creates mmBERT-32K jailbreak inference.
 func createMmBERT32KJailbreakInference() JailbreakInference {
 	return &MmBERT32KJailbreakInferenceImpl{}
+}
+
+type qwen3GuardClassIndexes struct {
+	unsafeClass int
+	safeClass   int
+}
+
+// Qwen3GuardJailbreakInferenceImpl adapts Qwen3Guard's safety labels to the
+// existing binary jailbreak mapping used by router policy code.
+type Qwen3GuardJailbreakInferenceImpl struct {
+	classes qwen3GuardClassIndexes
+}
+
+func (c *Qwen3GuardJailbreakInferenceImpl) Classify(text string) (candle_binding.ClassResult, error) {
+	result, err := candle_binding.ClassifyPromptSafety(text)
+	if err != nil {
+		return candle_binding.ClassResult{}, err
+	}
+	return qwen3GuardSafetyToClassResult(result, c.classes)
+}
+
+func createQwen3GuardJailbreakInference(mapping *JailbreakMapping) (JailbreakInference, error) {
+	classes, err := qwen3GuardClassIndexesFromMapping(mapping)
+	if err != nil {
+		return nil, err
+	}
+	logging.ComponentEvent("classifier", "jailbreak_detector_backend_selected", map[string]interface{}{
+		"backend": "qwen3_guard",
+	})
+	return &Qwen3GuardJailbreakInferenceImpl{classes: classes}, nil
+}
+
+func qwen3GuardSafetyToClassResult(result *candle_binding.SafetyClassificationResult, classes qwen3GuardClassIndexes) (candle_binding.ClassResult, error) {
+	if result == nil {
+		return candle_binding.ClassResult{}, fmt.Errorf("Qwen3Guard safety result is nil")
+	}
+
+	normalized := strings.ToLower(strings.TrimSpace(result.SafetyLabel))
+	classIndex := classes.safeClass
+	switch normalized {
+	case "safe", "controversial":
+		classIndex = classes.safeClass
+	case "unsafe":
+		classIndex = classes.unsafeClass
+	default:
+		return candle_binding.ClassResult{}, fmt.Errorf("unknown Qwen3Guard safety label: %q", result.SafetyLabel)
+	}
+
+	return candle_binding.ClassResult{
+		Class:      classIndex,
+		Confidence: qwen3GuardConfidence(normalized),
+		Categories: result.Categories,
+	}, nil
+}
+
+func qwen3GuardClassIndexesFromMapping(mapping *JailbreakMapping) (qwen3GuardClassIndexes, error) {
+	if mapping == nil {
+		return qwen3GuardClassIndexes{}, fmt.Errorf("jailbreak mapping is required for Qwen3Guard")
+	}
+
+	unsafeClass, ok := qwen3GuardFindClassIndex(mapping, "jailbreak")
+	if !ok {
+		return qwen3GuardClassIndexes{}, fmt.Errorf("jailbreak mapping must include a jailbreak label for Qwen3Guard")
+	}
+
+	for _, label := range []string{"benign", "safe", "normal", "not_jailbreak", "not-jailbreak"} {
+		if safeClass, ok := qwen3GuardFindClassIndex(mapping, label); ok && safeClass != unsafeClass {
+			return qwen3GuardClassIndexes{unsafeClass: unsafeClass, safeClass: safeClass}, nil
+		}
+	}
+
+	if safeClass, ok := qwen3GuardFindAnyOtherClassIndex(mapping, unsafeClass); ok {
+		return qwen3GuardClassIndexes{unsafeClass: unsafeClass, safeClass: safeClass}, nil
+	}
+
+	return qwen3GuardClassIndexes{}, fmt.Errorf("jailbreak mapping must include a non-jailbreak label for Qwen3Guard")
+}
+
+func qwen3GuardFindClassIndex(mapping *JailbreakMapping, target string) (int, bool) {
+	normalizedTarget := qwen3GuardNormalizeLabel(target)
+	for label, index := range mapping.LabelToIdx {
+		if qwen3GuardNormalizeLabel(label) == normalizedTarget {
+			return index, true
+		}
+	}
+	for label, index := range mapping.LabelToID {
+		if qwen3GuardNormalizeLabel(label) == normalizedTarget {
+			return index, true
+		}
+	}
+	for index, label := range mapping.IdxToLabel {
+		if qwen3GuardNormalizeLabel(label) == normalizedTarget {
+			var classIndex int
+			if _, err := fmt.Sscanf(index, "%d", &classIndex); err == nil {
+				return classIndex, true
+			}
+		}
+	}
+	for index, label := range mapping.IDToLabel {
+		if qwen3GuardNormalizeLabel(label) == normalizedTarget {
+			var classIndex int
+			if _, err := fmt.Sscanf(index, "%d", &classIndex); err == nil {
+				return classIndex, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func qwen3GuardFindAnyOtherClassIndex(mapping *JailbreakMapping, exclude int) (int, bool) {
+	for _, index := range mapping.LabelToIdx {
+		if index != exclude {
+			return index, true
+		}
+	}
+	for _, index := range mapping.LabelToID {
+		if index != exclude {
+			return index, true
+		}
+	}
+	for index := range mapping.IdxToLabel {
+		var classIndex int
+		if _, err := fmt.Sscanf(index, "%d", &classIndex); err == nil && classIndex != exclude {
+			return classIndex, true
+		}
+	}
+	for index := range mapping.IDToLabel {
+		var classIndex int
+		if _, err := fmt.Sscanf(index, "%d", &classIndex); err == nil && classIndex != exclude {
+			return classIndex, true
+		}
+	}
+	return 0, false
+}
+
+func qwen3GuardNormalizeLabel(label string) string {
+	normalized := strings.ToLower(strings.TrimSpace(label))
+	normalized = strings.ReplaceAll(normalized, "-", "_")
+	normalized = strings.ReplaceAll(normalized, " ", "_")
+	return normalized
+}
+
+func isQwen3GuardModel(modelID string) bool {
+	normalized := strings.ToLower(modelID)
+	return strings.Contains(normalized, "qwen3guard") ||
+		strings.Contains(normalized, "qwen3_guard") ||
+		strings.Contains(normalized, "qwen_guard")
 }
 
 // createJailbreakInference creates the appropriate jailbreak inference based on configuration.

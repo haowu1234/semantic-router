@@ -170,6 +170,7 @@ import (
 	_ "image/png"
 	"io"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -667,9 +668,20 @@ func InitQwen3GuardOnnx(modelPath string, useCPU bool, providerHint string) erro
 	return nil
 }
 
+// InitQwen3Guard mirrors the candle-binding API for ONNX builds.
+func InitQwen3Guard(modelPath string) error {
+	useCPU := os.Getenv("QWEN3_GUARD_ONNX_USE_CPU") == "1"
+	return InitQwen3GuardOnnx(modelPath, useCPU, os.Getenv("QWEN3_GUARD_ONNX_PROVIDER"))
+}
+
 // IsQwen3GuardOnnxInitialized reports whether the ONNX guard model is loaded.
 func IsQwen3GuardOnnxInitialized() bool {
 	return bool(C.is_qwen3_guard_onnx_initialized())
+}
+
+// IsQwen3GuardInitialized mirrors the candle-binding API for ONNX builds.
+func IsQwen3GuardInitialized() bool {
+	return IsQwen3GuardOnnxInitialized()
 }
 
 // ClassifyPromptSafetyOnnx classifies user input using Qwen3Guard ONNX.
@@ -677,9 +689,19 @@ func ClassifyPromptSafetyOnnx(text string) (*SafetyClassificationResult, error) 
 	return classifyQwen3GuardOnnx(text, "input")
 }
 
+// ClassifyPromptSafety mirrors the candle-binding API for ONNX builds.
+func ClassifyPromptSafety(text string) (*SafetyClassificationResult, error) {
+	return ClassifyPromptSafetyOnnx(text)
+}
+
 // ClassifyResponseSafetyOnnx classifies model output using Qwen3Guard ONNX.
 func ClassifyResponseSafetyOnnx(text string) (*SafetyClassificationResult, error) {
 	return classifyQwen3GuardOnnx(text, "output")
+}
+
+// ClassifyResponseSafety mirrors the candle-binding API for ONNX builds.
+func ClassifyResponseSafety(text string) (*SafetyClassificationResult, error) {
+	return ClassifyResponseSafetyOnnx(text)
 }
 
 // GetGuardRawOutputOnnx returns raw Qwen3Guard ONNX generated text.
@@ -689,6 +711,11 @@ func GetGuardRawOutputOnnx(text string, mode string) (string, error) {
 		return "", err
 	}
 	return result.RawOutput, nil
+}
+
+// GetGuardRawOutput mirrors the candle-binding API for ONNX builds.
+func GetGuardRawOutput(text string, mode string) (string, error) {
+	return GetGuardRawOutputOnnx(text, mode)
 }
 
 func classifyQwen3GuardOnnx(text string, mode string) (*SafetyClassificationResult, error) {

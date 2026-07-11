@@ -67,7 +67,7 @@ func (c *Classifier) initializeJailbreakClassifier() error {
 	}
 
 	if c.jailbreakInitializer == nil {
-		return fmt.Errorf("jailbreak initializer is required for Candle-based inference")
+		return fmt.Errorf("jailbreak initializer is required for local inference")
 	}
 
 	numClasses := c.JailbreakMapping.GetJailbreakTypeCount()
@@ -75,8 +75,13 @@ func (c *Classifier) initializeJailbreakClassifier() error {
 		return fmt.Errorf("not enough jailbreak types for classification, need at least 2, got %d", numClasses)
 	}
 
+	mode := "candle"
+	if isQwen3GuardModel(c.Config.PromptGuard.ModelID) {
+		mode = "qwen3_guard"
+	}
+
 	logging.ComponentEvent("classifier", "jailbreak_detector_init_started", map[string]interface{}{
-		"mode":      "candle",
+		"mode":      mode,
 		"model_ref": c.Config.PromptGuard.ModelID,
 		"classes":   numClasses,
 		"use_cpu":   c.Config.PromptGuard.UseCPU,

@@ -35,7 +35,15 @@ func (b *classifierOptionBuilder) addMCPCategoryClassifier() {
 	b.options = append(b.options, withMCPCategory(mcpInit, mcpInf))
 }
 
-func buildJailbreakDependencies(cfg *config.RouterConfig) (JailbreakInitializer, JailbreakInference, error) {
+func buildJailbreakDependencies(cfg *config.RouterConfig, jailbreakMapping *JailbreakMapping) (JailbreakInitializer, JailbreakInference, error) {
+	if !cfg.PromptGuard.UseVLLM && !cfg.PromptGuard.UseMmBERT32K && isQwen3GuardModel(cfg.PromptGuard.ModelID) {
+		jailbreakInference, err := createQwen3GuardJailbreakInference(jailbreakMapping)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to create Qwen3Guard jailbreak inference: %w", err)
+		}
+		return createQwen3GuardInitializer(), jailbreakInference, nil
+	}
+
 	jailbreakInference, err := createJailbreakInference(&cfg.PromptGuard, cfg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create jailbreak inference: %w", err)
