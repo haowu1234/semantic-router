@@ -178,6 +178,9 @@ impl Qwen3GuardOnnxModel {
             if let Ok(piece) = self.tokenizer.decode(&[next_token], true) {
                 generated_text.push_str(&piece);
             }
+            if guard_assessment_complete(&generated_text) {
+                break;
+            }
         }
 
         Ok(generated_text)
@@ -233,6 +236,9 @@ impl Qwen3GuardOnnxModel {
             tokens.push(next_token);
             if let Ok(piece) = self.tokenizer.decode(&[next_token], true) {
                 generated_text.push_str(&piece);
+            }
+            if guard_assessment_complete(&generated_text) {
+                break;
             }
         }
 
@@ -913,6 +919,26 @@ fn argmax(values: &[f32]) -> usize {
         .unwrap_or(0)
 }
 
+fn guard_assessment_complete(text: &str) -> bool {
+    if !text.contains("Safety: Safe")
+        && !text.contains("Safety: Unsafe")
+        && !text.contains("Safety: Controversial")
+    {
+        return false;
+    }
+
+    let Some(categories_start) = text.find("Categories:") else {
+        return false;
+    };
+    let categories = &text[categories_start + "Categories:".len()..];
+    let trimmed = categories.trim_start();
+    if trimmed.starts_with("None") {
+        return true;
+    }
+
+    categories.contains('\n') && !trimmed.is_empty()
+}
+
 fn format_guard_prompt(text: &str, mode: &str) -> String {
     let user_label = if mode == "output" {
         "ASSISTANT"
@@ -988,6 +1014,26 @@ mod tests {
     #[test]
     fn argmax_handles_negative_values() {
         assert_eq!(argmax(&[-3.0, -0.5, -1.0]), 1);
+    }
+
+    #[test]
+    fn guard_assessment_complete_detects_terminal_safe_result() {
+        assert!(guard_assessment_complete("Safety: Safe\nCategories: None"));
+        assert!(guard_assessment_complete(
+            "Safety: Controversial\nCategories: None"
+        ));
+    }
+
+    #[test]
+    fn guard_assessment_complete_waits_for_category_line_end() {
+        assert!(!guard_assessment_complete(
+            "Safety: Unsafe\nCategories: Violent"
+        ));
+        assert!(guard_assessment_complete(
+            "Safety: Unsafe\nCategories: Violent\n"
+        ));
+        assert!(!guard_assessment_complete("Safety: Unsafe\nCategories:"));
+        assert!(!guard_assessment_complete("Safety: Safe"));
     }
 
     #[test]
