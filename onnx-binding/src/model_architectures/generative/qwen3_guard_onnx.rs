@@ -15,6 +15,7 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokenizers::Tokenizer;
 
 const DEFAULT_MAX_TOKENS: usize = 64;
@@ -38,6 +39,19 @@ impl Default for Qwen3GuardOnnxConfig {
                 .unwrap_or(DEFAULT_REPEAT_LAST_N),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct Qwen3GuardOnnxProfile {
+    pub output: String,
+    pub prompt_tokens: usize,
+    pub generated_tokens: usize,
+    pub tokenize_ns: u64,
+    pub prefill_ns: u64,
+    pub decode_ns: u64,
+    pub decode_steps: usize,
+    pub total_ns: u64,
+    pub stopped_by_complete_assessment: bool,
 }
 
 pub struct Qwen3GuardOnnxModel {
@@ -134,8 +148,16 @@ impl Qwen3GuardOnnxModel {
     }
 
     pub fn generate_guard(&mut self, text: &str, mode: &str) -> UnifiedResult<String> {
+        Ok(self.generate_guard_profile(text, mode)?.output)
+    }
+
+    pub fn generate_guard_profile(
+        &mut self,
+        text: &str,
+        mode: &str,
+    ) -> UnifiedResult<Qwen3GuardOnnxProfile> {
         let prompt = format_guard_prompt(text, mode);
-        self.generate(&prompt)
+        self.generate_profile(&prompt)
     }
 
     pub fn model_info(&self) -> String {
@@ -145,24 +167,33 @@ impl Qwen3GuardOnnxModel {
         )
     }
 
-    fn generate(&mut self, prompt: &str) -> UnifiedResult<String> {
+    fn generate_profile(&mut self, prompt: &str) -> UnifiedResult<Qwen3GuardOnnxProfile> {
         if self.past_ios.is_empty() {
-            self.generate_no_past(prompt)
+            self.generate_no_past_profile(prompt)
         } else {
-            self.generate_with_past(prompt)
+            self.generate_with_past_profile(prompt)
         }
     }
 
-    fn generate_no_past(&mut self, prompt: &str) -> UnifiedResult<String> {
+    fn generate_no_past_profile(&mut self, prompt: &str) -> UnifiedResult<Qwen3GuardOnnxProfile> {
+        let total_start = Instant::now();
+        let tokenize_start = Instant::now();
         let encoding = self
             .tokenizer
             .encode(prompt, true)
             .map_err(|e| errors::tokenization_error(&e.to_string()))?;
+        let tokenize_ns = duration_ns(tokenize_start.elapsed());
         let mut tokens: Vec<u32> = encoding.get_ids().to_vec();
+        let prompt_tokens = tokens.len();
         let mut generated_text = String::new();
+        let mut decode_ns = 0;
+        let mut generated_tokens = 0;
+        let mut stopped_by_complete_assessment = false;
 
         for _ in 0..self.config.max_tokens {
+            let decode_start = Instant::now();
             let logits = self.forward_full_context(&tokens)?;
+            decode_ns += duration_ns(decode_start.elapsed());
             let logits = apply_repeat_penalty(
                 logits,
                 &tokens[tokens.len().saturating_sub(self.config.repeat_last_n)..],
@@ -175,22 +206,37 @@ impl Qwen3GuardOnnxModel {
             }
 
             tokens.push(next_token);
+            generated_tokens += 1;
             if let Ok(piece) = self.tokenizer.decode(&[next_token], true) {
                 generated_text.push_str(&piece);
             }
             if guard_assessment_complete(&generated_text) {
+                stopped_by_complete_assessment = true;
                 break;
             }
         }
 
-        Ok(generated_text)
+        Ok(Qwen3GuardOnnxProfile {
+            output: generated_text,
+            prompt_tokens,
+            generated_tokens,
+            tokenize_ns,
+            prefill_ns: 0,
+            decode_ns,
+            decode_steps: generated_tokens,
+            total_ns: duration_ns(total_start.elapsed()),
+            stopped_by_complete_assessment,
+        })
     }
 
-    fn generate_with_past(&mut self, prompt: &str) -> UnifiedResult<String> {
+    fn generate_with_past_profile(&mut self, prompt: &str) -> UnifiedResult<Qwen3GuardOnnxProfile> {
+        let total_start = Instant::now();
+        let tokenize_start = Instant::now();
         let encoding = self
             .tokenizer
             .encode(prompt, true)
             .map_err(|e| errors::tokenization_error(&e.to_string()))?;
+        let tokenize_ns = duration_ns(tokenize_start.elapsed());
         let mut tokens: Vec<u32> = encoding.get_ids().to_vec();
         if tokens.is_empty() {
             return Err(errors::inference_error(
@@ -198,11 +244,17 @@ impl Qwen3GuardOnnxModel {
                 "empty prompt token sequence",
             ));
         }
+        let prompt_tokens = tokens.len();
 
         let mut past = self.create_empty_past()?;
         let mut past_len = 0usize;
         let mut prefill = true;
         let mut generated_text = String::new();
+        let mut prefill_ns = 0;
+        let mut decode_ns = 0;
+        let mut decode_steps = 0;
+        let mut generated_tokens = 0;
+        let mut stopped_by_complete_assessment = false;
 
         for _ in 0..self.config.max_tokens {
             let input_tokens: Vec<u32> = if prefill {
@@ -216,8 +268,16 @@ impl Qwen3GuardOnnxModel {
             let position_start = past_len;
             let attention_len = past_len + input_len;
 
+            let forward_start = Instant::now();
             let (logits, next_past) =
                 self.forward_with_past(&input_tokens, position_start, attention_len, past)?;
+            let forward_ns = duration_ns(forward_start.elapsed());
+            if prefill {
+                prefill_ns += forward_ns;
+            } else {
+                decode_ns += forward_ns;
+                decode_steps += 1;
+            }
             past = next_past;
             past_len += input_len;
             prefill = false;
@@ -234,15 +294,27 @@ impl Qwen3GuardOnnxModel {
             }
 
             tokens.push(next_token);
+            generated_tokens += 1;
             if let Ok(piece) = self.tokenizer.decode(&[next_token], true) {
                 generated_text.push_str(&piece);
             }
             if guard_assessment_complete(&generated_text) {
+                stopped_by_complete_assessment = true;
                 break;
             }
         }
 
-        Ok(generated_text)
+        Ok(Qwen3GuardOnnxProfile {
+            output: generated_text,
+            prompt_tokens,
+            generated_tokens,
+            tokenize_ns,
+            prefill_ns,
+            decode_ns,
+            decode_steps,
+            total_ns: duration_ns(total_start.elapsed()),
+            stopped_by_complete_assessment,
+        })
     }
 
     fn forward_full_context(&mut self, tokens: &[u32]) -> UnifiedResult<Vec<f32>> {
@@ -991,6 +1063,10 @@ fn env_f32(name: &str) -> Option<f32> {
         .ok()
         .and_then(|v| v.parse::<f32>().ok())
         .filter(|v| v.is_finite() && *v > 0.0)
+}
+
+fn duration_ns(duration: Duration) -> u64 {
+    duration.as_nanos().min(u64::MAX as u128) as u64
 }
 
 #[cfg(test)]
