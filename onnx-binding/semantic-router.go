@@ -11,6 +11,7 @@ package onnx_binding
 #cgo LDFLAGS: -L${SRCDIR}/target/release -lonnx_semantic_router -ldl -lm -lpthread
 #include <stdlib.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 // ============================================================================
 // Embedding Types
@@ -95,6 +96,9 @@ typedef struct {
     char* raw_output;
     bool error;
     char* error_message;
+    uint64_t lock_wait_ns;
+    uint64_t generation_ns;
+    uint64_t total_ns;
 } GuardResultFFI;
 
 // ============================================================================
@@ -214,9 +218,12 @@ type ClassResult struct {
 
 // SafetyClassificationResult represents Qwen3Guard safety classification output.
 type SafetyClassificationResult struct {
-	SafetyLabel string
-	Categories  []string
-	RawOutput   string
+	SafetyLabel    string
+	Categories     []string
+	RawOutput      string
+	LockWaitTime   time.Duration
+	GenerationTime time.Duration
+	TotalTime      time.Duration
 }
 
 // ClassResultWithProbs contains classification result with probabilities
@@ -700,9 +707,12 @@ func classifyQwen3GuardOnnx(text string, mode string) (*SafetyClassificationResu
 	rawOutput := C.GoString(result.raw_output)
 	safetyLabel, categories := extractQwen3GuardLabelAndCategories(rawOutput)
 	return &SafetyClassificationResult{
-		SafetyLabel: safetyLabel,
-		Categories:  categories,
-		RawOutput:   rawOutput,
+		SafetyLabel:    safetyLabel,
+		Categories:     categories,
+		RawOutput:      rawOutput,
+		LockWaitTime:   time.Duration(uint64(result.lock_wait_ns)),
+		GenerationTime: time.Duration(uint64(result.generation_ns)),
+		TotalTime:      time.Duration(uint64(result.total_ns)),
 	}, nil
 }
 

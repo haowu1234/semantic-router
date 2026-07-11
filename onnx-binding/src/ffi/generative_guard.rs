@@ -7,6 +7,7 @@ use parking_lot::Mutex;
 use std::ffi::{c_char, CStr, CString};
 use std::ptr;
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 static QWEN3_GUARD_ONNX: OnceLock<Mutex<Qwen3GuardOnnxModel>> = OnceLock::new();
 
@@ -15,6 +16,9 @@ pub struct GuardResultFFI {
     pub raw_output: *mut c_char,
     pub error: bool,
     pub error_message: *mut c_char,
+    pub lock_wait_ns: u64,
+    pub generation_ns: u64,
+    pub total_ns: u64,
 }
 
 impl Default for GuardResultFFI {
@@ -23,8 +27,22 @@ impl Default for GuardResultFFI {
             raw_output: ptr::null_mut(),
             error: true,
             error_message: ptr::null_mut(),
+            lock_wait_ns: 0,
+            generation_ns: 0,
+            total_ns: 0,
         }
     }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct GuardTiming {
+    lock_wait_ns: u64,
+    generation_ns: u64,
+    total_ns: u64,
+}
+
+fn duration_ns(duration: Duration) -> u64 {
+    duration.as_nanos().min(u64::MAX as u128) as u64
 }
 
 fn error_cstring(message: &str) -> *mut c_char {
@@ -33,7 +51,11 @@ fn error_cstring(message: &str) -> *mut c_char {
         .into_raw()
 }
 
-unsafe fn write_guard_result(result: *mut GuardResultFFI, output: UnifiedResult<String>) -> i32 {
+unsafe fn write_guard_result(
+    result: *mut GuardResultFFI,
+    output: UnifiedResult<String>,
+    timing: GuardTiming,
+) -> i32 {
     if result.is_null() {
         return -1;
     }
@@ -46,6 +68,9 @@ unsafe fn write_guard_result(result: *mut GuardResultFFI, output: UnifiedResult<
                         raw_output: raw_output.into_raw(),
                         error: false,
                         error_message: ptr::null_mut(),
+                        lock_wait_ns: timing.lock_wait_ns,
+                        generation_ns: timing.generation_ns,
+                        total_ns: timing.total_ns,
                     };
                 }
                 0
@@ -55,6 +80,9 @@ unsafe fn write_guard_result(result: *mut GuardResultFFI, output: UnifiedResult<
                     *result = GuardResultFFI::default();
                     (*result).error_message =
                         error_cstring(&format!("failed to create C string: {}", e));
+                    (*result).lock_wait_ns = timing.lock_wait_ns;
+                    (*result).generation_ns = timing.generation_ns;
+                    (*result).total_ns = timing.total_ns;
                 }
                 -1
             }
@@ -63,6 +91,9 @@ unsafe fn write_guard_result(result: *mut GuardResultFFI, output: UnifiedResult<
             unsafe {
                 *result = GuardResultFFI::default();
                 (*result).error_message = error_cstring(&format!("guard generation failed: {}", e));
+                (*result).lock_wait_ns = timing.lock_wait_ns;
+                (*result).generation_ns = timing.generation_ns;
+                (*result).total_ns = timing.total_ns;
             }
             -1
         }
@@ -144,6 +175,8 @@ pub unsafe extern "C" fn classify_with_qwen3_guard_onnx(
     mode: *const c_char,
     result: *mut GuardResultFFI,
 ) -> i32 {
+    let total_start = Instant::now();
+
     if text.is_null() || mode.is_null() || result.is_null() {
         return unsafe {
             write_guard_result(
@@ -153,6 +186,10 @@ pub unsafe extern "C" fn classify_with_qwen3_guard_onnx(
                     "non-null text, mode, and result pointers",
                     "null pointer",
                 )),
+                GuardTiming {
+                    total_ns: duration_ns(total_start.elapsed()),
+                    ..GuardTiming::default()
+                },
             )
         };
     }
@@ -167,6 +204,10 @@ pub unsafe extern "C" fn classify_with_qwen3_guard_onnx(
                         "invalid text utf8: {}",
                         e
                     ))),
+                    GuardTiming {
+                        total_ns: duration_ns(total_start.elapsed()),
+                        ..GuardTiming::default()
+                    },
                 )
             }
         }
@@ -181,6 +222,10 @@ pub unsafe extern "C" fn classify_with_qwen3_guard_onnx(
                         "mode",
                         &format!("invalid utf8: {}", e),
                     )),
+                    GuardTiming {
+                        total_ns: duration_ns(total_start.elapsed()),
+                        ..GuardTiming::default()
+                    },
                 )
             }
         }
@@ -196,13 +241,34 @@ pub unsafe extern "C" fn classify_with_qwen3_guard_onnx(
                         "qwen3_guard_onnx",
                         "model is not initialized",
                     )),
+                    GuardTiming {
+                        total_ns: duration_ns(total_start.elapsed()),
+                        ..GuardTiming::default()
+                    },
                 )
             }
         }
     };
 
+    let lock_start = Instant::now();
     let mut guard = guard.lock();
-    unsafe { write_guard_result(result, guard.generate_guard(text, mode)) }
+    let lock_wait_ns = duration_ns(lock_start.elapsed());
+    let generation_start = Instant::now();
+    let output = guard.generate_guard(text, mode);
+    let generation_ns = duration_ns(generation_start.elapsed());
+    let total_ns = duration_ns(total_start.elapsed());
+
+    unsafe {
+        write_guard_result(
+            result,
+            output,
+            GuardTiming {
+                lock_wait_ns,
+                generation_ns,
+                total_ns,
+            },
+        )
+    }
 }
 
 #[no_mangle]
